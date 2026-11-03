@@ -21,7 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-private const val DV5_NOTE_MS = 7_000L
+private const val DV5_NOTE_MS = 20_000L
 /** A mapped player with this much buffered and still no frame has stalled in the effect path. */
 private const val DV5_START_TIMEOUT_MS = 12_000L
 private const val DV5_STALL_BUFFERED_MS = 4_000L
@@ -236,6 +236,7 @@ internal fun PlayerRuntimeController.watchDolbyVisionP5Start() {
 
 private fun PlayerRuntimeController.showDolbyVisionP5Note(text: String) {
     Log.i(PlayerRuntimeController.TAG, "DV5_HDR note: $text")
+    com.nuvio.tv.core.player.DolbyVisionP5Status.onNote(text)
     _uiState.update { it.copy(dv5HdrNote = text) }
     dv5HdrNoteJob?.cancel()
     dv5HdrNoteJob = scope.launch(Dispatchers.Main) {
