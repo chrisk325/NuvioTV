@@ -193,6 +193,7 @@ private class P5TrackOutput(
         val sampleEnd = bufferLength - carry
         var result = DolbyVisionP5Native.NOT_PARSED
         if (cryptoData == null) {
+            session.onSampleScanned()
             val rpu = DolbyVisionP5Nal.findRpu(buffer, sampleEnd)
             if (rpu != DolbyVisionP5Nal.NONE) {
                 result = DolbyVisionP5Nal.ingest(buffer, rpu, DolbyVisionP5Native::ingestRpu)
