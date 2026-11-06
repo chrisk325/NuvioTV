@@ -328,7 +328,7 @@ fun LiveTvScreen(
                     val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
                     // The player's categories list each category once: a source's category opens as that category.
                     val folder = (filterFor(filterKey) as? LiveTvFilter.SourceGroup)?.name ?: filterKey
-                    LiveTvRepository.setZapList(list, folderKey = folder.takeIf { query.isBlank() })
+                    LiveTvRepository.setZapList(list, folderKey = folder.takeIf { query.isBlank() && folder != FILTER_RECENT })
                     val route = if (programme != null) {
                         liveTvCatchupRoute(channel, programme, viewModel.profileId)
                     } else {

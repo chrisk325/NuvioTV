@@ -454,7 +454,7 @@ internal class LiveTvPlayerState(
         folderJob = scope.launch {
             val state = LiveTvRepository.uiState.value
             panelChannels = withContext(Dispatchers.Default) {
-                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key, customLists = state.customLists, recentUrls = state.recentUrls)
+                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key, customLists = state.customLists)
             }
         }
     }
@@ -1154,13 +1154,10 @@ private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiStat
     val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
     val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
     val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
-    val recentLabel = stringResource(R.string.live_tv_recent)
-    val hasRecent = liveState.recentUrls.isNotEmpty()
-    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, liveState.customLists, allLabel, favoritesLabel, recentLabel, hasRecent, uncategorisedLabel, showAll, showFavorites) {
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, liveState.customLists, allLabel, favoritesLabel, uncategorisedLabel, showAll, showFavorites) {
         buildList {
             if (showAll) add(FILTER_ALL to allLabel)
             if (showFavorites) add(FILTER_FAVORITES to favoritesLabel)
-            if (hasRecent) add(FILTER_RECENT to recentLabel)
             liveState.customLists.forEach { add(FILTER_LIST_PREFIX + it.id to it.name) }
             if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
             liveState.visibleGroups.forEach {
@@ -1278,7 +1275,6 @@ private fun LiveTvChannelColumn(
         folderKey == null -> null
         folderKey == FILTER_ALL -> stringResource(R.string.live_tv_all_channels)
         folderKey == FILTER_FAVORITES -> stringResource(R.string.live_tv_favorites)
-        folderKey == FILTER_RECENT -> stringResource(R.string.live_tv_recent)
         folderKey.startsWith(FILTER_LIST_PREFIX) -> liveState.customLists.firstOrNull { FILTER_LIST_PREFIX + it.id == folderKey }?.name
         folderKey.startsWith(FILTER_SOURCE_PREFIX) ->
             liveState.sources.firstOrNull { FILTER_SOURCE_PREFIX + it.id == folderKey }?.label
