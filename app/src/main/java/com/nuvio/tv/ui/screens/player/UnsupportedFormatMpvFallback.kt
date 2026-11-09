@@ -87,6 +87,14 @@ internal object UnsupportedFormatMpvFallbackPolicy {
 /** Switches the current stream to MPV. Returns false when the stream already took this route once. */
 internal fun PlayerRuntimeController.switchToMpvForUnsupportedFormat(reason: String): Boolean {
     val url = currentStreamUrl
+    // Live TV and catch-up are built around ExoPlayer (channel zap keeps the player, live buffering and
+    // frame rate), so they never take this route; a channel ExoPlayer cannot show keeps its own error path.
+    if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url) ||
+        com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isCatchup(url) ||
+        LivePlaybackUiPolicy.isLiveContentType(contentType)
+    ) {
+        return false
+    }
     if (url.isBlank() || !mpvFormatFallbackStreamUrls.add(url)) return false
     Log.w(
         PlayerRuntimeController.TAG,
