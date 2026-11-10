@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Simkl AUTH V2 client ID used for every build from this workflow. Client IDs are public by
+  # design (never put a client secret here). This value replaces any SIMKL_CLIENT_ID stored in
+  # the LOCAL_PROPERTIES_BASE64 / LOCAL_DEV_PROPERTIES_BASE64 secrets, which is ignored.
+  SIMKL_CLIENT_ID: ""
+
 concurrency:
   group: pr-full-debug-build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -50,6 +56,14 @@ jobs:
           if [ -n "$ANILIST_CLIENT_ID" ]; then
             sed -i -E '/^[[:space:]]*ANILIST_CLIENT_ID[[:space:]]*=/d' local.properties local.dev.properties
             printf '\n%s=%s\n' "ANILIST_CLIENT_ID" "$ANILIST_CLIENT_ID" >> local.properties
+          fi
+
+          # The Simkl client ID comes only from this workflow file, never from the secrets.
+          sed -i -E '/^[[:space:]]*SIMKL_CLIENT_ID[[:space:]]*=/d' local.properties local.dev.properties
+          if [ -z "$SIMKL_CLIENT_ID" ]; then
+            echo "::warning::SIMKL_CLIENT_ID is empty in the workflow file; Simkl sign-in will be disabled in this build."
+          else
+            printf '\n%s=%s\n' "SIMKL_CLIENT_ID" "$SIMKL_CLIENT_ID" >> local.properties
           fi
 
       - name: Prepare CI signing config
