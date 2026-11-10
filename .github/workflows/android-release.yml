@@ -36,7 +36,7 @@ jobs:
       # Simkl AUTH V2 client ID shipped in the release. Client IDs are public by design (never put
       # a client secret here). This value replaces any SIMKL_CLIENT_ID stored in the
       # LOCAL_PROPERTIES_BASE64 / LOCAL_DEV_PROPERTIES_BASE64 secrets, which is ignored.
-      SIMKL_CLIENT_ID: ""
+      SIMKL_CLIENT_ID: "06e768fdde31a4527df8ae607627a1f878a80c46992f70f8c4b93de402f853d2"
 
     steps:
       - name: Check out full history
