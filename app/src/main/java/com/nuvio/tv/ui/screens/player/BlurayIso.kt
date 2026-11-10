@@ -120,17 +120,9 @@ internal object BlurayIso {
             return null
         }
         val main = BlurayPlaylistResolver.selectMainPlaylist(playlists) ?: return null
-        val titles = BlurayPlaylistResolver.selectTitles(playlists)
-        val feature = remote(image, main) ?: return null
-        val current = titles.firstOrNull { it.name == main.name }
-            ?: titles.firstOrNull { it.clipIds == main.clipIds && it.durationMs / 1000 == main.durationMs / 1000 }
-        val remoteTitles = titles.mapNotNull { title -> if (title === current) feature.copy(name = title.name) else remote(image, title) }
-        Log.i(TAG, "ISO feature ${main.name}: ${feature.segmentUrls.size} clips, ${remoteTitles.size} titles")
-        return BlurayPlaylistResolver.DiscProbe(
-            feature = if (current != null) feature.copy(name = current.name) else feature,
-            currentTitle = current?.name,
-            titles = remoteTitles
-        )
+        val disc = BlurayPlaylistResolver.discProbe(main, playlists) { remote(image, it) } ?: return null
+        Log.i(TAG, "ISO feature ${main.name}: ${disc.feature?.segmentUrls?.size} clips, ${disc.titles.size} titles")
+        return disc
     }
 
     fun titleLanguages(title: BlurayPlaylistResolver.RemoteLayout.Playlist): Pair<List<String>, List<String>> {

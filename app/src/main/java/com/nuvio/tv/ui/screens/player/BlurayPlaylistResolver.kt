@@ -25,6 +25,7 @@ internal object BlurayPlaylistResolver {
     private const val MIN_TITLE_MS = 60_000L
     private const val MAX_TITLES = 30
     private val CLIP_PATH = Regex("(?i)/BDMV/(STREAM)/(\\d{5})\\.(m2ts)$")
+    private val ENTRY_PATH = Regex("(?i)/(BDMV)/(?:(index\\.bdmv)|(movieobject\\.bdmv)|(PLAYLIST)/((\\d{5})\\.(mpls)))$")
 
     data class ResolvedBluraySource(
         val playlistFile: File,
@@ -178,6 +179,107 @@ internal object BlurayPlaylistResolver {
         return DiscProbe(feature = feature, currentTitle = main?.name, titles = selectTitles(playlists).map(::remote))
     }
 
+    fun isLikelyDiscEntryUrl(url: String): Boolean =
+        url.toHttpUrlOrNull()?.let { ENTRY_PATH.containsMatchIn(it.encodedPath) } == true
+
+    fun probeDiscEntry(url: String, headers: Map<String, String>, client: OkHttpClient): DiscProbe? {
+        val httpUrl = url.toHttpUrlOrNull() ?: return null
+        val match = ENTRY_PATH.find(httpUrl.encodedPath) ?: return null
+        val groups = match.groupValues
+        val bdmv = groups[1]
+        val explicitName = groups[5].takeIf { it.isNotEmpty() }
+        val upperDirs = groups[4].ifEmpty { bdmv }.let { it == it.uppercase(Locale.US) }
+        val entryName = groups[2].ifEmpty { groups[3] }.ifEmpty { groups[7] }
+        val upperFiles = entryName == entryName.uppercase(Locale.US)
+        val prefix = httpUrl.encodedPath.substring(0, match.range.first) + "/$bdmv"
+        val playlistDir = "$prefix/${groups[4].ifEmpty { if (upperDirs) "PLAYLIST" else "playlist" }}/"
+        val streamDir = "$prefix/${if (upperDirs) "STREAM" else "stream"}/"
+        val clipExtension = if (upperFiles) "M2TS" else "m2ts"
+        val playlistExtension = if (upperFiles) "MPLS" else "mpls"
+        val movieObject = if (upperFiles) "MOVIEOBJECT.BDMV" else "MovieObject.bdmv"
+        fun sibling(path: String): HttpUrl =
+            httpUrl.newBuilder().encodedPath(path).encodedQuery(httpUrl.encodedQuery).build()
+
+        val listed = fetchBytes(client, sibling(playlistDir), headers, HTTP_LISTING_BYTES)
+            ?.let { extractPlaylistNames(String(it, Charsets.UTF_8)) }
+            .orEmpty()
+        val referenced = if (listed.isEmpty()) {
+            fetchBytes(client, sibling("$prefix/$movieObject"), headers, HTTP_MPLS_BYTES)
+                ?.let { parseMovieObjectPlaylists(it) }
+                .orEmpty()
+                .map { String.format(Locale.US, "%05d.%s", it, playlistExtension) }
+        } else {
+            emptyList()
+        }
+        val names = (listOfNotNull(explicitName) + listed + referenced)
+            .distinctBy { it.lowercase(Locale.US) }
+            .take(MAX_HTTP_PLAYLISTS)
+        if (names.isEmpty()) return null
+        val playlists = fetchPlaylistsWith(names) { name ->
+            fetchBytes(client, sibling(playlistDir + name), headers, HTTP_MPLS_BYTES)
+        }
+        if (playlists.isEmpty()) return null
+        val main = if (explicitName != null) {
+            playlists.firstOrNull { it.name.equals(explicitName, ignoreCase = true) }
+        } else {
+            selectMainPlaylist(playlists)
+        } ?: return null
+        Log.i(TAG, "disc entry ${explicitName ?: entryName}: playlist ${main.name} of ${playlists.size}")
+        return discProbe(main, playlists) { playlist ->
+            val segments = playlist.clipIds.withIndex().map { (index, id) ->
+                sibling("$streamDir$id.$clipExtension").toString() to playlist.itemDurationMs(index)
+            }
+            RemoteLayout.Playlist(playlist.name, segments.map { it.first }, segments.map { it.second })
+                .takeIf { segments.isNotEmpty() }
+        }
+    }
+
+    fun discProbe(
+        main: ParsedMpls,
+        playlists: List<ParsedMpls>,
+        remote: (ParsedMpls) -> RemoteLayout.Playlist?
+    ): DiscProbe? {
+        val feature = remote(main) ?: return null
+        val titles = selectTitles(playlists)
+        val current = titles.firstOrNull { it.name == main.name }
+            ?: titles.firstOrNull { it.clipIds == main.clipIds && it.durationMs / 1000 == main.durationMs / 1000 }
+        val remoteTitles = titles.mapNotNull { title ->
+            if (title === current) feature.copy(name = title.name) else remote(title)
+        }
+        return DiscProbe(
+            feature = if (current != null) feature.copy(name = current.name) else feature,
+            currentTitle = current?.name,
+            titles = remoteTitles
+        )
+    }
+
+    fun parseMovieObjectPlaylists(data: ByteArray): List<Int> {
+        if (data.size < 50 || readAscii(data, 0, 4) != "MOBJ") return emptyList()
+        val result = LinkedHashSet<Int>()
+        val objects = readUInt16(data, 48)
+        var position = 50
+        for (index in 0 until objects) {
+            if (position + 4 > data.size) break
+            val commands = readUInt16(data, position + 2)
+            position += 4
+            for (command in 0 until commands) {
+                if (position + 12 > data.size) return result.toList()
+                val operation = data[position].toInt() and 0xFF
+                val options = data[position + 1].toInt() and 0xFF
+                val group = (operation shr 3) and 0x03
+                val subGroup = operation and 0x07
+                val immediate = options and 0x80 != 0
+                val branch = options and 0x0F
+                if (group == 0 && subGroup == 2 && immediate && branch <= 2) {
+                    val playlist = readUInt32(data, position + 4)
+                    if (playlist in 0..99_999) result += playlist.toInt()
+                }
+                position += 12
+            }
+        }
+        return result.toList()
+    }
+
     fun selectTitles(playlists: List<ParsedMpls>): List<ParsedMpls> = playlists
         .filter { !it.isLoop() && it.durationMs >= MIN_TITLE_MS }
         .sortedWith(compareByDescending<ParsedMpls> { it.duration90kHz }.thenBy { it.name })
@@ -208,6 +310,17 @@ internal object BlurayPlaylistResolver {
     fun selectMainPlaylist(playlists: List<ParsedMpls>): ParsedMpls? = playlists
         .filter { !it.isLoop() }
         .maxWithOrNull(compareBy<ParsedMpls> { it.duration90kHz }.thenBy { it.clipIds.size }.thenBy { it.name })
+
+    private fun fetchPlaylistsWith(names: List<String>, fetch: (String) -> ByteArray?): List<ParsedMpls> {
+        val pool = Executors.newFixedThreadPool(HTTP_PLAYLIST_THREADS)
+        return try {
+            names.map { name ->
+                pool.submit<ParsedMpls?> { fetch(name)?.let { parseMpls(name, it) } }
+            }.mapNotNull { future -> runCatching { future.get(30, TimeUnit.SECONDS) }.getOrNull() }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
 
     private fun fetchPlaylists(client: OkHttpClient, dir: HttpUrl, headers: Map<String, String>, names: List<String>): List<ParsedMpls> {
         val pool = Executors.newFixedThreadPool(HTTP_PLAYLIST_THREADS)

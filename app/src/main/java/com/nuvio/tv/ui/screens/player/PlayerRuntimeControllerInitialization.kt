@@ -137,15 +137,20 @@ private suspend fun PlayerRuntimeController.resolveClipPlaylist(
     if (engine == InternalPlayerEngine.MVP_PLAYER || currentStreamBluray != null || clipPlaylistProbedUrl == url) return
     if (!isBlurayPlaybackAllowed()) return
     clipPlaylistProbedUrl = url
-    if (BlurayIso.isLikelyIsoUrl(url, currentFilename)) {
+    val isIso = BlurayIso.isLikelyIsoUrl(url, currentFilename)
+    if (isIso || BlurayPlaylistResolver.isLikelyDiscEntryUrl(url)) {
         val disc = withTimeoutOrNull(ISO_PROBE_TIMEOUT_MS) {
-            PlayerMediaSourceFactory.probeBlurayIso(url = url, headers = headers)
+            if (isIso) {
+                PlayerMediaSourceFactory.probeBlurayIso(url = url, headers = headers)
+            } else {
+                PlayerMediaSourceFactory.probeBlurayDiscEntry(url = url, headers = headers)
+            }
         } ?: return
         showDiscTitles(disc)
         val feature = disc.feature ?: return
         Log.i(
             PlayerRuntimeController.TAG,
-            "Blu-ray ISO plays playlist ${feature.name}; ${feature.segmentUrls.size} clips"
+            "Blu-ray disc plays playlist ${feature.name}; ${feature.segmentUrls.size} clips"
         )
         currentStreamBluray = feature
         return

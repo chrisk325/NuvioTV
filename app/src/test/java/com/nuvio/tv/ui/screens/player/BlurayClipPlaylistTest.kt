@@ -8,7 +8,9 @@ import okhttp3.mockwebserver.RecordedRequest
 import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -63,10 +65,37 @@ class BlurayClipPlaylistTest {
             streams.reduce { a, b -> a + b }
     }
 
+    private fun command(operation: Int, options: Int, destination: Int) = byteArrayOf(
+        operation.toByte(), options.toByte(), 0, 0,
+        (destination shr 24).toByte(), (destination shr 16).toByte(), (destination shr 8).toByte(), destination.toByte(),
+        0, 0, 0, 0
+    )
+
+    private fun movieObject(vararg objects: List<ByteArray>): ByteArray {
+        var body = byteArrayOf()
+        for (commands in objects) {
+            body += byteArrayOf(0, 0, 0, commands.size.toByte()) + commands.fold(byteArrayOf()) { acc, it -> acc + it }
+        }
+        return "MOBJ0200".toByteArray() + ByteArray(32) + ByteArray(8) + byteArrayOf(0, objects.size.toByte()) + body
+    }
+
+    private val movieObject = movieObject(
+        listOf(command(0x22, 0x80, 3), command(0x50, 0x80, 7)),
+        listOf(command(0x22, 0x00, 1), command(0x22, 0x81, 0), command(0x22, 0x80, 3))
+    )
+
     @Before fun start() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.path.orEmpty()
+                if (path.startsWith("/flat/")) {
+                    if (!path.endsWith("?token=abc")) return MockResponse().setResponseCode(403)
+                    val file = path.removePrefix("/flat/BDMV/").removeSuffix("?token=abc")
+                    if (file == "MovieObject.bdmv") return MockResponse().setBody(Buffer().write(movieObject))
+                    val playlist = playlists[file.removePrefix("PLAYLIST/")]
+                    return playlist?.takeIf { file.startsWith("PLAYLIST/") }?.let { MockResponse().setBody(Buffer().write(it)) }
+                        ?: MockResponse().setResponseCode(404)
+                }
                 if (path == "/disc/BDMV/CLIPINF/00001.clpi") return MockResponse().setBody(Buffer().write(clipInfo))
                 if (path == "/disc/BDMV/PLAYLIST/") {
                     return MockResponse().setBody(playlists.keys.joinToString("") { "<a href=\"$it\">$it</a>\n" })
@@ -137,6 +166,49 @@ class BlurayClipPlaylistTest {
             )
         )
         assertEquals(listOf("00010.mpls"), titles.map { it.name })
+    }
+
+    @Test fun `an index of a disc folder plays its feature and offers its titles`() {
+        val disc = BlurayPlaylistResolver.probeDiscEntry(server.url("/disc/BDMV/index.bdmv").toString(), emptyMap(), client)!!
+        assertEquals("00000.mpls", disc.feature!!.name)
+        assertEquals("00000.mpls", disc.currentTitle)
+        assertEquals(
+            listOf(server.url("/disc/BDMV/STREAM/00001.m2ts").toString(), server.url("/disc/BDMV/STREAM/00002.m2ts").toString()),
+            disc.feature!!.segmentUrls
+        )
+        assertEquals(listOf("00000.mpls", "00003.mpls", "00002.mpls"), disc.titles.map { it.name })
+    }
+
+    @Test fun `a playlist plays itself, with the disc's other titles beside it`() {
+        val disc = BlurayPlaylistResolver.probeDiscEntry(server.url("/disc/BDMV/PLAYLIST/00003.mpls").toString(), emptyMap(), client)!!
+        assertEquals("00003.mpls", disc.feature!!.name)
+        assertEquals("00003.mpls", disc.currentTitle)
+        assertEquals(listOf(server.url("/disc/BDMV/STREAM/00001.m2ts").toString()), disc.feature!!.segmentUrls)
+        assertEquals(3, disc.titles.size)
+    }
+
+    @Test fun `a host without folder listings finds the playlists in the movie objects`() {
+        val disc = BlurayPlaylistResolver.probeDiscEntry(server.url("/flat/BDMV/index.bdmv?token=abc").toString(), emptyMap(), client)!!
+        assertEquals("00000.mpls", disc.feature!!.name)
+        assertEquals(
+            listOf(server.url("/flat/BDMV/STREAM/00001.m2ts?token=abc").toString(), server.url("/flat/BDMV/STREAM/00002.m2ts?token=abc").toString()),
+            disc.feature!!.segmentUrls
+        )
+        assertEquals(listOf("00000.mpls", "00003.mpls"), disc.titles.map { it.name })
+    }
+
+    @Test fun `movie objects name the playlists they play by number`() {
+        assertEquals(listOf(3, 0), BlurayPlaylistResolver.parseMovieObjectPlaylists(movieObject))
+        assertEquals(emptyList<Int>(), BlurayPlaylistResolver.parseMovieObjectPlaylists(ByteArray(64)))
+    }
+
+    @Test fun `disc entry links are an index, movie objects or a playlist`() {
+        assertTrue(BlurayPlaylistResolver.isLikelyDiscEntryUrl("https://host/Movie/BDMV/index.bdmv"))
+        assertTrue(BlurayPlaylistResolver.isLikelyDiscEntryUrl("https://host/Movie/BDMV/MovieObject.bdmv?token=1"))
+        assertTrue(BlurayPlaylistResolver.isLikelyDiscEntryUrl("https://host/Movie/bdmv/playlist/00800.mpls"))
+        assertFalse(BlurayPlaylistResolver.isLikelyDiscEntryUrl("https://host/Movie/BDMV/STREAM/00800.m2ts"))
+        assertFalse(BlurayPlaylistResolver.isLikelyDiscEntryUrl("https://host/Movie/index.bdmv"))
+        assertFalse(BlurayPlaylistResolver.isLikelyDiscEntryUrl("/storage/Movie/BDMV/index.bdmv"))
     }
 
     @Test fun `the feature is the longest playlist that is not a loop`() {

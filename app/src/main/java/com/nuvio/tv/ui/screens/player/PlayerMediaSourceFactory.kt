@@ -1056,6 +1056,15 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             }.getOrDefault(emptyList<String>() to emptyList())
         }
 
+        suspend fun probeBlurayDiscEntry(
+            url: String,
+            headers: Map<String, String> = emptyMap()
+        ): BlurayPlaylistResolver.DiscProbe? = runInterruptible(Dispatchers.IO) {
+            runCatching {
+                BlurayPlaylistResolver.probeDiscEntry(url, sanitizeHeaders(headers), PlayerPlaybackNetworking.playbackHttpClient)
+            }.getOrNull()
+        }
+
         suspend fun probeBlurayIso(
             url: String,
             headers: Map<String, String> = emptyMap()
