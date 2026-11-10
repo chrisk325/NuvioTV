@@ -210,13 +210,7 @@ android {
         buildConfigField("String", "TRAKT_CLIENT_SECRET", "\"${localProperties.getProperty("TRAKT_CLIENT_SECRET", "")}\"")
         buildConfigField("String", "TRAKT_API_URL", "\"${localProperties.getProperty("TRAKT_API_URL", "https://api.trakt.tv/")}\"")
         buildConfigField("String", "TRAKT_REDIRECT_URI", "\"${localProperties.getProperty("TRAKT_REDIRECT_URI", "urn:ietf:wg:oauth:2.0:oob")}\"")
-        // CI passes the Simkl AUTH V2 client ID through the workflow's SIMKL_CLIENT_ID env var,
-        // which takes precedence over any value inside the local properties files.
-        val simklClientId = providers.environmentVariable("SIMKL_CLIENT_ID").orNull
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: resolveProperty(devProperties, localProperties, "SIMKL_CLIENT_ID")
-        buildConfigField("String", "SIMKL_CLIENT_ID", buildConfigString(simklClientId))
+        buildConfigField("String", "SIMKL_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_CLIENT_ID")))
         buildConfigField("String", "SIMKL_APP_NAME", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_APP_NAME", "nuvio")))
         buildConfigField("String", "MDBLIST_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "MDBLIST_CLIENT_ID")))
         buildConfigField("String", "ANILIST_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "ANILIST_CLIENT_ID")))
