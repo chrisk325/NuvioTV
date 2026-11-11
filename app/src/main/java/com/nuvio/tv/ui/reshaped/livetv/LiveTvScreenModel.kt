@@ -16,6 +16,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
 import com.nuvio.tv.reshaped.livetv.LiveTvUiState
+import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.ui.navigation.Screen
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -160,7 +161,8 @@ internal suspend fun liveTvPlayerRoute(channel: LiveTvChannel, profileId: Int): 
     val playback = LiveTvRepository.prepareForPlayback(channel)
     // The player keys on the URL it plays, which drops a user:password@ part into a header.
     val playerUrl = PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url
-    LiveTvPlaybackRegistry.register(playerUrl, listUrl = channel.streamUrl)
+    // The format the provider gave, so the player opens the link as it is from the start.
+    LiveTvPlaybackRegistry.register(playerUrl, listUrl = channel.streamUrl, mimeType = liveTvStreamMimeType(channel.streamType))
     return Screen.Player.createRoute(
         streamUrl = playback.streamUrl,
         title = channel.name,

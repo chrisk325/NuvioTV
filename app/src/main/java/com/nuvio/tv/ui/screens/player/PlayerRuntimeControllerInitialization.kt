@@ -898,13 +898,17 @@ internal fun PlayerRuntimeController.initializePlayer(
             }
 
             // ── Extractors & DV Hook ──
+            val baseExtractorsFactory = DefaultExtractorsFactory()
+                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or com.nuvio.tv.reshaped.livetv.LiveTvTsFlags.extraFor(url))
+                .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
             // AVI goes through the OpenDML-capable reader with frame rate, audio syncframe timing and
-            // packed B-frame repair, see AviTrackFormatExtractorsFactory.
-            val extractorsFactory: ExtractorsFactory = AviTrackFormatExtractorsFactory(
-                DefaultExtractorsFactory()
-                    .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or com.nuvio.tv.reshaped.livetv.LiveTvTsFlags.extraFor(url))
-                    .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
-            )
+            // packed B-frame repair, see AviTrackFormatExtractorsFactory. Live TV channels are
+            // transport streams or HLS, never AVI: they keep Media3's own extractors, as on Nuvio mobile.
+            val extractorsFactory: ExtractorsFactory = if (isLiveTvStream) {
+                baseExtractorsFactory
+            } else {
+                AviTrackFormatExtractorsFactory(baseExtractorsFactory)
+            }
 
             // Manual Convert-to-DV8.1 uses mode 2; if a prior attempt at this stream
             // failed to play, force mode 1 this time (before the HDR10 fallback).
@@ -1009,6 +1013,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                 preferSoftwareAudioOnly = isBluetoothAudioOutput,
                 mapDv7ToHevc = mapDv7ToHevcEnabled,
                 vc1SoftwareDecode = vc1SoftwareDecodeActive,
+                plainVideoRenderers = isLiveTvStream,
                 onPlaybackSpeedAwareAudioSinkCreated = { playbackSpeedAwareAudioSink = it },
                 onFfmpegAudioRendererChanged = { renderer ->
                     ffmpegAudioRenderer = renderer
@@ -2311,6 +2316,11 @@ private class SubtitleOffsetRenderersFactory(
     private val mapDv7ToHevc: Boolean = false,
     /** Hides platform VC-1 decoders so the FFmpeg video renderer decodes VC-1 in software. */
     private val vc1SoftwareDecode: Boolean = false,
+    /**
+     * Live TV: Media3's own video renderers, as Nuvio mobile plays channels, without the dav1d
+     * slot or the decode-order repair (which only AVI / VFW-style files need).
+     */
+    private val plainVideoRenderers: Boolean = false,
     private val onPlaybackSpeedAwareAudioSinkCreated: (PlaybackSpeedAwareAudioSink) -> Unit,
     private val onFfmpegAudioRendererChanged: (FfmpegAudioRenderer?) -> Unit,
     private val onCuesShown: (List<Cue>) -> Unit = {},
@@ -2348,41 +2358,45 @@ private class SubtitleOffsetRenderersFactory(
             allowedVideoJoiningTimeMs,
             built
         )
-        // dav1d (software AV1) goes right after MediaCodec: it takes 8-bit AV1 up to 1080p that no
-        // hardware decoder takes, see SoftwareAv1Renderer.
-        val softwareAv1Index = softwareAv1Slot(built, videoExtensionMode, first = false) {
-            it::class.java == MediaCodecVideoRenderer::class.java
-        }
-        softwareAv1Index?.let { slot ->
-            built.add(
-                slot,
-                createSoftwareAv1Renderer(allowedVideoJoiningTimeMs, eventHandler, eventListener) { format ->
-                    hardwareAv1Support(mediaCodecSelector, format)
-                }
-            )
-        }
-        // Same settings as the platform renderer it replaces; the factory's own DV7 setting only reaches that one.
-        // The replacement also repairs decode-order times (AVI, VC-1, XviD/DivX), see DecodeOrderPtsVideoRenderer.
-        for (renderer in built) {
-            if (renderer::class.java == MediaCodecVideoRenderer::class.java) {
-                val builder = MediaCodecVideoRenderer.Builder(context)
-                    .setCodecAdapterFactory(getCodecAdapterFactory())
-                    .setMediaCodecSelector(videoCodecSelector)
-                    .setAllowedJoiningTimeMs(allowedVideoJoiningTimeMs)
-                    .setEnableDecoderFallback(enableDecoderFallback)
-                    .setEventHandler(eventHandler)
-                    .setEventListener(eventListener)
-                    .setMaxDroppedFramesToNotify(DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY)
-                    .setMapDV7ToHevc(mapDv7ToHevc)
-                out.add(
-                    DecodeOrderPtsVideoRenderer(
-                        builder,
-                        vendorUnstablePts = false,
-                        dav1dLoaded = { softwareAv1Index != null && dav1dLoaded() }
-                    )
+        if (plainVideoRenderers) {
+            out.addAll(built)
+        } else {
+            // dav1d (software AV1) goes right after MediaCodec: it takes 8-bit AV1 up to 1080p that no
+            // hardware decoder takes, see SoftwareAv1Renderer.
+            val softwareAv1Index = softwareAv1Slot(built, videoExtensionMode, first = false) {
+                it::class.java == MediaCodecVideoRenderer::class.java
+            }
+            softwareAv1Index?.let { slot ->
+                built.add(
+                    slot,
+                    createSoftwareAv1Renderer(allowedVideoJoiningTimeMs, eventHandler, eventListener) { format ->
+                        hardwareAv1Support(mediaCodecSelector, format)
+                    }
                 )
-            } else {
-                out.add(renderer)
+            }
+            // Same settings as the platform renderer it replaces; the factory's own DV7 setting only reaches that one.
+            // The replacement also repairs decode-order times (AVI, VC-1, XviD/DivX), see DecodeOrderPtsVideoRenderer.
+            for (renderer in built) {
+                if (renderer::class.java == MediaCodecVideoRenderer::class.java) {
+                    val builder = MediaCodecVideoRenderer.Builder(context)
+                        .setCodecAdapterFactory(getCodecAdapterFactory())
+                        .setMediaCodecSelector(videoCodecSelector)
+                        .setAllowedJoiningTimeMs(allowedVideoJoiningTimeMs)
+                        .setEnableDecoderFallback(enableDecoderFallback)
+                        .setEventHandler(eventHandler)
+                        .setEventListener(eventListener)
+                        .setMaxDroppedFramesToNotify(DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY)
+                        .setMapDV7ToHevc(mapDv7ToHevc)
+                    out.add(
+                        DecodeOrderPtsVideoRenderer(
+                            builder,
+                            vendorUnstablePts = false,
+                            dav1dLoaded = { softwareAv1Index != null && dav1dLoaded() }
+                        )
+                    )
+                } else {
+                    out.add(renderer)
+                }
             }
         }
         // Media3 adds the FFmpeg video renderer only when extension renderers are on; VC-1 and

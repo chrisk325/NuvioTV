@@ -968,6 +968,8 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             filename: String?,
             responseHeaders: Map<String, String>? = null
         ): String? {
+            // A Live TV channel whose provider names its format opens as that (see LiveTvChannel.streamType).
+            com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.mimeTypeFor(url)?.let { return it }
             val adaptiveMime = inferAdaptiveMimeTypeFromPath(filename)
                 ?: inferAdaptiveMimeTypeFromPath(url)
             if (adaptiveMime != null) {

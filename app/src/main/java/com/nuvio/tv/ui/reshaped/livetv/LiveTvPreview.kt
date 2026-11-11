@@ -60,6 +60,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -162,7 +163,9 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     }
 
     fun play(channel: LiveTvChannel) {
-        val hls = channel.streamUrl.contains(".m3u8", ignoreCase = true)
+        // The provider's own word on the format first; then the link.
+        val hls = liveTvStreamMimeType(channel.streamType) == MimeTypes.APPLICATION_M3U8 ||
+            channel.streamUrl.contains(".m3u8", ignoreCase = true)
         triedHls = hls
         start(channel, hls)
     }

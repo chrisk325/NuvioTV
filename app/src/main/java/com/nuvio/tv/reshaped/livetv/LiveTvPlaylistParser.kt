@@ -28,6 +28,8 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
     val headerSets = HashMap<Map<String, String>, Map<String, String>>()
     var metadata: M3uMetadata? = null
     var pendingHeaders = emptyMap<String, String>()
+    // The format a `#KODIPROP` line gives the next channel.
+    var pendingStreamType: String? = null
     var isHlsStream = false
     // Catch-up the playlist header gives every channel, and one shared instance per kind.
     var defaultCatchup: Map<String, String> = emptyMap()
@@ -73,12 +75,16 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
                 pendingHeaders = pendingHeaders + ("Origin" to line.substringAfter('=').trim())
             line.startsWith("#EXTHTTP:", ignoreCase = true) ->
                 pendingHeaders = pendingHeaders + parseExtHttpHeaders(line.substringAfter(':'))
+            line.startsWith("#KODIPROP:", ignoreCase = true) ->
+                m3uKodiStreamType(line.substringAfter(':'))?.let { pendingStreamType = it }
             line.startsWith("#") -> Unit
             else -> {
                 val current = metadata
                 metadata = null
                 val headers = pendingHeaders
                 pendingHeaders = emptyMap()
+                val streamType = pendingStreamType
+                pendingStreamType = null
                 val extGroup = pendingGroup
                 pendingGroup = null
                 // Only links: web page or binary lines (a link that is not a playlist) are not channels.
@@ -103,6 +109,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
                     tvgName = current?.tvgName?.takeIf { it != name },
                     catchup = m3uCatchup(current?.catchup.orEmpty(), defaultCatchup)?.let { catchups.getOrPut(it) { it } },
                     guideShiftMinutes = current?.guideShiftMinutes ?: defaultShift,
+                    streamType = streamType,
                     group = groups.getOrPut(group) { group },
                     headers = if (extraHeaders.isEmpty()) {
                         defaults
@@ -116,6 +123,30 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
     if (isHlsStream) return ParsedM3uPlaylist(channels = emptyList(), epgUrls = emptyList(), isHlsStream = true)
     channels.trimToSize()
     return ParsedM3uPlaylist(channels = channels, epgUrls = epgUrls.toList())
+}
+
+/**
+ * The format a `#KODIPROP:key=value` line gives its channel, as Kodi's inputstream.adaptive reads
+ * it: `inputstream.adaptive.manifest_type` or `mimetype`. Null for every other property.
+ */
+internal fun m3uKodiStreamType(property: String): String? {
+    val key = property.substringBefore('=', missingDelimiterValue = "").trim().lowercase()
+    val value = property.substringAfter('=', missingDelimiterValue = "").trim().lowercase()
+    if (value.isEmpty()) return null
+    return when (key) {
+        "inputstream.adaptive.manifest_type" -> when (value) {
+            "hls", "m3u8" -> "hls"
+            "mpd", "dash" -> "dash"
+            "ism", "isml", "smoothstreaming" -> "ss"
+            else -> null
+        }
+        "mimetype" -> when {
+            "mpegurl" in value -> "hls"
+            "dash" in value -> "dash"
+            else -> null
+        }
+        else -> null
+    }
 }
 
 /** Lines read without any playlist tag or channel before a link counts as "not a playlist". */

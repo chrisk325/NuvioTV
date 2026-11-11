@@ -15,16 +15,29 @@ object LiveTvPlaybackRegistry {
     @Volatile private var catchups: Set<String> = emptySet()
     /** For a catch-up URL, the time it plays: [LiveTvReplayWindow]. */
     @Volatile private var windows: Map<String, LiveTvReplayWindow> = emptyMap()
+    /** The MIME type a URL's provider gave ([liveTvStreamMimeType]), for URLs that have one. */
+    @Volatile private var mimeTypes: Map<String, String> = emptyMap()
 
     @Synchronized
-    fun register(playbackUrl: String, listUrl: String = playbackUrl, catchup: Boolean = false, window: LiveTvReplayWindow? = null) {
+    fun register(
+        playbackUrl: String,
+        listUrl: String = playbackUrl,
+        catchup: Boolean = false,
+        window: LiveTvReplayWindow? = null,
+        mimeType: String? = null,
+    ) {
         if (playbackUrl.isBlank()) return
         entries = (entries.filterNot { it.first == playbackUrl } + (playbackUrl to listUrl)).takeLast(MAX_URLS)
         val kept = entries.mapTo(HashSet()) { it.first }
         catchups = catchups.filterTo(HashSet()) { it in kept && it != playbackUrl }.apply { if (catchup) add(playbackUrl) }
         windows = windows.filterTo(HashMap()) { (url, _) -> url in catchups && url != playbackUrl }
             .apply { if (catchup && window != null) put(playbackUrl, window) }
+        mimeTypes = mimeTypes.filterTo(HashMap()) { (url, _) -> url in kept && url != playbackUrl }
+            .apply { if (mimeType != null) put(playbackUrl, mimeType) }
     }
+
+    /** The MIME type [url] was registered with: what its provider says it plays. */
+    fun mimeTypeFor(url: String?): String? = url?.let { mimeTypes[it] }
 
     /** The time the catch-up at [url] plays, when it was registered with one. */
     fun replayWindow(url: String?): LiveTvReplayWindow? = url?.let { windows[it] }
