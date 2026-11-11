@@ -32,6 +32,16 @@ internal data class CachedSourceIdentity(
 internal fun PlayerRuntimeController.tryRefreshExpiredLinkAfterError(errorMessage: String): Boolean {
     val failedUrl = currentStreamUrl
     if (failedUrl.isBlank() || failedUrl.startsWith("torrent://")) return false
+    // Live TV channels and their catch-up come from the channel list, not an add-on, and their
+    // links often carry token or time parameters. There is nothing to fetch them from again, so
+    // the refresh would only wait out its source polling and then skip the quick reconnect.
+    if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(failedUrl) ||
+        LivePlaybackUiPolicy.isLiveContentType(contentType)
+    ) {
+        return false
+    }
+    // Without a content id there are no add-on sources to find the link among.
+    if (!hasSourceStreamsRequest()) return false
     val fromLinkCache = failedUrl == linkCacheSourceUrl
     if (!fromLinkCache && !failedUrl.hasLikelyExpiringPlaybackCredentials()) return false
     if (failedUrl == linkRefreshAttemptedUrl) return false
