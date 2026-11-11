@@ -1754,6 +1754,11 @@ internal fun PlayerRuntimeController.initializePlayer(
                             return
                         }
 
+                        // A link that has likely expired is fetched again before anything else is tried on it.
+                        if (tryRefreshExpiredLinkAfterError(detailedError)) {
+                            return
+                        }
+
                         // ── Main Engine Failover ──
                         if (maybeAutoSwitchInternalPlayerOnStartupError(detailedError = detailedError, allowEngineFailover = allowEngineFailover)) {
                             return
