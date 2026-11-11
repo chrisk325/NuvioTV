@@ -181,6 +181,9 @@ private fun PlayerRuntimeController.currentSourceStreamsRequest(): SourceStreams
         )
     }
 
+/** Whether the playing title has add-on sources to list: false for Live TV and other id-less playback. */
+internal fun PlayerRuntimeController.hasSourceStreamsRequest(): Boolean = currentSourceStreamsRequest() != null
+
 internal fun PlayerRuntimeController.loadSourceStreams(forceRefresh: Boolean) {
     streamRepository.setLocalPluginSearchPaused(false)
     val request = currentSourceStreamsRequest() ?: return

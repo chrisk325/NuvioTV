@@ -227,7 +227,11 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                     useLongReadTimeout = isLoopbackUrl(url),
                 ),
             )
-            if (isHls) HlsParameterSetInitDataSource.Factory(adaptiveFactory) else adaptiveFactory
+            // Live channel playlists never end, so the SPS/PPS check never applies to them; skip the
+            // whole-playlist buffering and check thread on every live reload.
+            val isLiveChannel = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url) &&
+                !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isCatchup(url)
+            if (isHls && !isLiveChannel) HlsParameterSetInitDataSource.Factory(adaptiveFactory) else adaptiveFactory
         } else {
             PlayerPlaybackNetworking.createDataSourceFactory(context, sanitizedHeaders)
         }
