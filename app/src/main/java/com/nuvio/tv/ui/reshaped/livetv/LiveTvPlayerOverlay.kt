@@ -86,6 +86,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvReplayWindow
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvUiState
+import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
@@ -720,6 +721,7 @@ internal class LiveTvPlayerState(
             LiveTvPlaybackRegistry.register(
                 PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url,
                 listUrl = channel.streamUrl,
+                mimeType = liveTvStreamMimeType(channel.streamType),
             )
             controller.switchToSourceStream(channel.toStream(playback))
         }

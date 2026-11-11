@@ -26,7 +26,25 @@ data class LiveTvChannel(
     val catchup: LiveTvCatchup? = null,
     /** The playlist's `tvg-shift`: minutes its guide's times are moved by (a guide in another time zone). */
     val guideShiftMinutes: Int = 0,
+    /**
+     * What the provider says the link plays, when it says: "hls", "dash" or "ss" (an M3U
+     * `#KODIPROP`), or the Xtream panel's output format ("ts", "m3u8"). The player then opens it
+     * as that from the start instead of guessing from the link. See [liveTvStreamMimeType].
+     */
+    val streamType: String? = null,
 )
+
+/**
+ * The player MIME type for a [LiveTvChannel.streamType], or null when it names no adaptive
+ * format (a transport stream is still recognised from its data).
+ */
+fun liveTvStreamMimeType(streamType: String?): String? =
+    when (streamType?.trim()?.lowercase()) {
+        "hls", "m3u8" -> androidx.media3.common.MimeTypes.APPLICATION_M3U8
+        "dash", "mpd" -> androidx.media3.common.MimeTypes.APPLICATION_MPD
+        "ss", "smoothstreaming" -> androidx.media3.common.MimeTypes.APPLICATION_SS
+        else -> null
+    }
 
 /**
  * A channel's catch-up (archive): how its provider builds the link to a past programme, and how

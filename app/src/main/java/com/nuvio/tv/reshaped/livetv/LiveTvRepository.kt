@@ -717,7 +717,7 @@ object LiveTvRepository {
      */
     suspend fun prepareForPlayback(channel: LiveTvChannel): LiveTvChannel {
         val playback = playableChannel(channel)
-        LiveTvPlaybackRegistry.register(playback.streamUrl, listUrl = channel.streamUrl)
+        LiveTvPlaybackRegistry.register(playback.streamUrl, listUrl = channel.streamUrl, mimeType = liveTvStreamMimeType(channel.streamType))
         recordRecentChannel(channel)
         return playback
     }

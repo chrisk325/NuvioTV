@@ -16,7 +16,7 @@ import java.util.zip.GZIPOutputStream
  * Portals (Stalker) are not saved: their lists carry a session that is renewed on each load.
  */
 internal object LiveTvListCache {
-    private const val VERSION = 2
+    private const val VERSION = 3
     private const val DIR = "live_tv_lists"
 
     /** What a provider gave, before the list tags the channels with their source. */
@@ -54,7 +54,7 @@ internal object LiveTvListCache {
     fun read(file: File, source: LiveTvSource): Entry? = runCatching {
         if (!file.isFile) return null
         DataInputStream(GZIPInputStream(file.inputStream().buffered(64 * 1024), 64 * 1024).buffered(64 * 1024)).use { input ->
-            // A list saved before guide shifts were kept (version 1) is read too, without them.
+            // Lists saved before guide shifts (version 1) or stream types (version 2) are read too, without them.
             val version = input.readInt()
             if (version !in 1..VERSION || input.readUTF() != key(source)) return null
             val savedAtMs = input.readLong()
@@ -69,6 +69,7 @@ internal object LiveTvListCache {
                 LiveTvCatchup(LiveTvCatchup.Kind.valueOf(input.readUTF()), input.readInt(), input.readOptional())
             }
             val groups = HashMap<String, String>()
+            val types = HashMap<String, String>()
             val count = input.readInt()
             val channels = ArrayList<LiveTvChannel>(count)
             repeat(count) {
@@ -83,6 +84,7 @@ internal object LiveTvListCache {
                     tvgName = input.readOptional(),
                     catchup = input.readInt().let { if (it < 0) null else catchups[it] },
                     guideShiftMinutes = if (version >= 2) input.readInt() else 0,
+                    streamType = if (version >= 3) input.readOptional()?.let { types.getOrPut(it) { it } } else null,
                 )
             }
             Entry(channels, epgUrls, groupOrder, savedAtMs)
@@ -140,6 +142,7 @@ internal object LiveTvListCache {
                     out.writeOptional(channel.tvgName)
                     out.writeInt(channel.catchup?.let(catchupIndex::getValue) ?: -1)
                     out.writeInt(channel.guideShiftMinutes)
+                    out.writeOptional(channel.streamType)
                 }
             }
             if (!temp.renameTo(file)) {
