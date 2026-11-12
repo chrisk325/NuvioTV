@@ -27,6 +27,7 @@ import okhttp3.Request
 internal class LiveTvSharedDataSource(
     private val channelUrl: String,
     private val headers: Map<String, String>,
+    private val client: okhttp3.OkHttpClient = LiveTvHttp.client,
 ) : BaseDataSource(/* isNetwork = */ true) {
     private var plain: DataSource? = null
     private var stream: LiveTvStreamHub.Stream? = null
@@ -38,10 +39,10 @@ internal class LiveTvSharedDataSource(
         transferInitializing(dataSpec)
         val length = if (isChannelFromStart(dataSpec)) {
             LiveTvStreamShare.hub.open(LiveTvStreamShare.key(channelUrl, headers)) {
-                LiveTvStreamShare.connect(dataSpec, headers)
+                LiveTvStreamShare.connect(dataSpec, headers, client)
             }.also { stream = it }.length
         } else {
-            LiveTvStreamShare.httpFactory(LiveTvHttp.client, headers).createDataSource().also { plain = it }.open(dataSpec)
+            LiveTvStreamShare.httpFactory(client, headers).createDataSource().also { plain = it }.open(dataSpec)
         }
         opened = true
         transferStarted(dataSpec)
@@ -119,10 +120,10 @@ internal object LiveTvStreamShare {
         }
 
     /** Opens [dataSpec] on a connection that another thread can then read, and cancel. */
-    fun connect(dataSpec: DataSpec, headers: Map<String, String>): LiveTvStreamHub.Opened {
+    fun connect(dataSpec: DataSpec, headers: Map<String, String>, client: okhttp3.OkHttpClient = LiveTvHttp.client): LiveTvStreamHub.Opened {
         val call = AtomicReference<Call?>()
         val calls = object : Call.Factory {
-            override fun newCall(request: Request): Call = LiveTvHttp.client.newCall(request).also(call::set)
+            override fun newCall(request: Request): Call = client.newCall(request).also(call::set)
         }
         val source = httpFactory(calls, headers).createDataSource()
         val length = try {
@@ -167,7 +168,7 @@ internal object LiveTvStreamShare {
                 val live = hub.prewarm(key(url, headers), HANDOFF_MS) {
                     trace?.opening()
                     try {
-                        connect(dataSpec, headers).also { trace?.connected(joinedOpenConnection = false) }
+                        connect(dataSpec, headers, TracingNetworkEvents.client(trace)).also { trace?.connected(joinedOpenConnection = false) }
                     } catch (error: IOException) {
                         trace?.failed(error)
                         throw error

@@ -25,6 +25,15 @@ import androidx.media3.extractor.TrackOutput
 import androidx.media3.extractor.text.SubtitleParser
 import com.nuvio.tv.R
 import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Proxy
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.Handshake
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -56,14 +65,66 @@ internal class LiveTvStartTrace private constructor(val url: String, private val
     @Volatile private var preparedNanos = 0L
     @Volatile private var pictureNanos = 0L
 
+    // The connection's own steps, until it is made (see TracingNetworkEvents).
+    @Volatile private var netStep = NetStep.NONE
+    @Volatile private var netStepSinceNanos = 0L
+    private val dnsNanos = AtomicLong()
+    private val connectNanos = AtomicLong()
+    private val answerNanos = AtomicLong()
+    @Volatile private var redirects = 0
+    @Volatile private var failedConnections = 0
+    @Volatile private var connectFailure: String? = null
+
+    enum class NetStep { NONE, DNS, CONNECT, ANSWER }
+
+    /** The connection moved on to [step]; the time of the step it left is added up. */
+    @Synchronized
+    fun netStep(step: NetStep) {
+        if (connectedNanos != 0L) return
+        val now = System.nanoTime()
+        endNetStep(now)
+        netStep = step
+        netStepSinceNanos = now
+    }
+
+    @Synchronized
+    fun netStepDone() {
+        if (connectedNanos != 0L) return
+        endNetStep(System.nanoTime())
+        netStep = NetStep.NONE
+    }
+
+    private fun endNetStep(now: Long) {
+        val spent = now - netStepSinceNanos
+        when (netStep) {
+            NetStep.DNS -> dnsNanos.addAndGet(spent)
+            NetStep.CONNECT -> connectNanos.addAndGet(spent)
+            NetStep.ANSWER -> answerNanos.addAndGet(spent)
+            NetStep.NONE -> Unit
+        }
+    }
+
+    fun redirected() {
+        if (connectedNanos == 0L) redirects++
+    }
+
+    fun connectionFailed(error: Throwable) {
+        if (connectedNanos != 0L) return
+        failedConnections++
+        connectFailure = error.javaClass.simpleName
+    }
+
     val done: Boolean get() = pictureNanos != 0L
 
     fun opening() {
         attempts++
     }
 
+    @Synchronized
     fun connected(joinedOpenConnection: Boolean) {
         if (connectedNanos == 0L) {
+            endNetStep(System.nanoTime())
+            netStep = NetStep.NONE
             connectedNanos = System.nanoTime()
             joined = joinedOpenConnection
         }
@@ -122,12 +183,29 @@ internal class LiveTvStartTrace private constructor(val url: String, private val
     fun picture(): Summary? {
         if (pictureNanos != 0L) return null
         pictureNanos = System.nanoTime()
-        val summary = Summary(ms(pictureNanos), describeSteps())
-        Log.i(TAG, "${if (forPlayer) "player" else "preview"} ${summary.totalMs} ms: ${summary.steps}")
+        val summary = Summary(ms(pictureNanos), shortSteps())
+        Log.i(TAG, "${if (forPlayer) "player" else "preview"} ${summary.totalMs} ms: ${describeSteps()}")
         return summary
     }
 
     class Summary(val totalMs: Long, val steps: String)
+
+    private fun s(nanos: Long): String = String.format(Locale.US, "%.1f s", nanos / 1e9)
+
+    /** The start in a line that fits a short message: the connection's steps first. */
+    private fun shortSteps(): String = buildList {
+        if (joined) {
+            add("used the open connection")
+        } else {
+            add("address lookup ${s(dnsNanos.get())}")
+            add("connecting ${s(connectNanos.get())}")
+            add("server answer ${s(answerNanos.get())}")
+            if (redirects > 0) add("redirects $redirects")
+        }
+        if (failedConnections > 0) add("failed connections $failedConnections ($connectFailure)")
+        if (refusedCode != 0) add("refused HTTP $refusedCode")
+        if (connectedNanos != 0L && pictureNanos != 0L) add("then picture ${s(pictureNanos - connectedNanos)}")
+    }.joinToString(", ")
 
     private fun ms(at: Long): Long = if (at == 0L) -1L else (at - sinceNanos) / 1_000_000L
 
@@ -135,6 +213,9 @@ internal class LiveTvStartTrace private constructor(val url: String, private val
         add("attempts $attempts")
         if (refusedCode != 0) add("refused HTTP $refusedCode")
         failure?.let { add("error $it") }
+        add("address lookup ${dnsNanos.get() / 1_000_000} ms, connecting ${connectNanos.get() / 1_000_000} ms, " +
+            "server answer ${answerNanos.get() / 1_000_000} ms, redirects $redirects, failed connections $failedConnections" +
+            (connectFailure?.let { " ($it)" } ?: ""))
         add(if (joined) "took the open connection ${ms(connectedNanos)} ms" else "connected ${ms(connectedNanos)} ms")
         add("first data ${ms(firstByteNanos)} ms")
         add("tracks listed ${ms(tracksEndedNanos)} ms")
@@ -154,6 +235,8 @@ internal class LiveTvStartTrace private constructor(val url: String, private val
             preparedNanos != 0L -> context.getString(R.string.live_tv_start_picture, seconds)
             connectedNanos == 0L && refusedCode != 0 -> context.getString(R.string.live_tv_start_refused, refusedCode, seconds)
             connectedNanos == 0L && failure != null -> context.getString(R.string.live_tv_start_failed, failure, seconds)
+            connectedNanos == 0L && netStep == NetStep.DNS -> context.getString(R.string.live_tv_start_dns, seconds)
+            connectedNanos == 0L && netStep == NetStep.ANSWER -> context.getString(R.string.live_tv_start_answer, seconds)
             connectedNanos == 0L -> context.getString(R.string.live_tv_start_connecting, seconds)
             bytes.get() == 0L -> context.getString(R.string.live_tv_start_waiting_data, seconds)
             tracksEndedNanos == 0L -> context.getString(R.string.live_tv_start_reading, received, seconds)
@@ -314,5 +397,45 @@ internal class TracingExtractors(private val delegate: ExtractorsFactory, privat
 
         override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int, cryptoData: TrackOutput.CryptoData?) =
             delegate.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+    }
+}
+
+/**
+ * The connection's own steps for a [LiveTvStartTrace]: looking up the server's address,
+ * connecting to it, and waiting for its answer (for each redirect the server sends).
+ */
+internal class TracingNetworkEvents(private val trace: LiveTvStartTrace) : EventListener() {
+    override fun dnsStart(call: Call, domainName: String) = trace.netStep(LiveTvStartTrace.NetStep.DNS)
+
+    override fun dnsEnd(call: Call, domainName: String, inetAddressList: List<InetAddress>) = trace.netStepDone()
+
+    override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) =
+        trace.netStep(LiveTvStartTrace.NetStep.CONNECT)
+
+    override fun connectEnd(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy, protocol: Protocol?) = trace.netStepDone()
+
+    override fun connectFailed(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy, protocol: Protocol?, ioe: IOException) {
+        trace.netStepDone()
+        trace.connectionFailed(ioe)
+        // An address that could not be reached is looked up again next time.
+        inetSocketAddress.hostString?.let(LiveTvDns.shared::forget)
+        call.request().url.host.let(LiveTvDns.shared::forget)
+    }
+
+    override fun secureConnectEnd(call: Call, handshake: Handshake?) = Unit
+
+    override fun requestHeadersEnd(call: Call, request: okhttp3.Request) = trace.netStep(LiveTvStartTrace.NetStep.ANSWER)
+
+    override fun responseHeadersEnd(call: Call, response: Response) {
+        trace.netStepDone()
+        if (response.isRedirect) trace.redirected()
+    }
+
+    override fun callFailed(call: Call, ioe: IOException) = trace.netStepDone()
+
+    companion object {
+        /** Live TV's client, reporting the connection's steps to [trace]. */
+        fun client(trace: LiveTvStartTrace?): OkHttpClient =
+            if (trace == null) LiveTvHttp.client else LiveTvHttp.client.newBuilder().eventListener(TracingNetworkEvents(trace)).build()
     }
 }

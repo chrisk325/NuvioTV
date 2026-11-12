@@ -14,7 +14,6 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
-import com.nuvio.tv.core.network.IPv4FirstDns
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,7 +26,7 @@ internal object LiveTvHttp {
             // As Nuvio's own clients, and the phone app's player: on a network whose IPv6 route is
             // slow or broken, a server with both kinds of address is otherwise tried over IPv6
             // first, and every channel waits for that attempt to give up.
-            .dns(IPv4FirstDns())
+            .dns(LiveTvDns.shared)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)
