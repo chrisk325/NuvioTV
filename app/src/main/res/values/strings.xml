@@ -1939,6 +1939,8 @@
     <string name="player_loading_starting">Starting stream…</string>
     <string name="player_loading_buffering">Buffering…</string>
     <string name="live_tv_start_connecting">Connecting to the server… %1$s</string>
+    <string name="live_tv_start_dns">Looking up the server\'s address… %1$s</string>
+    <string name="live_tv_start_answer">Waiting for the server to answer… %1$s</string>
     <string name="live_tv_start_refused">The server refused the channel (HTTP %1$d), asking again… %2$s</string>
     <string name="live_tv_start_failed">Could not reach the server (%1$s), trying again… %2$s</string>
     <string name="live_tv_start_waiting_data">Connected, waiting for the server to send the channel… %1$s</string>

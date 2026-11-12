@@ -46,9 +46,10 @@ object LiveTvMediaSource {
         val connection: DataSource.Factory = if (sharedUrl != null) {
             LiveTvStreamShare.ringBytes =
                 if (LiveTvDevice.isLowMemory(context)) LiveTvStreamShare.RING_BYTES_LOW_MEMORY else LiveTvStreamShare.RING_BYTES
-            DataSource.Factory { LiveTvSharedDataSource(sharedUrl, headers) }
+            val client = TracingNetworkEvents.client(trace)
+            DataSource.Factory { LiveTvSharedDataSource(sharedUrl, headers, client) }
         } else {
-            LiveTvStreamShare.httpFactory(LiveTvHttp.client, headers)
+            LiveTvStreamShare.httpFactory(TracingNetworkEvents.client(trace), headers)
         }
         val http = if (trace != null) TracingDataSource.Factory(connection, trace) else connection
         // Plain http(s) goes through OkHttp; udp:// and file links, which some lists carry, still open.
