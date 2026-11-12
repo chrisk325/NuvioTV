@@ -90,7 +90,13 @@ internal object LiveTvStreamShare {
     /** Set before the first use, from the TV's memory (see [LiveTvMediaSource]). */
     @Volatile var ringBytes: Int = RING_BYTES
 
-    val hub = LiveTvStreamHub(capacityBytes = { ringBytes }, log = { Log.d("LiveTvStream", it) })
+    val hub = LiveTvStreamHub(
+        capacityBytes = { ringBytes },
+        log = { event ->
+            Log.d("LiveTvStream", event)
+            LiveTvStartTrace.step("connected ($event)")
+        },
+    )
 
     /** What the server answered, for the players reading the session. */
     class Response(val uri: Uri?, val headers: Map<String, List<String>>)

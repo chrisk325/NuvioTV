@@ -17,6 +17,7 @@ internal fun PlayerRuntimeController.keepPlayerForLiveTvZap(newUrl: String): Boo
     if (!LiveTvPlaybackRegistry.isLiveTv(currentStreamUrl) || !LiveTvPlaybackRegistry.isLiveTv(newUrl)) return false
     // Between a live channel and a past programme, the seek bar comes and goes: start its state over.
     if (LiveTvPlaybackRegistry.isCatchup(currentStreamUrl) || LiveTvPlaybackRegistry.isCatchup(newUrl)) resetPlaybackTimeline()
+    com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.begin()
     errorRetryJob?.cancel()
     errorRetryJob = null
     playbackPreparationJob?.cancel()

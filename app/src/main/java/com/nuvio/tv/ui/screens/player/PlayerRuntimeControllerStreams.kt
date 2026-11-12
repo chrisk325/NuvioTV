@@ -1070,6 +1070,7 @@ internal fun PlayerRuntimeController.switchToSourceStream(
                     )
                 )
                 player.playWhenReady = true
+                com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.step("prepare")
                 player.prepare()
                 recordDistinctPluginPlay(
                     bingeGroup = stream.behaviorHints?.bingeGroup,
