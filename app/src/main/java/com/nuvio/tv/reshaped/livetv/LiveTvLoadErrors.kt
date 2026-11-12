@@ -19,7 +19,8 @@ object LiveTvLoadErrors {
     private const val HTTP_RETRIES = 3
     private const val HTTP_RETRY_STEP_MS = 700L
 
-    private val policy = object : DefaultLoadErrorHandlingPolicy(
+    /** Also the channel preview's policy: a preview opened just after the last one closed is refused the same way. */
+    val policy: LoadErrorHandlingPolicy = object : DefaultLoadErrorHandlingPolicy(
         DefaultLoadErrorHandlingPolicy.DEFAULT_MIN_LOADABLE_RETRY_COUNT_PROGRESSIVE_LIVE,
     ) {
         override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {

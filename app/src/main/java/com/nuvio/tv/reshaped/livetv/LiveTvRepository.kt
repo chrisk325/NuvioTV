@@ -150,6 +150,12 @@ object LiveTvRepository {
      * load, so a phone upload during start-up no longer drops the sources still loading.
      */
     private val sourceJobs = ConcurrentHashMap<String, Job>()
+    /**
+     * Background refreshes of sources shown from a saved list older than the refresh interval
+     * (see [launchBackgroundRefresh]). Kept apart from [sourceJobs]: they hold up neither the
+     * "Loading" state nor the guide, and any load of the same source replaces them.
+     */
+    private val refreshJobs = ConcurrentHashMap<String, Job>()
 
     /** What each source loaded last. Only touched on [serial]. */
     private class LoadedSource(
@@ -355,6 +361,7 @@ object LiveTvRepository {
     fun removeSource(sourceId: String) {
         val store = storage ?: return
         sourceJobs.remove(sourceId)?.cancel()
+        refreshJobs.remove(sourceId)?.cancel()
         scope.launch(serial) {
             val gone = _uiState.value.sources.firstOrNull { it.id == sourceId } ?: return@launch
             val sources = _uiState.value.sources.filterNot { it.id == sourceId }
@@ -826,6 +833,8 @@ object LiveTvRepository {
     private fun cancelAllLoads() {
         sourceJobs.values.forEach(Job::cancel)
         sourceJobs.clear()
+        refreshJobs.values.forEach(Job::cancel)
+        refreshJobs.clear()
     }
 
     /** The screen shows "Loading" while any source is loading. */
@@ -868,6 +877,8 @@ object LiveTvRepository {
     private fun launchSourceLoad(source: LiveTvSource, adding: Boolean, useSaved: Boolean = false) {
         val store = storage ?: return
         sourceJobs.remove(source.id)?.cancel()
+        // This load asks the provider itself (or reads a list saved in time): a background refresh is not needed.
+        refreshJobs.remove(source.id)?.cancel()
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val outcome = loadPermits.withPermit {
                 try {
@@ -889,7 +900,7 @@ object LiveTvRepository {
                 if (sourceJobs[source.id] !== self) return@withContext
                 val known = _uiState.value.sources.any { it.id == source.id }
                 if (!adding && !known) return@withContext
-                outcome.onSuccess { (result, notice) ->
+                outcome.onSuccess { (result, notice, stale) ->
                     val previous = loaded[source.id]
                     loaded[source.id] = result
                     if (adding && known) {
@@ -925,6 +936,7 @@ object LiveTvRepository {
                         state.copy(sourceErrors = if (notice != null) errors + (source.id to notice) else errors)
                     }
                     publish()
+                    if (stale) launchBackgroundRefresh(source)
                 }
                 outcome.onFailure { error ->
                     val reason = (error as? LiveTvException)?.error ?: fallbackError(source.type)
@@ -990,14 +1002,23 @@ object LiveTvRepository {
     }
 
     /**
-     * One source's channels (tagged with the source) and guide links, plus a notice for a partial load.
-     * With [useSaved] (opening Live TV), a list saved within the guide refresh interval is used
-     * without asking the provider; an older one stands in only when the provider fails.
+     * One source's channels (tagged with the source) and guide links, plus a notice for a partial
+     * load, and whether they came from a saved list older than the guide refresh interval.
+     *
+     * With [useSaved] (opening Live TV), the saved list shows at once whatever its age, as on
+     * Nuvio mobile: waiting for a provider to build and send a large list (often a minute on a
+     * panel) made Live TV open slowly every time the interval had passed. A list older than the
+     * interval is then fetched again in the background ([launchBackgroundRefresh]).
      */
-    private suspend fun loadSource(source: LiveTvSource, useSaved: Boolean = false): Pair<LoadedSource, LiveTvError?> {
+    private suspend fun loadSource(source: LiveTvSource, useSaved: Boolean = false): Triple<LoadedSource, LiveTvError?, Boolean> {
         val savedFile = savedListFile(source)
         val saved = if (savedFile != null && useSaved) withContext(Dispatchers.IO) { LiveTvListCache.read(savedFile, source) } else null
         val nowMs = System.currentTimeMillis()
+        if (saved != null && saved.channels.isNotEmpty()) {
+            val stale = nowMs - saved.savedAtMs !in 0 until EPG_DOWNLOAD_MS
+            val (result, notice) = tagSource(source, FetchedSource(saved.channels, saved.epgUrls, saved.groupOrder, notice = null))
+            return Triple(result, notice, stale)
+        }
         val fetched = if (saved != null && nowMs - saved.savedAtMs in 0 until EPG_DOWNLOAD_MS) {
             FetchedSource(saved.channels, saved.epgUrls, saved.groupOrder, notice = null)
         } else {
@@ -1018,7 +1039,52 @@ object LiveTvRepository {
                 FetchedSource(saved.channels, saved.epgUrls, saved.groupOrder, notice = (error as? LiveTvException)?.error ?: fallbackError(source.type))
             }
         }
-        return tagSource(source, fetched)
+        val (result, notice) = tagSource(source, fetched)
+        return Triple(result, notice, false)
+    }
+
+    /**
+     * Asks [source]'s provider again for a list shown from a saved copy older than the refresh
+     * interval, while that copy stays on screen. Only a complete list replaces it, and only when
+     * it differs; a provider that fails or sends part of its list leaves the saved one as it was.
+     * Any other load of the source (Refresh, an edit, sync, removal) replaces this one.
+     */
+    private fun launchBackgroundRefresh(source: LiveTvSource) {
+        refreshJobs.remove(source.id)?.cancel()
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val fresh = try {
+                loadPermits.withPermit { loadSource(source) }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(TAG, "Live TV source ${source.type} refresh failed, keeping its saved list", error)
+                return@launch
+            } catch (tooLarge: OutOfMemoryError) {
+                Log.w(TAG, "Live TV source ${source.type} too large to refresh", tooLarge)
+                return@launch
+            }
+            val self = coroutineContext[Job]
+            withContext(serial) {
+                if (refreshJobs[source.id] !== self) return@withContext
+                // A load started meanwhile wins; so does a removal or an edit of the source.
+                if (sourceJobs[source.id]?.isActive == true) return@withContext
+                if (_uiState.value.sources.none { it.id == source.id && it.identity == source.identity }) return@withContext
+                val (result, notice) = fresh
+                if (notice != null) return@withContext
+                val shown = loaded[source.id]
+                if (shown != null && shown.channels == result.channels && shown.epgUrls == result.epgUrls &&
+                    shown.groupOrder == result.groupOrder
+                ) {
+                    return@withContext
+                }
+                loaded[source.id] = result
+                _uiState.update { it.copy(sourceErrors = it.sourceErrors - source.id) }
+                publish()
+            }
+        }
+        refreshJobs[source.id] = job
+        job.invokeOnCompletion { refreshJobs.remove(source.id, job) }
+        job.start()
     }
 
     /** Asks [source]'s provider (or reads its imported file) for its channels. */
@@ -1450,6 +1516,7 @@ object LiveTvRepository {
                 val removed = oldSources.filter { it.id !in kept }
                 removed.forEach { gone ->
                     sourceJobs.remove(gone.id)?.cancel()
+                    refreshJobs.remove(gone.id)?.cancel()
                     loaded.remove(gone.id)
                 }
                 // A removed imported playlist's file goes with it, as when it is removed here.
@@ -1730,6 +1797,18 @@ object LiveTvRepository {
                             withContext(Dispatchers.IO) { LiveTvGuideCache.read(cacheFile, cacheKey, guideFiles, nowMs, EPG_DOWNLOAD_MS) }
                         } else {
                             null
+                        }
+                        // Opening again with the kept programmes past their refresh: they show while the
+                        // guide is downloaded and read again (minutes for a 100+ MB guide on a weak TV),
+                        // as the last good guide does during a refresh, instead of a guide with nothing on.
+                        if (firstRead && saved == null && schedule.isEmpty()) {
+                            val stale = withContext(Dispatchers.IO) {
+                                LiveTvGuideCache.read(cacheFile, cacheKey, guideFiles, nowMs, EPG_DOWNLOAD_MS, allowStale = true)
+                            }
+                            if (stale != null) {
+                                schedule = stale.schedule
+                                publishGuide(schedule, stale.logos, nowMs, null)
+                            }
                         }
                         firstRead = false
                         if (saved != null) {
