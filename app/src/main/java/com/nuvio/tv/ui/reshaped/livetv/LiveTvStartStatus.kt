@@ -1,7 +1,5 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
-import android.widget.Toast
-import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvStartTrace
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
@@ -17,9 +15,6 @@ private val startStatusJobs = WeakHashMap<PlayerRuntimeController, Job>()
 
 /** How often the loading line is brought up to date. */
 private const val STATUS_TICK_MS = 250L
-
-/** A start this slow tells the viewer, once it plays, where the time went. */
-private const val SLOW_START_MS = 2_000L
 
 /**
  * While the channel just asked for loads, the loading line says what it is waiting for (see
@@ -44,17 +39,8 @@ internal fun PlayerRuntimeController.followLiveTvStart() {
     synchronized(startStatusJobs) { startStatusJobs[this] = job }
 }
 
-/**
- * The channel's first picture is on screen: the start is logged, and a slow one is summed up on
- * screen for a moment, so the viewer can say where the time went.
- */
+/** The channel's first picture is on screen: the loading line stops following it, and the start is logged. */
 internal fun PlayerRuntimeController.reportLiveTvStart() {
     synchronized(startStatusJobs) { startStatusJobs.remove(this)?.cancel() }
-    val summary = LiveTvStartTrace.latestFor(currentStreamUrl)?.picture() ?: return
-    if (summary.totalMs < SLOW_START_MS) return
-    Toast.makeText(
-        context,
-        context.getString(R.string.live_tv_start_summary, summary.totalMs / 1000.0, summary.steps),
-        Toast.LENGTH_LONG,
-    ).show()
+    LiveTvStartTrace.latestFor(currentStreamUrl)?.picture()
 }
