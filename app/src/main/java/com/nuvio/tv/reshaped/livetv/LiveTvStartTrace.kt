@@ -178,34 +178,13 @@ internal class LiveTvStartTrace private constructor(val url: String, private val
         if (preparedNanos == 0L) preparedNanos = System.nanoTime()
     }
 
-    /** The first picture is on screen: logs the start and returns its summary, once. */
+    /** The first picture is on screen: logs the start, once (adb logcat -s LiveTvStart). */
     @Synchronized
-    fun picture(): Summary? {
-        if (pictureNanos != 0L) return null
+    fun picture() {
+        if (pictureNanos != 0L) return
         pictureNanos = System.nanoTime()
-        val summary = Summary(ms(pictureNanos), shortSteps())
-        Log.i(TAG, "${if (forPlayer) "player" else "preview"} ${summary.totalMs} ms: ${describeSteps()}")
-        return summary
+        Log.i(TAG, "${if (forPlayer) "player" else "preview"} ${ms(pictureNanos)} ms: ${describeSteps()}")
     }
-
-    class Summary(val totalMs: Long, val steps: String)
-
-    private fun s(nanos: Long): String = String.format(Locale.US, "%.1f s", nanos / 1e9)
-
-    /** The start in a line that fits a short message: the connection's steps first. */
-    private fun shortSteps(): String = buildList {
-        if (joined) {
-            add("used the open connection")
-        } else {
-            add("address lookup ${s(dnsNanos.get())}")
-            add("connecting ${s(connectNanos.get())}")
-            add("server answer ${s(answerNanos.get())}")
-            if (redirects > 0) add("redirects $redirects")
-        }
-        if (failedConnections > 0) add("failed connections $failedConnections ($connectFailure)")
-        if (refusedCode != 0) add("refused HTTP $refusedCode")
-        if (connectedNanos != 0L && pictureNanos != 0L) add("then picture ${s(pictureNanos - connectedNanos)}")
-    }.joinToString(", ")
 
     private fun ms(at: Long): Long = if (at == 0L) -1L else (at - sinceNanos) / 1_000_000L
 
