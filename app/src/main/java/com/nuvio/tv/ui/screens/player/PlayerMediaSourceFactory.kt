@@ -185,11 +185,30 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         bluray: BlurayPlaylistResolver.RemoteLayout? = null,
         allowBluray: Boolean = true
     ): MediaSource {
-        val loadErrorHandlingPolicy = com.nuvio.tv.reshaped.livetv.LiveTvLoadErrors.policyFor(url, this.loadErrorHandlingPolicy)
         val sanitizedHeaders = sanitizeHeaders(headers)
-        val blurayAllowed = allowBluray &&
-            !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url) &&
-            !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isCatchup(url)
+        // Live TV (channels and their catch-up): the list preview's own plain path, with none of the
+        // file handling below (playback client, VOD cache, parallel ranges, Blu-ray, HLS check).
+        if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)) {
+            parallelStartupPrefetchUnlocked.set(true)
+            currentVodCacheUrl = url
+            currentVodCacheResolvedUrl = null
+            currentVodCacheActive = false
+            return wrapAudioDelay(
+                mediaSource = com.nuvio.tv.reshaped.livetv.LiveTvMediaSource.create(
+                    context = context,
+                    url = url,
+                    headers = sanitizedHeaders,
+                    mimeType = mimeTypeOverride ?: inferMimeType(url = url, filename = filename, responseHeaders = responseHeaders),
+                    tsFlags = DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or
+                        com.nuvio.tv.reshaped.livetv.LiveTvTsFlags.LIVE,
+                    subtitleConfigurations = subtitleConfigurations,
+                    mediaMetadata = mediaMetadata,
+                ),
+                audioDelayUsProvider = audioDelayUsProvider
+            )
+        }
+        val loadErrorHandlingPolicy = this.loadErrorHandlingPolicy
+        val blurayAllowed = allowBluray
         val playlist = if (!blurayAllowed) null else (bluray as? BlurayPlaylistResolver.RemoteLayout.Playlist)?.let { it.segmentUrls to it.durationsMs }
             ?: BlurayPlaylistResolver.resolve(url)?.let { local -> local.segments.map { Uri.fromFile(it).toString() } to local.durationsMs }
         if (playlist != null) {
@@ -227,11 +246,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                     useLongReadTimeout = isLoopbackUrl(url),
                 ),
             )
-            // Live channel playlists never end, so the SPS/PPS check never applies to them; skip the
-            // whole-playlist buffering and check thread on every live reload.
-            val isLiveChannel = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url) &&
-                !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isCatchup(url)
-            if (isHls && !isLiveChannel) HlsParameterSetInitDataSource.Factory(adaptiveFactory) else adaptiveFactory
+            if (isHls) HlsParameterSetInitDataSource.Factory(adaptiveFactory) else adaptiveFactory
         } else {
             PlayerPlaybackNetworking.createDataSourceFactory(context, sanitizedHeaders)
         }
@@ -262,15 +277,13 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 "safeNativeMb=${NuvioExoPlayerPerformanceHelper.getSafeNativeMemoryLimitMb(context)} " +
                 "parallel=${if (useParallelConnections) parallelConnectionCount else 0} chunkKb=$parallelChunkSizeKb"
         )
-        // Live TV never goes through ranged parallel requests (endless streams, one-connection accounts).
-        val isLiveTv = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)
         // Progressive MP4 engages the chunk-session source even with parallel connections off, pinned
         // to one connection and 8 MB chunks. Non-faststart / poorly interleaved MP4s (moov at the tail)
         // force scatter reads, and ExoPlayer recreates the data source on every seek; the session-owned
         // chunks are what survive that boundary, so seeking does not stall on re-opened connections.
-        val mp4SessionMode = !isLiveTv &&
+        val mp4SessionMode =
             usesMp4Session(useParallelConnections, false, isHls || isDash, resolvedMimeType, url)
-        val useChunkSessionSource = (useParallelConnections || mp4SessionMode) && !isHls && !isDash && !isLiveTv
+        val useChunkSessionSource = (useParallelConnections || mp4SessionMode) && !isHls && !isDash
         parallelStartupPrefetchUnlocked.set(!useChunkSessionSource)
         val networkProgressiveFactory: DataSource.Factory = if (useChunkSessionSource) {
             if (mp4SessionMode) {
@@ -324,8 +337,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             }
 
         // 2. VOD disk cache (opt-in).
-        val useVodCache = ENABLE_VOD_CACHE && vodCacheEnabled && !isHls && !isDash && shouldUseVodCache(url) &&
-            !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)
+        val useVodCache = ENABLE_VOD_CACHE && vodCacheEnabled && !isHls && !isDash && shouldUseVodCache(url)
         // A playback started inside the delay window would have its own data swept out from under it.
         pendingEvictionJob?.cancel()
         pendingEvictionJob = null

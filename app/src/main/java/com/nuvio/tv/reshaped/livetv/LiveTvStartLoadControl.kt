@@ -63,9 +63,5 @@ class LiveTvStartLoadControl(private val delegate: LoadControl) : LoadControl {
 
         /** Video buffered before a channel resumes after a stall, so it does not stall again at once. */
         const val RESTART_MS = 2_000L
-
-        /** [loadControl] as the player for [url] should use it: wrapped for Live TV, else as it is. */
-        fun forUrl(url: String, loadControl: LoadControl): LoadControl =
-            if (LiveTvPlaybackRegistry.isLiveTv(url)) LiveTvStartLoadControl(loadControl) else loadControl
     }
 }

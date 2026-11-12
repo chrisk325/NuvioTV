@@ -31,10 +31,6 @@ object LiveTvLoadErrors {
         }
     }
 
-    /** Live TV's policy for a Live TV [url], else [fallback]. */
-    fun policyFor(url: String, fallback: LoadErrorHandlingPolicy): LoadErrorHandlingPolicy =
-        if (LiveTvPlaybackRegistry.isLiveTv(url)) policy else fallback
-
     private fun Throwable.httpResponseCode(): Int? {
         var current: Throwable? = this
         while (current != null) {

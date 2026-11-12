@@ -257,6 +257,16 @@ internal fun PlayerRuntimeController.initializePlayer(
 
             val playerSettings = playerSettingsDataStore.playerSettings.first()
             currentPlayerSettingsForReport = playerSettings
+            // Live TV (a channel or its catch-up) skips what files go through before they load:
+            // the engine setting (channels play in ExoPlayer, as the list's preview does, unless
+            // the player was switched by hand), format and disc probes, Dolby Vision handling,
+            // libass, subtitle sync, Nuvio's buffer settings and speed learning. See LiveTvMediaSource.
+            val liveTvPlayback = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)
+            val settingsInternalPlayerEngine = if (liveTvPlayback) {
+                InternalPlayerEngine.EXOPLAYER
+            } else {
+                playerSettings.internalPlayerEngine
+            }
             rememberAudioDelayPerDeviceEnabled = playerSettings.rememberAudioDelayPerDevice
             // Always watch output-device changes so Bluetooth connect/disconnect can switch
             // PCM/passthrough policy in place (Media3 1.8.0 BT semantics; do not rebuild).
@@ -271,12 +281,12 @@ internal fun PlayerRuntimeController.initializePlayer(
                 )
             }
             // Profile 5 -> HDR10: turns tunneling off for the stream itself once Profile 5 shows up.
-            val dv5HdrSession = startDolbyVisionP5Session(url, playerSettings)
+            val dv5HdrSession = if (liveTvPlayback) null else startDolbyVisionP5Session(url, playerSettings)
             val keepZoomInsideScreen = deviceLocalPlayerPreferences.keepZoomInsideScreen.first()
             val buildWithKeystoneZoom = shouldBuildWithKeystoneZoom(
                 aspectMode = deviceLocalPlayerPreferences.aspectMode.first(),
                 keepZoomInsideScreen = keepZoomInsideScreen,
-                internalPlayerEngine = overrideInternalPlayerEngine ?: playerSettings.internalPlayerEngine
+                internalPlayerEngine = overrideInternalPlayerEngine ?: settingsInternalPlayerEngine
             )
             val tunnelingActive = playerSettings.effectiveTunnelingEnabled &&
                 !tunnelingBlockedByUsbAudio &&
@@ -297,12 +307,12 @@ internal fun PlayerRuntimeController.initializePlayer(
             mpvHi10pGnextSoftwareFallbackEnabledSetting =
                 playerSettings.mpvHi10pGnextSoftwareFallbackEnabled
             mpvHardwareDecodeModeSetting = playerSettings.mpvHardwareDecodeMode
-            var effectiveInternalPlayerEngine = overrideInternalPlayerEngine ?: playerSettings.internalPlayerEngine
+            var effectiveInternalPlayerEngine = overrideInternalPlayerEngine ?: settingsInternalPlayerEngine
             if (effectiveInternalPlayerEngine == InternalPlayerEngine.AUTO) {
                 effectiveInternalPlayerEngine = resolveAutoInternalPlayerEngine()
             }
             runtimeInternalPlayerEngineOverride = overrideInternalPlayerEngine
-            if (overrideInternalPlayerEngine == null && playerSettings.internalPlayerEngine == InternalPlayerEngine.AUTO) {
+            if (overrideInternalPlayerEngine == null && settingsInternalPlayerEngine == InternalPlayerEngine.AUTO) {
                 resolvedAutoPlayerEngine = effectiveInternalPlayerEngine
             } else if (overrideInternalPlayerEngine != null) {
                 resolvedAutoPlayerEngine = null
@@ -344,7 +354,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                 url = url,
                 headers = headers
             )
-            resolveClipPlaylist(url = url, headers = headers, engine = effectiveInternalPlayerEngine)
+            if (!liveTvPlayback) resolveClipPlaylist(url = url, headers = headers, engine = effectiveInternalPlayerEngine)
 
             val afrJob = async {
                 runAfrPreflightIfEnabled(
@@ -397,7 +407,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             // The persisted enum stays as-is; only the runtime behavior is derived per playback.
             var effectiveDv7Mode: Dv7HandlingMode
             val dv7AutoResult: DolbyVisionBaseLayerPolicy.Result?
-            when (playerSettings.dv7HandlingMode) {
+            when (if (liveTvPlayback) Dv7HandlingMode.OFF else playerSettings.dv7HandlingMode) {
                 Dv7HandlingMode.AUTO -> {
                     val result = DolbyVisionBaseLayerPolicy.resolve(
                         context = context,
@@ -425,7 +435,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                 }
                 else -> {
                     dv7AutoResult = null
-                    effectiveDv7Mode = playerSettings.dv7HandlingMode
+                    effectiveDv7Mode = if (liveTvPlayback) Dv7HandlingMode.OFF else playerSettings.dv7HandlingMode
                 }
             }
 
@@ -434,7 +444,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             // modes, so they're only meaningful while conversion is active). Picks
             // which conversion mode runs; -1 (None) uses the auto-selected mode.
             val libdoviModeOverride = playerSettings.dv7LibdoviModeOverride
-            val libdoviModeOverrideActive = libdoviModeOverride in 0..4 &&
+            val libdoviModeOverrideActive = !liveTvPlayback && libdoviModeOverride in 0..4 &&
                     playerSettings.dv7HandlingMode == Dv7HandlingMode.DV81_LIBDOVI &&
                     effectiveDv7Mode == Dv7HandlingMode.DV81_LIBDOVI
             if (libdoviModeOverrideActive) {
@@ -549,7 +559,11 @@ internal fun PlayerRuntimeController.initializePlayer(
                 streamMime.lowercase().contains("mpegurl") ||
                 streamMime.lowercase().contains("m3u8")
             )
-            val rawBandwidthMeter = if (NuvioExoPlayerPerformanceHelper.enabled) {
+            val rawBandwidthMeter = if (liveTvPlayback) {
+                // Media3's own estimate, not the 25 Mbps start guess: an HLS channel opens on a
+                // variant the connection can fetch at once and steps up from there.
+                DefaultBandwidthMeter.Builder(context).build()
+            } else if (NuvioExoPlayerPerformanceHelper.enabled) {
                 NuvioExoPlayerPerformanceHelper.buildBandwidthMeter(context)
             } else {
                 DefaultBandwidthMeter.Builder(context)
@@ -567,7 +581,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             val isDashStream = resolvedStreamMime == MimeTypes.APPLICATION_MPD
             // Live TV streams never end and IPTV accounts usually allow one connection, so ranged
             // parallel requests can't play them: they get the single connection the preview uses.
-            val isLiveTvStream = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)
+            val isLiveTvStream = liveTvPlayback
             val parallelActive = playerSettings.parallelNetworkEnabled && playerSettings.useParallelConnections && !isLiveTvStream
             val useChunkSessionSource = parallelActive && !isHlsStream && !isDashStream
 
@@ -581,7 +595,12 @@ internal fun PlayerRuntimeController.initializePlayer(
             }
             currentParallelChunkOverheadMb = parallelOverheadMb
 
-            val loadControl = if (playerSettings.nuvioPerformanceModeEnabled) {
+            val loadControl = if (isLiveTvStream) {
+                effectiveBackBufferDurationMs = com.nuvio.tv.reshaped.livetv.LiveTvMediaSource.BACK_BUFFER_MS
+                currentBitrateAwareLoadControl = null
+                Log.i(PlayerRuntimeController.TAG, "BUFFER_GATE: engine=live-tv; Live TV load control host=${url.safeHost()}")
+                com.nuvio.tv.reshaped.livetv.LiveTvMediaSource.loadControl(context)
+            } else if (playerSettings.nuvioPerformanceModeEnabled) {
                 effectiveBackBufferDurationMs = NuvioExoPlayerPerformanceHelper.backBufferMs
                 currentBitrateAwareLoadControl = null
                 Log.i(
@@ -658,8 +677,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                     .build()
             }
             _loadControl = loadControl
-            // Live TV channels start after a second of video instead of the file buffer settings' 3 to 5 s.
-            val playerLoadControl = com.nuvio.tv.reshaped.livetv.LiveTvStartLoadControl.forUrl(url, loadControl)
+            // Live TV's load control already starts after a second of video (LiveTvStartLoadControl).
+            val playerLoadControl = loadControl
 
             // The cache wraps whichever upstream data source it is given, so it does not depend on
             // either buffer engine. The low-RAM plus confirmed DV7 case is handled dynamically at
@@ -722,6 +741,8 @@ internal fun PlayerRuntimeController.initializePlayer(
             // ── Libass Setup (From 0.5.7-beta/Left) ──
             requestedUseLibassByUser = playerSettings.useLibass
             val useLibass = when {
+                // Channels carry no ASS subtitles: the libass pipeline only costs start-up time.
+                liveTvPlayback -> false
                 !requestedUseLibassByUser -> false
                 libassPipelineOverrideForCurrentStream != null -> libassPipelineOverrideForCurrentStream == true
                 else -> true
@@ -934,7 +955,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             // OR the error handler's per-stream override (preserved for retry-after-failure).
             val mapDv7ToHevcEnabled = effectiveDv7Mode == Dv7HandlingMode.HDR10_BASE_LAYER ||
                     dv7ToHevcForcedStreamUrls.contains(url)
-            val isHdr10BaseLayerModeActive = when (playerSettings.dv7HandlingMode) {
+            val isHdr10BaseLayerModeActive = !liveTvPlayback && when (playerSettings.dv7HandlingMode) {
                 Dv7HandlingMode.AUTO -> dv7AutoResult?.displayDv != true
                 else -> effectiveDv7Mode == Dv7HandlingMode.HDR10_BASE_LAYER ||
                         effectiveDv7Mode == Dv7HandlingMode.STRIP_DV
@@ -1036,12 +1057,12 @@ internal fun PlayerRuntimeController.initializePlayer(
 
             // The app-level factory performs DV7 conversion for the in-band-RPU containers
             // (MP4/fMP4/TS); MKV goes through the vendored extractor. Pass-through for non-DV.
-            val stripDvRpuEnabled = playerSettings.dv7HandlingMode == Dv7HandlingMode.STRIP_DV ||
-                    effectiveDv7Mode == Dv7HandlingMode.HDR10_BASE_LAYER
+            val stripDvRpuEnabled = !liveTvPlayback && (playerSettings.dv7HandlingMode == Dv7HandlingMode.STRIP_DV ||
+                    effectiveDv7Mode == Dv7HandlingMode.HDR10_BASE_LAYER)
             if (stripDvRpuEnabled) {
                 Log.i(PlayerRuntimeController.TAG, "DV_RPU_STRIP: enabled — will remove DV RPU NALs")
             }
-            val stripHdr10PlusSei = playerSettings.stripHdr10PlusSei
+            val stripHdr10PlusSei = !liveTvPlayback && playerSettings.stripHdr10PlusSei
             if (stripHdr10PlusSei) {
                 Log.i(PlayerRuntimeController.TAG, "HDR10PLUS_STRIP: enabled — will remove HDR10+ SEI NALs")
             }
@@ -1050,7 +1071,11 @@ internal fun PlayerRuntimeController.initializePlayer(
             // still swaps stock Matroska for the vendored extractor (DTS-HD MA / DTS:X
             // first-sample sniff). MP4/TS extractors are returned untouched when
             // config is inactive.
-            val effectiveExtractorsFactory: ExtractorsFactory =
+            val effectiveExtractorsFactory: ExtractorsFactory = if (liveTvPlayback) {
+                // The channel's media source has its own plain extractors (LiveTvMediaSource); no
+                // Dolby Vision rewriting and no subtitle sync index download on the live link.
+                extractorsFactory
+            } else {
                     DolbyVisionExtractorsFactory(
                         delegate = extractorsFactory,
                         config = DolbyVisionConversionConfig(
@@ -1069,6 +1094,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                         stripHdr10PlusSei = stripHdr10PlusSei,
                         p5Session = dv5HdrSession
                     ).let { autoSyncExtractorsFactory(it, url, headers) } // AutoSync hook
+            }
 
             setLoadingStatus(
                 phase = "building_player",
@@ -1098,8 +1124,10 @@ internal fun PlayerRuntimeController.initializePlayer(
                     .build()
             }
 
+            val hadPlayerToDispose = _exoPlayer != null
             disposeExoPlayerBeforeRebuild()
-            delay(PLAYER_REBUILD_SETTLE_DELAY_MS)
+            // The settle lets a released decoder free up; a first channel start has none to wait for.
+            if (hadPlayerToDispose || !liveTvPlayback) delay(PLAYER_REBUILD_SETTLE_DELAY_MS)
             if (!afrPreflightGate.isCurrent(afrPreflightToken)) return@launch
             // Left the foreground while preparing: build on return instead of claiming a decoder
             // the foreground app may need. The resume rebuild uses currentStreamUrl.
@@ -1184,7 +1212,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                     hasTriedAudioPcmFallback = true
                 }
 
-                if (playerSettings.skipSilence) skipSilenceEnabled = true
+                // Skipping silence on a live channel would only run playback into the live edge.
+                if (playerSettings.skipSilence && !liveTvPlayback) skipSilenceEnabled = true
                 setHandleAudioBecomingNoisy(true)
 
                 runCatching { installExoMediaSession(this) }

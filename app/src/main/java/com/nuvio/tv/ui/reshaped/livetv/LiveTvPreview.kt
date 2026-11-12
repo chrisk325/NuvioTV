@@ -41,28 +41,22 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvDevice
-import com.nuvio.tv.reshaped.livetv.LiveTvHttp
-import com.nuvio.tv.reshaped.livetv.LiveTvLoadErrors
+import com.nuvio.tv.reshaped.livetv.LiveTvMediaSource
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
-import com.nuvio.tv.reshaped.livetv.LiveTvTsFlags
 import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
@@ -160,20 +154,22 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             val channel = current ?: return
             if (!triedHls) {
                 triedHls = true
-                start(channel, hls = true)
+                start(channel, MimeTypes.APPLICATION_M3U8)
             }
         }
     }
 
     fun play(channel: LiveTvChannel) {
-        // The provider's own word on the format first; then the link.
-        val hls = liveTvStreamMimeType(channel.streamType) == MimeTypes.APPLICATION_M3U8 ||
-            channel.streamUrl.contains(".m3u8", ignoreCase = true)
-        triedHls = hls
-        start(channel, hls)
+        // The provider's own word on the format first (as the full screen player opens it); then the link.
+        val provided = liveTvStreamMimeType(channel.streamType)
+        val mimeType = provided
+            ?: MimeTypes.APPLICATION_M3U8.takeIf { channel.streamUrl.contains(".m3u8", ignoreCase = true) }
+        // Only a link of unknown format is tried again as HLS.
+        triedHls = mimeType != null
+        start(channel, mimeType)
     }
 
-    private fun start(channel: LiveTvChannel, hls: Boolean) {
+    private fun start(channel: LiveTvChannel, mimeType: String?) {
         current = channel
         showingVideo = false
         mute()
@@ -182,24 +178,20 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             surface?.let(created::setVideoTextureView)
         }
         val request = PlayerMediaSourceFactory.normalizePlaybackRequest(channel.streamUrl, channel.headers)
-        val dataSource = OkHttpDataSource.Factory(LiveTvHttp.client).apply {
-            setDefaultRequestProperties(request.headers)
-            if (request.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) setUserAgent(PREVIEW_USER_AGENT)
-        }
-        val item = MediaItem.Builder()
-            .setUri(request.url)
-            .apply { if (hls) setMimeType(MimeTypes.APPLICATION_M3U8) }
-            .build()
         runCatching {
-            // As the full screen player opens a channel: the picture starts on the first I-frame
-            // (many restreams send IDR frames seldom or never, and the preview sat on the logo
-            // until one came), and a provider refusing the channel for a moment, as one-connection
-            // accounts do while the last preview's connection closes, is asked again.
-            val sourceFactory = DefaultMediaSourceFactory(dataSource, previewExtractors)
-                .setLoadErrorHandlingPolicy(LiveTvLoadErrors.policy)
-            exo.setMediaSource(sourceFactory.createMediaSource(item))
-            exo.prepare()
+            // Exactly as the full screen player opens a channel (LiveTvMediaSource): the picture
+            // starts on the first I-frame (many restreams send IDR frames seldom or never), and a
+            // provider refusing the channel for a moment, as one-connection accounts do while the
+            // last preview's connection closes, is asked again.
+            val source = LiveTvMediaSource.create(
+                context = context,
+                url = request.url,
+                headers = request.headers,
+                mimeType = mimeType,
+            )
+            exo.setMediaSource(source)
             exo.playWhenReady = true
+            exo.prepare()
         }
     }
 
@@ -271,10 +263,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             }
     }
 
-    private val previewExtractors = DefaultExtractorsFactory().setTsExtractorFlags(LiveTvTsFlags.LIVE)
-
     private companion object {
-        const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
         const val FADE_TICK_MS = 40L
         /** Full volume in about half a second. */
         const val FADE_STEP = 0.08f
