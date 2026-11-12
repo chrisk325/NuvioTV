@@ -64,7 +64,7 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 
 /** How long focus rests on a channel before its preview starts, so scrolling opens no streams. */
-private const val PREVIEW_DELAY_MS = 400L
+internal const val PREVIEW_DELAY_MS = 400L
 
 /**
  * One small player for the focused channel's preview. Built for weak TVs: created on the
@@ -116,6 +116,9 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
         handler.removeCallbacks(fadeStep)
         player?.volume = 0f
     }
+
+    /** The link of the channel the preview has open, if any. */
+    val currentUrl: String? get() = current?.streamUrl
 
     /** True once the channel shows a picture. */
     var showingVideo by mutableStateOf(false)

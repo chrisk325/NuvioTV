@@ -1,7 +1,10 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
+import com.nuvio.tv.reshaped.livetv.LiveTvMediaSource
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
+import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
+import com.nuvio.tv.ui.screens.player.isUsingMpvEngine
 
 /**
  * A channel change from one Live TV channel to another keeps the ExoPlayer it already has, so a
@@ -23,4 +26,18 @@ internal fun PlayerRuntimeController.keepPlayerForLiveTvZap(newUrl: String): Boo
         player.clearMediaItems()
     }
     return true
+}
+
+/**
+ * Leaving the full screen player with a channel playing live: its connection is handed back to
+ * the list's preview, which shows the channel last watched, instead of being closed and opened
+ * again. Only when there is a preview to take it (previews on, and a link the list also plays:
+ * a Stalker link is made for one play).
+ */
+internal fun PlayerRuntimeController.handLiveTvChannelBack() {
+    if (_exoPlayer == null || isUsingMpvEngine()) return
+    val url = currentStreamUrl
+    if (!LiveTvPlaybackRegistry.isLiveTv(url) || LiveTvPlaybackRegistry.isCatchup(url)) return
+    if (LiveTvPlaybackRegistry.listUrlFor(url) != url || !LiveTvPreferences.previews.value) return
+    LiveTvMediaSource.handOver()
 }
