@@ -53,13 +53,16 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
+import com.nuvio.tv.reshaped.livetv.LiveTvLoadErrors
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvTsFlags
 import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
@@ -188,7 +191,13 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             .apply { if (hls) setMimeType(MimeTypes.APPLICATION_M3U8) }
             .build()
         runCatching {
-            exo.setMediaSource(DefaultMediaSourceFactory(dataSource).createMediaSource(item))
+            // As the full screen player opens a channel: the picture starts on the first I-frame
+            // (many restreams send IDR frames seldom or never, and the preview sat on the logo
+            // until one came), and a provider refusing the channel for a moment, as one-connection
+            // accounts do while the last preview's connection closes, is asked again.
+            val sourceFactory = DefaultMediaSourceFactory(dataSource, previewExtractors)
+                .setLoadErrorHandlingPolicy(LiveTvLoadErrors.policy)
+            exo.setMediaSource(sourceFactory.createMediaSource(item))
             exo.prepare()
             exo.playWhenReady = true
         }
@@ -261,6 +270,8 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
                 addListener(listener)
             }
     }
+
+    private val previewExtractors = DefaultExtractorsFactory().setTsExtractorFlags(LiveTvTsFlags.LIVE)
 
     private companion object {
         const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"

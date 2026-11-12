@@ -12,10 +12,13 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
  */
 @OptIn(UnstableApi::class)
 object LiveTvTsFlags {
+    /** Flags to add for a Live TV channel (the list's preview always plays one). */
+    const val LIVE: Int = DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+
     /** Flags to add for [url]: none unless the player is opening a Live TV channel. */
     fun extraFor(url: String): Int =
         if (LiveTvPlaybackRegistry.isLiveTv(url)) {
-            DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+            LIVE
         } else {
             0
         }

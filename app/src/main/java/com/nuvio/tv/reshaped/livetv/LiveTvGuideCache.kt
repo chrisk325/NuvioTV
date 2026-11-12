@@ -38,19 +38,30 @@ internal object LiveTvGuideCache {
         return key
     }
 
-    /** The saved programmes, or null when they are missing, stale or for other guides or channels. */
-    fun read(file: File, key: Long, guideFiles: List<File>, nowMs: Long, maxGuideAgeMs: Long): Entry? = runCatching {
+    /**
+     * The saved programmes, or null when they are missing, stale or for other guides or channels.
+     * With [allowStale], stale ones are returned too (still only for the same guides and channels):
+     * they show while the guide is downloaded and read again, instead of an empty guide.
+     */
+    fun read(
+        file: File,
+        key: Long,
+        guideFiles: List<File>,
+        nowMs: Long,
+        maxGuideAgeMs: Long,
+        allowStale: Boolean = false,
+    ): Entry? = runCatching {
         if (!file.isFile) return null
         DataInputStream(GZIPInputStream(file.inputStream().buffered(), 16 * 1024)).use { input ->
             if (input.readInt() != VERSION || input.readLong() != key) return null
             val nextReadAtMs = input.readLong()
-            if (nowMs >= nextReadAtMs) return null
+            if (nowMs >= nextReadAtMs && !allowStale) return null
             val files = input.readInt()
             if (files != guideFiles.size) return null
             guideFiles.forEach { guide ->
                 val modified = input.readLong()
                 // A guide downloaded since, or due to be downloaded again, means a full read.
-                if (guide.lastModified() != modified || nowMs - modified !in 0 until maxGuideAgeMs) return null
+                if (!allowStale && (guide.lastModified() != modified || nowMs - modified !in 0 until maxGuideAgeMs)) return null
             }
             val logos = HashMap<String, String>()
             repeat(input.readInt()) { logos[input.readUTF()] = input.readUTF() }
