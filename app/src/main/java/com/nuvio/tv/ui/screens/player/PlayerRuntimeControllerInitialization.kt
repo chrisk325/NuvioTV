@@ -262,6 +262,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             // the player was switched by hand), format and disc probes, Dolby Vision handling,
             // libass, subtitle sync, Nuvio's buffer settings and speed learning. See LiveTvMediaSource.
             val liveTvPlayback = com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)
+            if (liveTvPlayback) com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.step("player")
             val settingsInternalPlayerEngine = if (liveTvPlayback) {
                 InternalPlayerEngine.EXOPLAYER
             } else {
@@ -1274,6 +1275,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                 // Exception: tunneled playback bypasses the normal video rendering pipeline
                 // so onRenderedFirstFrame() never fires — TunneledFirstReady starts on READY.
                 playWhenReady = false
+                if (liveTvPlayback) com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.step("prepare")
                 prepare()
 
                 addListener(object : Player.Listener {
@@ -1563,6 +1565,17 @@ internal fun PlayerRuntimeController.initializePlayer(
 
                     override fun onTracksChanged(tracks: Tracks) {
                         updateAvailableTracks(tracks)
+                        // A channel's stream is there and recognised: what is left is its first
+                        // picture (the decoder), which the loading line now says.
+                        if (liveTvPlayback && !hasRenderedFirstFrame && tracks.containsType(C.TRACK_TYPE_VIDEO)) {
+                            com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.step("tracks")
+                            if (_uiState.value.showLoadingOverlay) {
+                                setLoadingStatus(
+                                    phase = "starting_picture",
+                                    message = context.getString(R.string.live_tv_loading_picture)
+                                )
+                            }
+                        }
                     }
 
                     override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -1576,6 +1589,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                     override fun onRenderedFirstFrame() {
                         val isFirstFrame = !hasRenderedFirstFrame  // capture BEFORE flipping
                         hasRenderedFirstFrame = true
+                        if (liveTvPlayback) com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.picture()
                         mediaSourceFactory.unlockStartupPrefetch()
                         if (isFirstFrame && _uiState.value.postPlayDismissedForCurrentEpisode) {
                             _uiState.update { it.copy(postPlayDismissedForCurrentEpisode = false) }

@@ -1,13 +1,15 @@
 package com.nuvio.tv.reshaped.livetv
 
 import android.content.Context
+import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -22,20 +24,61 @@ import androidx.media3.extractor.DefaultExtractorsFactory
  * Blu-ray and AVI handling, the HLS parameter-set check, Dolby Vision and subtitle sync extractor
  * wrappers) touch a channel: they wait on or open extra connections that a live stream, often on a
  * one-connection account, can't spare.
+ *
+ * A channel read in one piece (MPEG-TS) also keeps its connection when the full screen player
+ * takes over from the preview, or the other way round: see [LiveTvStreamHub].
  */
 @OptIn(UnstableApi::class)
 object LiveTvMediaSource {
     /** Sent when the list names none: what IPTV servers expect, and what the preview always sent. */
     const val USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
 
-    fun dataSourceFactory(context: Context, headers: Map<String, String>): DataSource.Factory {
-        val http = OkHttpDataSource.Factory(LiveTvHttp.client).apply {
-            setDefaultRequestProperties(headers)
-            if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) setUserAgent(USER_AGENT)
+    /**
+     * [sharedUrl] is the channel's link when its connection is to be shared between the preview
+     * and the full screen player (see [sharesConnection]); the factory then serves that link only.
+     */
+    fun dataSourceFactory(context: Context, headers: Map<String, String>, sharedUrl: String? = null): DataSource.Factory {
+        val http: DataSource.Factory = if (sharedUrl != null) {
+            LiveTvStreamShare.ringBytes =
+                if (LiveTvDevice.isLowMemory(context)) LiveTvStreamShare.RING_BYTES_LOW_MEMORY else LiveTvStreamShare.RING_BYTES
+            DataSource.Factory { LiveTvSharedDataSource(sharedUrl, headers) }
+        } else {
+            LiveTvStreamShare.httpFactory(LiveTvHttp.client, headers)
         }
         // Plain http(s) goes through OkHttp; udp:// and file links, which some lists carry, still open.
         return DefaultDataSource.Factory(context, http)
     }
+
+    /**
+     * Whether the channel at [url] keeps one connection from the preview into the full screen
+     * player: a live stream read in one piece over http (MPEG-TS, as most IPTV channels are).
+     * HLS and DASH fetch many small files, and a past programme is a file that is sought in.
+     */
+    fun sharesConnection(url: String, mimeType: String?): Boolean {
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) return false
+        if (LiveTvPlaybackRegistry.isCatchup(url)) return false
+        return Util.inferContentTypeForUriAndMimeType(Uri.parse(url), mimeType) == C.CONTENT_TYPE_OTHER
+    }
+
+    /**
+     * Opens the channel at [url] now, as OK is pressed, so its connection is made while the full
+     * screen player is still being built; that player then reads the same connection. Does
+     * nothing when the list's preview already has the channel open, or for formats not shared.
+     * [delayMs] waits first: set when another channel's connection was only just closed, which a
+     * one-connection account needs a moment to notice.
+     */
+    fun prewarm(context: Context, url: String, headers: Map<String, String>, mimeType: String?, delayMs: Long = 0L) {
+        if (!sharesConnection(url, mimeType)) return
+        LiveTvStreamShare.ringBytes =
+            if (LiveTvDevice.isLowMemory(context)) LiveTvStreamShare.RING_BYTES_LOW_MEMORY else LiveTvStreamShare.RING_BYTES
+        LiveTvStreamShare.prewarm(url, headers, delayMs)
+    }
+
+    /**
+     * The player showing a channel is about to let go of it for the other one (the preview for
+     * the full screen player, or back): the channel's connection waits for that player.
+     */
+    fun handOver() = LiveTvStreamShare.hub.hold(LiveTvStreamShare.HANDOFF_MS)
 
     /**
      * The channel at [url] (already normalized: no user:password@ part), opened as [mimeType]
@@ -56,7 +99,8 @@ object LiveTvMediaSource {
         if (mediaMetadata != null) builder.setMediaMetadata(mediaMetadata)
         val item = builder.build()
         val extractors = DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)
-        return DefaultMediaSourceFactory(dataSourceFactory(context, headers), extractors)
+        val sharedUrl = url.takeIf { sharesConnection(it, mimeType) }
+        return DefaultMediaSourceFactory(dataSourceFactory(context, headers, sharedUrl), extractors)
             .setLoadErrorHandlingPolicy(LiveTvLoadErrors.policy)
             .createMediaSource(item)
     }

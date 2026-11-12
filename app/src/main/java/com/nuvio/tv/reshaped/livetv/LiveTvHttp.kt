@@ -14,15 +14,20 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import com.nuvio.tv.core.network.IPv4FirstDns
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** Live TV's own small HTTP client: playlists, provider APIs and guides, never playback. */
+/** Live TV's own small HTTP client: playlists, provider APIs, guides and the channels themselves. */
 internal object LiveTvHttp {
     /** Also carries the list's channel previews, so they stay out of Nuvio's playback networking and speed learning. */
     internal val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            // As Nuvio's own clients, and the phone app's player: on a network whose IPv6 route is
+            // slow or broken, a server with both kinds of address is otherwise tried over IPv6
+            // first, and every channel waits for that attempt to give up.
+            .dns(IPv4FirstDns())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)

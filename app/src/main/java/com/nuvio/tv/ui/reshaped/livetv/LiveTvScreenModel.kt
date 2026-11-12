@@ -12,6 +12,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvError
+import com.nuvio.tv.reshaped.livetv.LiveTvMediaSource
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
@@ -19,6 +20,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvUiState
 import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.ui.navigation.Screen
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
+import com.nuvio.tv.ui.screens.player.streamFilenameFromUrl
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -157,12 +159,22 @@ class LiveTvFilterInput(
  * The player route for a Live TV channel: resolves its playable link, and plays it as Stremio
  * type "channel" with no content id, so Nuvio's player treats it as live and saves no progress.
  */
-internal suspend fun liveTvPlayerRoute(channel: LiveTvChannel, profileId: Int): String {
+internal suspend fun liveTvPlayerRoute(context: Context, channel: LiveTvChannel, profileId: Int, connectDelayMs: Long = 0L): String {
     val playback = LiveTvRepository.prepareForPlayback(channel)
     // The player keys on the URL it plays, which drops a user:password@ part into a header.
-    val playerUrl = PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url
+    val request = PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers)
+    val playerUrl = request.url
     // The format the provider gave, so the player opens the link as it is from the start.
     LiveTvPlaybackRegistry.register(playerUrl, listUrl = channel.streamUrl, mimeType = liveTvStreamMimeType(channel.streamType))
+    // The connection is made from now, while the player screen is built: the player reads it once
+    // it is ready (the same request, with the format the player will work out for the link).
+    LiveTvMediaSource.prewarm(
+        context = context.applicationContext,
+        url = playerUrl,
+        headers = request.headers,
+        mimeType = PlayerMediaSourceFactory.inferMimeType(url = playerUrl, filename = streamFilenameFromUrl(playback.streamUrl)),
+        delayMs = connectDelayMs,
+    )
     return Screen.Player.createRoute(
         streamUrl = playback.streamUrl,
         title = channel.name,

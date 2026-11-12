@@ -98,9 +98,11 @@ import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvCustomList
+import com.nuvio.tv.reshaped.livetv.LiveTvMediaSource
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvStartTrace
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewsEnabled
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -321,8 +323,17 @@ fun LiveTvScreen(
     val launchPlay: (LiveTvChannel, LiveTvProgramme?) -> Unit = { channel, programme ->
         if (!launching) {
             launching = true
-            // The player needs the decoder and, with one-connection providers, the connection.
-            preview.release()
+            LiveTvStartTrace.begin()
+            // The player needs the decoder: stopping frees it without holding this press up, as
+            // releasing the whole preview player did (that waits for it; the screen's stop does it).
+            // The connection goes with the channel: when the preview shows the one being opened
+            // live, the full screen player takes its connection over instead of making a new one.
+            val previewing = preview.currentUrl
+            val handedOver = programme == null && previewing == channel.streamUrl
+            if (handedOver) LiveTvMediaSource.handOver()
+            preview.stop()
+            // Another channel's preview was just closed: a one-connection account needs a moment.
+            val connectDelayMs = if (previewing != null && !handedOver) PREVIEW_DELAY_MS else 0L
             scope.launch {
                 try {
                     val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
@@ -332,7 +343,7 @@ fun LiveTvScreen(
                     val route = if (programme != null) {
                         liveTvCatchupRoute(channel, programme, viewModel.profileId)
                     } else {
-                        liveTvPlayerRoute(channel, viewModel.profileId)
+                        liveTvPlayerRoute(context, channel, viewModel.profileId, connectDelayMs)
                     }
                     if (route == null) {
                         launching = false

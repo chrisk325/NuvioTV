@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer
+import com.nuvio.tv.ui.reshaped.livetv.handLiveTvChannelBack
 import com.nuvio.tv.core.player.BitrateAwareLoadControl
 import com.nuvio.tv.core.player.LastPlaybackDiagnostics
 import com.nuvio.tv.core.debrid.DirectDebridResolver
@@ -290,6 +291,7 @@ class PlayerRuntimeController(
         mediaSourceFactory.logVodCacheStats()
         releaseProcessWideReferences()
         mediaSourceFactory.evictCachedSession()
+        handLiveTvChannelBack()
         releasePlayer()
         playerSession.close()
     }
@@ -876,6 +878,7 @@ class PlayerRuntimeController(
     fun onCleared() {
         playerSession.close()
         stopServerPlayback()
+        handLiveTvChannelBack()
         releasePlayer()
         stopTorrentStream()
         torrentService.shutdown()
