@@ -323,7 +323,7 @@ fun LiveTvScreen(
     val launchPlay: (LiveTvChannel, LiveTvProgramme?) -> Unit = { channel, programme ->
         if (!launching) {
             launching = true
-            LiveTvStartTrace.begin()
+            LiveTvStartTrace.pressed()
             // The player needs the decoder: stopping frees it without holding this press up, as
             // releasing the whole preview player did (that waits for it; the screen's stop does it).
             // The connection goes with the channel: when the preview shows the one being opened

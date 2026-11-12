@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
+import com.nuvio.tv.ui.reshaped.livetv.followLiveTvStart
 import com.nuvio.tv.ui.reshaped.livetv.keepPlayerForLiveTvZap
 import android.content.Intent
 import android.net.Uri
@@ -1070,8 +1071,8 @@ internal fun PlayerRuntimeController.switchToSourceStream(
                     )
                 )
                 player.playWhenReady = true
-                com.nuvio.tv.reshaped.livetv.LiveTvStartTrace.step("prepare")
                 player.prepare()
+                followLiveTvStart()
                 recordDistinctPluginPlay(
                     bingeGroup = stream.behaviorHints?.bingeGroup,
                     playbackIdentity = stream.getEffectiveInfoHash() ?: playbackUrl
