@@ -203,6 +203,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                         com.nuvio.tv.reshaped.livetv.LiveTvTsFlags.LIVE,
                     subtitleConfigurations = subtitleConfigurations,
                     mediaMetadata = mediaMetadata,
+                    forPlayer = true,
                 ),
                 audioDelayUsProvider = audioDelayUsProvider
             )

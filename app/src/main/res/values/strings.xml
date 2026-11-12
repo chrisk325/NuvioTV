@@ -1938,7 +1938,16 @@
     <string name="player_loading_building">Building player…</string>
     <string name="player_loading_starting">Starting stream…</string>
     <string name="player_loading_buffering">Buffering…</string>
-    <string name="live_tv_loading_picture">Starting picture…</string>
+    <string name="live_tv_start_connecting">Connecting to the server… %1$s</string>
+    <string name="live_tv_start_refused">The server refused the channel (HTTP %1$d), asking again… %2$s</string>
+    <string name="live_tv_start_failed">Could not reach the server (%1$s), trying again… %2$s</string>
+    <string name="live_tv_start_waiting_data">Connected, waiting for the server to send the channel… %1$s</string>
+    <string name="live_tv_start_reading">Receiving the channel (%1$s), reading its tracks… %2$s</string>
+    <string name="live_tv_start_waiting_video">Receiving the channel (%1$s), waiting for a full video frame… %2$s</string>
+    <string name="live_tv_start_waiting_audio">Receiving the channel (%1$s), waiting for the sound… %2$s</string>
+    <string name="live_tv_start_buffering">Receiving the channel (%1$s), buffering… %2$s</string>
+    <string name="live_tv_start_picture">Starting picture… %1$s</string>
+    <string name="live_tv_start_summary">Channel started after %1$.1f s: %2$s</string>
     <string name="player_loading_fallback_pcm_audio">Audio track init failed - switching to PCM audio…</string>
     <string name="player_loading_fallback_hevc_decoder">Decoder init failed - switching to HEVC decoder…</string>
     <string name="player_engine_switching_title">Switching Player Engine</string>

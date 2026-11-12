@@ -23,6 +23,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +58,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvMediaSource
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvStartTrace
 import com.nuvio.tv.reshaped.livetv.liveTvStreamMimeType
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
@@ -120,6 +122,13 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     /** The link of the channel the preview has open, if any. */
     val currentUrl: String? get() = current?.streamUrl
 
+    /** The link the preview opened for [current], as its start is traced (see [LiveTvStartTrace]). */
+    private var openedUrl: String? = null
+
+    /** What the preview's start is waiting for, while it has no picture yet. */
+    fun startStatus(context: Context): String? =
+        if (current == null || showingVideo) null else LiveTvStartTrace.latestFor(openedUrl)?.describe(context)
+
     /** True once the channel shows a picture. */
     var showingVideo by mutableStateOf(false)
         private set
@@ -131,6 +140,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private val listener = object : Player.Listener {
         override fun onRenderedFirstFrame() {
             showingVideo = true
+            LiveTvStartTrace.latestFor(openedUrl)?.picture()
             fadeIn()
         }
 
@@ -141,6 +151,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            if (tracks.containsType(C.TRACK_TYPE_VIDEO)) LiveTvStartTrace.latestFor(openedUrl)?.prepared()
             // Only renditions above the cap: stop, so no connection stays open for nothing.
             val hasVideo = tracks.containsType(C.TRACK_TYPE_VIDEO)
             if (hasVideo && !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) {
@@ -181,6 +192,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             surface?.let(created::setVideoTextureView)
         }
         val request = PlayerMediaSourceFactory.normalizePlaybackRequest(channel.streamUrl, channel.headers)
+        openedUrl = request.url
         runCatching {
             // Exactly as the full screen player opens a channel (LiveTvMediaSource): the picture
             // starts on the first I-frame (many restreams send IDR frames seldom or never), and a
@@ -306,6 +318,7 @@ internal fun LiveTvPreviewVideo(
     // Turning previews off removes the picture: nothing may keep playing unseen.
     DisposableEffect(preview) { onDispose { preview.stop() } }
 
+    val context = LocalContext.current
     val shape = RoundedCornerShape(16.dp)
     val videoAlpha by animateFloatAsState(if (preview.showingVideo) 1f else 0f, tween(260), label = "liveTvPreviewAlpha")
     val videoScale by animateFloatAsState(
@@ -322,8 +335,26 @@ internal fun LiveTvPreviewVideo(
     ) {
         if (channel != null) {
             LiveTvLogo(url = logo, name = channel.name, width = 128.dp, height = 76.dp)
+            // What the preview waits for, until its picture shows.
+            val status by produceState<String?>(null, preview, channel.id, playVideo) {
+                while (playVideo) {
+                    value = preview.startStatus(context)
+                    delay(250)
+                }
+                value = null
+            }
+            status?.let { text ->
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NuvioTheme.colors.TextSecondary,
+                    maxLines = 2,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
         }
-        val context = LocalContext.current
         val textureView = remember { TextureView(context) }
         DisposableEffect(textureView) {
             preview.attach(textureView)

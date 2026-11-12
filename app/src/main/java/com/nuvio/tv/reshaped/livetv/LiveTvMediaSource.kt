@@ -37,14 +37,20 @@ object LiveTvMediaSource {
      * [sharedUrl] is the channel's link when its connection is to be shared between the preview
      * and the full screen player (see [sharesConnection]); the factory then serves that link only.
      */
-    fun dataSourceFactory(context: Context, headers: Map<String, String>, sharedUrl: String? = null): DataSource.Factory {
-        val http: DataSource.Factory = if (sharedUrl != null) {
+    internal fun dataSourceFactory(
+        context: Context,
+        headers: Map<String, String>,
+        sharedUrl: String? = null,
+        trace: LiveTvStartTrace? = null,
+    ): DataSource.Factory {
+        val connection: DataSource.Factory = if (sharedUrl != null) {
             LiveTvStreamShare.ringBytes =
                 if (LiveTvDevice.isLowMemory(context)) LiveTvStreamShare.RING_BYTES_LOW_MEMORY else LiveTvStreamShare.RING_BYTES
             DataSource.Factory { LiveTvSharedDataSource(sharedUrl, headers) }
         } else {
             LiveTvStreamShare.httpFactory(LiveTvHttp.client, headers)
         }
+        val http = if (trace != null) TracingDataSource.Factory(connection, trace) else connection
         // Plain http(s) goes through OkHttp; udp:// and file links, which some lists carry, still open.
         return DefaultDataSource.Factory(context, http)
     }
@@ -71,7 +77,7 @@ object LiveTvMediaSource {
         if (!sharesConnection(url, mimeType)) return
         LiveTvStreamShare.ringBytes =
             if (LiveTvDevice.isLowMemory(context)) LiveTvStreamShare.RING_BYTES_LOW_MEMORY else LiveTvStreamShare.RING_BYTES
-        LiveTvStreamShare.prewarm(url, headers, delayMs)
+        LiveTvStreamShare.prewarm(url, headers, delayMs, LiveTvStartTrace.forPlayer(url))
     }
 
     /**
@@ -92,15 +98,18 @@ object LiveTvMediaSource {
         tsFlags: Int = LiveTvTsFlags.LIVE,
         subtitleConfigurations: List<MediaItem.SubtitleConfiguration> = emptyList(),
         mediaMetadata: MediaMetadata? = null,
+        forPlayer: Boolean = false,
     ): MediaSource {
         val builder = MediaItem.Builder().setUri(url)
         if (mimeType != null) builder.setMimeType(mimeType)
         if (subtitleConfigurations.isNotEmpty()) builder.setSubtitleConfigurations(subtitleConfigurations)
         if (mediaMetadata != null) builder.setMediaMetadata(mediaMetadata)
         val item = builder.build()
-        val extractors = DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)
+        // What the start waits for, shown while it loads (see LiveTvStartTrace).
+        val trace = if (forPlayer) LiveTvStartTrace.forPlayer(url) else LiveTvStartTrace.forPreview(url)
+        val extractors = TracingExtractors(DefaultExtractorsFactory().setTsExtractorFlags(tsFlags), trace)
         val sharedUrl = url.takeIf { sharesConnection(it, mimeType) }
-        return DefaultMediaSourceFactory(dataSourceFactory(context, headers, sharedUrl), extractors)
+        return DefaultMediaSourceFactory(dataSourceFactory(context, headers, sharedUrl, trace), extractors)
             .setLoadErrorHandlingPolicy(LiveTvLoadErrors.policy)
             .createMediaSource(item)
     }

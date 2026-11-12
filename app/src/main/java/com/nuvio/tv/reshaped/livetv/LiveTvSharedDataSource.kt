@@ -10,6 +10,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.extractor.metadata.icy.IcyHeaders
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Call
 import okhttp3.Request
@@ -46,6 +47,10 @@ internal class LiveTvSharedDataSource(
         transferStarted(dataSpec)
         return length
     }
+
+    /** Whether opening [dataSpec] takes over the connection already open for the channel. */
+    fun joinsOpenConnection(dataSpec: DataSpec): Boolean =
+        isChannelFromStart(dataSpec) && LiveTvStreamShare.hub.isOpen(LiveTvStreamShare.key(channelUrl, headers))
 
     private fun isChannelFromStart(dataSpec: DataSpec): Boolean =
         dataSpec.position == 0L && dataSpec.length == C.LENGTH_UNSET.toLong() &&
@@ -92,10 +97,7 @@ internal object LiveTvStreamShare {
 
     val hub = LiveTvStreamHub(
         capacityBytes = { ringBytes },
-        log = { event ->
-            Log.d("LiveTvStream", event)
-            LiveTvStartTrace.step("connected ($event)")
-        },
+        log = { event -> Log.d("LiveTvStream", event) },
     )
 
     /** What the server answered, for the players reading the session. */
@@ -152,7 +154,7 @@ internal object LiveTvStreamShare {
      * of its own, after [delayMs] (see [LiveTvMediaSource.prewarm]). A link that turned out to be
      * a file with a length is not opened ahead again.
      */
-    fun prewarm(url: String, headers: Map<String, String>, delayMs: Long = 0L) {
+    fun prewarm(url: String, headers: Map<String, String>, delayMs: Long = 0L, trace: LiveTvStartTrace? = null) {
         if (url in files) return
         Thread({
             runCatching {
@@ -162,7 +164,15 @@ internal object LiveTvStreamShare {
                     .setUri(url)
                     .setHttpRequestHeaders(mapOf(IcyHeaders.REQUEST_HEADER_ENABLE_METADATA_NAME to IcyHeaders.REQUEST_HEADER_ENABLE_METADATA_VALUE))
                     .build()
-                val live = hub.prewarm(key(url, headers), HANDOFF_MS) { connect(dataSpec, headers) }
+                val live = hub.prewarm(key(url, headers), HANDOFF_MS) {
+                    trace?.opening()
+                    try {
+                        connect(dataSpec, headers).also { trace?.connected(joinedOpenConnection = false) }
+                    } catch (error: IOException) {
+                        trace?.failed(error)
+                        throw error
+                    }
+                }
                 if (!live) {
                     if (files.size >= MAX_FILES) files.clear()
                     files += url
