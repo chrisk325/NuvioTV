@@ -16,19 +16,38 @@ struct MPVTrack: Identifiable, Hashable {
     let isDefault: Bool
     let channels: Int?
 
-    var displayName: String {
-        var parts: [String] = []
-        if let lang, !lang.isEmpty {
-            parts.append(Locale.current.localizedString(forLanguageCode: lang) ?? lang)
+    /// Main line: language plus title, without repeating the language when the title already
+    /// starts with it (add-on subtitles are titled "English · OpenSubtitles v3").
+    var label: String {
+        let language = lang.flatMap { code -> String? in
+            guard !code.isEmpty else { return nil }
+            return Locale.current.localizedString(forLanguageCode: code) ?? code
         }
-        if let title, !title.isEmpty, title != lang { parts.append(title) }
-        if parts.isEmpty { parts.append("Track \(id)") }
-        var details: [String] = []
-        if let codec { details.append(codec.uppercased()) }
-        if let channels, channels > 0 { details.append(Self.channelLabel(channels)) }
-        if isForced { details.append("Forced") }
-        if isExternal { details.append("External") }
-        return details.isEmpty ? parts.joined(separator: " · ") : parts.joined(separator: " · ") + "  (" + details.joined(separator: ", ") + ")"
+        let cleanTitle = title?.trimmingCharacters(in: .whitespaces)
+        switch (language, cleanTitle) {
+        case let (language?, title?) where !title.isEmpty && title != lang:
+            return title.lowercased().hasPrefix(language.lowercased()) ? title : "\(language) · \(title)"
+        case let (language?, _):
+            return language
+        case (nil, let title?) where !title.isEmpty:
+            return title
+        default:
+            return "Track \(id)"
+        }
+    }
+
+    /// Secondary line: codec, channels, forced / external.
+    var details: String? {
+        var parts: [String] = []
+        if let codec { parts.append(codec.uppercased()) }
+        if let channels, channels > 0 { parts.append(Self.channelLabel(channels)) }
+        if isForced { parts.append("Forced") }
+        if isExternal { parts.append("External") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    var displayName: String {
+        details.map { "\(label)  (\($0))" } ?? label
     }
 
     private static func channelLabel(_ count: Int) -> String {

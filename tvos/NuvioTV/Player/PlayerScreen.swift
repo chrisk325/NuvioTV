@@ -86,8 +86,9 @@ struct PlayerScreen: View {
                 HStack {
                     Spacer()
                     panelView(panel)
-                        .frame(width: 720)
+                        .frame(width: 760)
                         .background(.ultraThinMaterial)
+                        .background(Color.black.opacity(0.35))
                         .focusSection()
                 }
                 .ignoresSafeArea()
@@ -264,57 +265,76 @@ struct PlayerScreen: View {
         case .adjust:
             adjustPanel
         case .speed:
-            List {
-                Section("Playback speed") {
-                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { value in
-                        Button {
-                            model.setSpeed(value)
-                            self.panel = nil
-                        } label: {
-                            HStack {
-                                Text(String(format: "%.2gx", value))
-                                Spacer()
-                                if abs(model.speed - value) < 0.01 { Image(systemName: "checkmark") }
-                            }
-                        }
-                    }
+            optionPanel(title: "Playback speed", options: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map { value in
+                PanelOption(
+                    id: "speed\(value)",
+                    title: String(format: "%.2gx", value),
+                    detail: value == 1 ? "Normal" : nil,
+                    isSelected: abs(model.speed - value) < 0.01
+                ) {
+                    model.setSpeed(value)
+                    self.panel = nil
                 }
-            }
-            .focused($focus, equals: .panel)
+            })
         }
     }
 
     private func trackList(title: String, tracks: [MPVTrack], allowOff: Bool, select: @escaping (MPVTrack?) -> Void) -> some View {
-        List {
-            Section(title) {
-                if allowOff {
-                    Button {
-                        select(nil)
-                    } label: {
-                        HStack {
-                            Text("Off")
-                            Spacer()
-                            if !tracks.contains(where: \.isSelected) { Image(systemName: "checkmark") }
-                        }
-                    }
-                }
-                if tracks.isEmpty {
+        var options: [PanelOption] = []
+        if allowOff {
+            options.append(PanelOption(id: "off", title: "Off", detail: nil, isSelected: !tracks.contains(where: \.isSelected)) {
+                select(nil)
+            })
+        }
+        options += tracks.map { track in
+            PanelOption(id: "track\(track.id)", title: track.label, detail: track.details, isSelected: track.isSelected) {
+                select(track)
+            }
+        }
+        return optionPanel(title: title, options: options)
+    }
+
+    /// Spaced list of card rows: the focused row is white, the active one tinted with a check.
+    /// Opening the panel focuses the active row.
+    private func optionPanel(title: String, options: [PanelOption]) -> some View {
+        let focusTarget = options.first(where: \.isSelected)?.id ?? options.first?.id
+        return ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(title)
+                    .font(.title3.bold())
+                    .padding(.bottom, 8)
+                if options.isEmpty {
                     Text("No tracks").foregroundStyle(.secondary)
                 }
-                ForEach(tracks) { track in
-                    Button {
-                        select(track)
-                    } label: {
-                        HStack {
-                            Text(track.displayName).lineLimit(2)
-                            Spacer()
-                            if track.isSelected { Image(systemName: "checkmark") }
+                ForEach(options) { option in
+                    let row = Button(action: option.action) {
+                        HStack(alignment: .center, spacing: 20) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.title)
+                                    .font(.headline)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if let detail = option.detail {
+                                    Text(detail).font(.caption).opacity(0.75)
+                                }
+                            }
+                            Spacer(minLength: 10)
+                            if option.isSelected {
+                                Image(systemName: "checkmark.circle.fill").font(.title3)
+                            }
                         }
+                    }
+                    .buttonStyle(PanelRowStyle(isSelected: option.isSelected))
+                    if option.id == focusTarget {
+                        row.focused($focus, equals: .panel)
+                    } else {
+                        row
                     }
                 }
             }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 60)
         }
-        .focused($focus, equals: .panel)
     }
 
     private var adjustPanel: some View {
@@ -485,6 +505,48 @@ struct PlayerScreen: View {
         let total = Int(seconds.rounded())
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+}
+
+struct PanelOption: Identifiable {
+    let id: String
+    let title: String
+    let detail: String?
+    let isSelected: Bool
+    let action: () -> Void
+}
+
+/// Card row for the player's side panels.
+struct PanelRowStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration, isSelected: isSelected)
+    }
+
+    private struct Row: View {
+        let configuration: ButtonStyle.Configuration
+        let isSelected: Bool
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isFocused ? Color.black : Color.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(isFocused ? Color.white : (isSelected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.07)))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.white.opacity(isSelected && !isFocused ? 0.6 : 0), lineWidth: 2)
+                )
+                .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.03 : 1))
+                .shadow(color: .black.opacity(isFocused ? 0.4 : 0), radius: 12, y: 6)
+                .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
     }
 }
 
