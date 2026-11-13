@@ -16,7 +16,7 @@ struct PlayerContainer: View {
 }
 
 private enum PlayerFocus: Hashable {
-    case catcher, scrubber, audio, subtitles, adjust, speed, next, panel, skip
+    case catcher, scrubber, playPause, audio, subtitles, adjust, speed, next, panel, skip
 }
 
 private enum PlayerPanel: Identifiable {
@@ -142,7 +142,7 @@ struct PlayerScreen: View {
                     .padding(.top, 60)
                 }
             Spacer()
-            VStack(alignment: .leading, spacing: 30) {
+            VStack(alignment: .leading, spacing: 44) {
                 Button(action: {
                     model.togglePause()
                     scheduleHide()
@@ -162,6 +162,8 @@ struct PlayerScreen: View {
                 .onMoveCommand(perform: handleMoveOnScrubber)
 
                 HStack(spacing: 30) {
+                    playPauseButton
+                        .padding(.trailing, 20)
                     controlButton("Audio", "speaker.wave.2", .audio) { open(.audio) }
                     controlButton("Subtitles", "captions.bubble", .subtitles) { open(.subtitles) }
                     controlButton("Sync & size", "slider.horizontal.3", .adjust) { open(.adjust) }
@@ -196,22 +198,29 @@ struct PlayerScreen: View {
     private func timeline(position: Double) -> some View {
         let isFocused = focus == .scrubber
         let duration = max(model.duration, 1)
-        return VStack(alignment: .leading, spacing: 12) {
+        let trackHeight: CGFloat = isFocused ? 10 : 6
+        let knob: CGFloat = isFocused ? 26 : 0
+        return VStack(alignment: .leading, spacing: 18) {
+            // The track sits centred in a box tall enough for the knob, so nothing overlaps the times.
             GeometryReader { geo in
+                let played = geo.size.width * min(1, position / duration)
+                let buffered = geo.size.width * min(1, (model.position + model.cacheSeconds) / duration)
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.25))
+                        .frame(height: trackHeight)
                     Capsule().fill(Color.white.opacity(0.4))
-                        .frame(width: geo.size.width * min(1, (model.position + model.cacheSeconds) / duration))
+                        .frame(width: buffered, height: trackHeight)
                     Capsule().fill(Color.accentColor)
-                        .frame(width: geo.size.width * min(1, position / duration))
+                        .frame(width: played, height: trackHeight)
                     Circle().fill(Color.white)
-                        .frame(width: isFocused ? 28 : 0, height: isFocused ? 28 : 0)
-                        .offset(x: geo.size.width * min(1, position / duration) - (isFocused ? 14 : 0))
+                        .frame(width: knob, height: knob)
+                        .shadow(color: .black.opacity(0.4), radius: 6)
+                        .offset(x: played - knob / 2)
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .frame(height: isFocused ? 12 : 8)
-            HStack {
-                Image(systemName: model.isPaused ? "pause.fill" : "play.fill")
+            .frame(height: 30)
+            HStack(spacing: 16) {
                 Text(formatTime(position))
                 if scrubTarget != nil {
                     Text(String(format: "(%@%@)", position >= model.position ? "+" : "-", formatTime(abs(position - model.position))))
@@ -222,6 +231,21 @@ struct PlayerScreen: View {
             }
             .font(.callout.monospacedDigit())
         }
+        .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+
+    /// Big round play/pause button leading the controls row.
+    private var playPauseButton: some View {
+        Button {
+            model.togglePause()
+            scheduleHide()
+        } label: {
+            Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
+                .font(.system(size: 34, weight: .bold))
+                .frame(width: 90, height: 90)
+        }
+        .buttonStyle(RoundControlStyle())
+        .focused($focus, equals: .playPause)
     }
 
     // MARK: Panels
@@ -461,6 +485,29 @@ struct PlayerScreen: View {
         let total = Int(seconds.rounded())
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+}
+
+/// Circular translucent control that grows and turns white when focused.
+struct RoundControlStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        RoundControl(configuration: configuration)
+    }
+
+    private struct RoundControl: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isFocused ? Color.black : Color.white)
+                .background(
+                    Circle().fill(isFocused ? AnyShapeStyle(Color.white) : AnyShapeStyle(.ultraThinMaterial))
+                )
+                .scaleEffect(configuration.isPressed ? 0.94 : (isFocused ? 1.12 : 1))
+                .shadow(color: .black.opacity(isFocused ? 0.45 : 0), radius: 14, y: 6)
+                .animation(.easeOut(duration: 0.15), value: isFocused)
+        }
     }
 }
 
