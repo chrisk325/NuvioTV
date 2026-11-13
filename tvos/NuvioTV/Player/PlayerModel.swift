@@ -1,3 +1,4 @@
+import AVKit
 import Foundation
 import NuvioShared
 import UIKit
@@ -39,6 +40,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     weak var window: UIWindow?
+    /// Held strongly: by the time the player closes its view has already left the window.
+    private var displayManager: AVDisplayManager?
     private var core: NuvioCore?
     private var settings: AppSettings?
     private var lastSavedAt = Date.distantPast
@@ -126,7 +129,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         streamSubscription = nil
         controller.pause()
         controller.destroy()
-        DisplayCriteria.reset(in: window)
+        DisplayCriteria.reset(displayManager)
+        displayManager = nil
     }
 
     // MARK: Add-on subtitles
@@ -332,7 +336,9 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?) {
-        DisplayCriteria.apply(fps: fps, gamma: gamma, in: window)
+        if let manager = DisplayCriteria.apply(fps: fps, gamma: gamma, in: window) {
+            displayManager = manager
+        }
     }
 
     func mpvDidReachEnd() {

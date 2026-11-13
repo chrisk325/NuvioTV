@@ -79,9 +79,12 @@ struct MPVVideoView: UIViewControllerRepresentable {
 
 /// Requests the TV's matching refresh rate and dynamic range (Settings ▸ Video ▸ Match Content).
 enum DisplayCriteria {
+    /// Requests matching criteria and returns the display manager it was set on, so the caller
+    /// can reset that same manager later (the window may be gone by then).
     @MainActor
-    static func apply(fps: Double, gamma: String?, in window: UIWindow?) {
-        guard let manager = window?.avDisplayManager, manager.isDisplayCriteriaMatchingEnabled else { return }
+    @discardableResult
+    static func apply(fps: Double, gamma: String?, in window: UIWindow?) -> AVDisplayManager? {
+        guard let manager = window?.avDisplayManager, manager.isDisplayCriteriaMatchingEnabled else { return nil }
         let gammaName = gamma?.lowercased() ?? ""
         let isHdr = gammaName == "pq" || gammaName == "hlg"
         let transfer: CFString
@@ -108,13 +111,15 @@ enum DisplayCriteria {
             extensions: extensions as CFDictionary,
             formatDescriptionOut: &description
         )
-        guard let description else { return }
+        guard let description else { return nil }
         let rate = fps > 1 ? Float(fps) : 0
         manager.preferredDisplayCriteria = AVDisplayCriteria(refreshRate: rate, formatDescription: description)
+        return manager
     }
 
+    /// Hands the display back to the system's default mode (the home screen's rate / range).
     @MainActor
-    static func reset(in window: UIWindow?) {
-        window?.avDisplayManager.preferredDisplayCriteria = nil
+    static func reset(_ manager: AVDisplayManager?) {
+        manager?.preferredDisplayCriteria = nil
     }
 }

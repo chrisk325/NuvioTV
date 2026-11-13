@@ -44,7 +44,10 @@ struct PlayerScreen: View {
         ZStack {
             MPVVideoView(controller: model.controller, onScrub: handleSwipe)
                 .ignoresSafeArea()
-                .background(WindowReader { model.window = $0 })
+                .background(WindowReader { window in
+                    // Only remember a real window; leaving the screen reports nil.
+                    if let window { model.window = window }
+                })
 
             // Invisible focus target while the controls are hidden.
             Button(action: { showControls(focusScrubber: true) }) { Color.clear }
