@@ -115,7 +115,6 @@ private struct SettingsForm: View {
                 NavigationLink("Nuvio account, Trakt, Simkl & AniList") { AccountsView() }
                 NavigationLink("Debrid (Torbox, Premiumize, Real-Debrid)") { DebridSettingsView() }
                 NavigationLink("Media servers (Jellyfin, Emby)") { MediaServersView() }
-                NavigationLink("Plugins (local scrapers)") { PluginsView() }
             }
 
             Section("Home") {

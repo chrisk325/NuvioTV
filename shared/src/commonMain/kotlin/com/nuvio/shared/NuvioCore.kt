@@ -98,7 +98,6 @@ class NuvioCore(
     val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
     val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
     val mediaServers = com.nuvio.shared.mediaserver.MediaServerService(httpClient, store)
-    val plugins = com.nuvio.shared.plugins.PluginService(httpClient, store)
     val cloud = com.nuvio.shared.cloud.NuvioCloud(httpClient, store, config.supabaseUrl.trimEnd('/'), config.supabaseAnonKey, profileIndex, deviceStore)
     val profiles = com.nuvio.shared.settings.ProfileStore(deviceStore)
 
@@ -250,30 +249,10 @@ class NuvioCore(
                         emit(update.copy(groups = groups))
                     }
                 }
-                if (plugins.engine != null && plugins.pluginsEnabled && plugins.scrapers.any { it.enabled }) {
-                    val pluginGroups = runCatching { pluginStreams(type, videoId) }.getOrDefault(emptyList())
-                    if (pluginGroups.isNotEmpty()) {
-                        groups = groups + pluginGroups
-                        emit(update.copy(groups = groups))
-                    }
-                }
                 if (debrid.hasAnyProvider) emit(update.copy(groups = debrid.annotateCache(groups)))
             },
         onUpdate
     )
-
-    /** Local JS scrapers need a TMDB id: taken from "tmdb:" ids or looked up from IMDb ids. */
-    private suspend fun pluginStreams(type: String, videoId: String): List<AddonStreams> {
-        val parts = videoId.split(':')
-        val season = if (parts.size >= 3) parts[parts.size - 2].toIntOrNull() else null
-        val episode = if (parts.size >= 3) parts.last().toIntOrNull() else null
-        val tmdbId = when {
-            parts.first() == "tmdb" -> parts.getOrNull(1)
-            parts.first().startsWith("tt") -> tmdb.findByImdb(parts.first(), com.nuvio.shared.model.isSeriesLikeType(type))?.toString()
-            else -> null
-        } ?: return emptyList()
-        return plugins.streams(tmdbId, type, season, episode, config.tmdbApiKey)
-    }
 
     /** Add-on subtitles (OpenSubtitles etc.) for a video; never throws, returns [] on failure. */
     @Throws(Exception::class)

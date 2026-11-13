@@ -29,7 +29,6 @@ final class AppModel: ObservableObject {
         } else {
             core = NuvioCoreFactoryKt.createNuvioCore(config: AppConfig.load())
         }
-        core.plugins.engine = JSPluginEngine()
         subscriptions.append(core.observeAddons { [weak self] list in
             MainActor.assumeIsolated { self?.addons = list }
         })
