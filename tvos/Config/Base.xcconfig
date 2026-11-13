@@ -1,0 +1,16 @@
+// Build settings shared by all configurations. API keys come from the optional,
+// git-ignored Secrets.xcconfig (generate it with tvos/scripts/write-secrets.sh).
+NUVIO_TMDB_API_KEY =
+NUVIO_TRAKT_CLIENT_ID =
+NUVIO_TRAKT_CLIENT_SECRET =
+NUVIO_SIMKL_CLIENT_ID =
+NUVIO_SIMKL_APP_NAME = nuvio
+NUVIO_MDBLIST_CLIENT_ID =
+NUVIO_ANILIST_CLIENT_ID =
+NUVIO_PREMIUMIZE_CLIENT_ID =
+NUVIO_INTRODB_API_URL =
+NUVIO_TRAILER_API_URL =
+NUVIO_SUPABASE_URL =
+NUVIO_SUPABASE_ANON_KEY =
+
+#include? "Secrets.xcconfig"

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import NuvioShared
 
@@ -20,7 +21,7 @@ final class AppModel: ObservableObject {
     private var subscriptions: [CoreSubscription] = []
 
     init() {
-        core = NuvioCoreFactoryKt.createNuvioCore()
+        core = NuvioCoreFactoryKt.createNuvioCore(config: AppConfig.load())
         subscriptions.append(core.observeAddons { [weak self] list in
             MainActor.assumeIsolated { self?.addons = list }
         })
@@ -32,7 +33,11 @@ final class AppModel: ObservableObject {
         })
     }
 
+    var settings: AppSettings { core.settings }
+
     func start() async {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         await refreshAddons()
     }
 

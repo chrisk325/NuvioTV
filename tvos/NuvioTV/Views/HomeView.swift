@@ -20,7 +20,7 @@ struct HomeView: View {
             } else {
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 30) {
-                        if !app.continueWatching.isEmpty {
+                        if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
                             ContinueWatchingRow(items: app.continueWatching)
                         }
                         ForEach(slots, id: \.key) { slot in

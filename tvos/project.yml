@@ -6,6 +6,14 @@ options:
   deploymentTarget:
     tvOS: "17.0"
   createIntermediateGroups: true
+packages:
+  # mpv + FFmpeg + libass + libplacebo/MoltenVK (LGPL build). Plays MKV, ASS/SSA, HEVC/AV1, HDR/DV.
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.0.0
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -20,6 +28,8 @@ targets:
       - path: NuvioTV
         excludes:
           - Info.plist
+      - path: Config
+        buildPhase: none
     info:
       path: NuvioTV/Info.plist
       properties:
@@ -29,6 +39,19 @@ targets:
         # Add-ons and debrid/CDN streams are frequently plain HTTP.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # Filled from Config/Secrets.xcconfig (same keys as the Android local.properties).
+        NuvioTmdbApiKey: $(NUVIO_TMDB_API_KEY)
+        NuvioTraktClientId: $(NUVIO_TRAKT_CLIENT_ID)
+        NuvioTraktClientSecret: $(NUVIO_TRAKT_CLIENT_SECRET)
+        NuvioSimklClientId: $(NUVIO_SIMKL_CLIENT_ID)
+        NuvioSimklAppName: $(NUVIO_SIMKL_APP_NAME)
+        NuvioMdbListClientId: $(NUVIO_MDBLIST_CLIENT_ID)
+        NuvioAniListClientId: $(NUVIO_ANILIST_CLIENT_ID)
+        NuvioPremiumizeClientId: $(NUVIO_PREMIUMIZE_CLIENT_ID)
+        NuvioIntroDbApiUrl: $(NUVIO_INTRODB_API_URL)
+        NuvioTrailerApiUrl: $(NUVIO_TRAILER_API_URL)
+        NuvioSupabaseUrl: $(NUVIO_SUPABASE_URL)
+        NuvioSupabaseAnonKey: $(NUVIO_SUPABASE_ANON_KEY)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.nuvio.tv.appletv
@@ -41,5 +64,7 @@ targets:
       - framework: ../shared/build/XCFrameworks/release/NuvioShared.xcframework
         embed: true
         codeSign: true
+      - package: MPVKit
+        product: MPVKit
     scheme:
       testTargets: []

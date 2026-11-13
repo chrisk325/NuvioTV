@@ -9,6 +9,7 @@ struct StreamsView: View {
     @State private var subscription: CoreSubscription?
     @State private var playback: PlaybackRequest?
     @State private var showUnplayable: AddonStream?
+    @State private var autoPlayed = false
 
     var body: some View {
         Group {
@@ -33,7 +34,7 @@ struct StreamsView: View {
             subscription = nil
         }
         .fullScreenCover(item: $playback) { request in
-            PlayerScreen(request: request)
+            PlayerContainer(request: request)
                 .environmentObject(app)
         }
         .alert(
@@ -55,8 +56,23 @@ struct StreamsView: View {
             videoId: target.videoId,
             embedded: embedded
         ) { value in
-            MainActor.assumeIsolated { update = value }
+            MainActor.assumeIsolated {
+                update = value
+                autoPlayIfMatching(value)
+            }
         }
+    }
+
+    /// Settings ▸ Player ▸ auto-play regex: start the first matching playable stream.
+    private func autoPlayIfMatching(_ value: StreamsUpdate) {
+        let regex = app.settings.streamAutoPlayRegex
+        guard !autoPlayed, playback == nil, !regex.isEmpty else { return }
+        let match = value.groups.flatMap(\.streams).first {
+            $0.isDirectlyPlayable && StreamAutoPicker.matchesRegex($0, regex: regex)
+        }
+        guard let match else { return }
+        autoPlayed = true
+        select(match)
     }
 
     @ViewBuilder
@@ -100,15 +116,11 @@ struct StreamsView: View {
             showUnplayable = stream
             return
         }
-        let resume = app.core.progressFor(videoId: target.videoId)
-        playback = PlaybackRequest(
-            url: url,
-            headers: stream.requestHeaders,
-            meta: target.meta,
-            video: target.video,
-            videoId: target.videoId,
-            title: target.title,
-            startPositionMs: (resume?.isResumable == true) ? resume!.positionMs : 0
+        _ = url
+        playback = PlaybackRequest.make(
+            stream: stream,
+            target: target,
+            resume: app.core.progressFor(videoId: target.videoId)
         )
     }
 

@@ -16,6 +16,9 @@ import com.nuvio.shared.repository.LibraryRepository
 import com.nuvio.shared.repository.MetaRepository
 import com.nuvio.shared.repository.SearchRepository
 import com.nuvio.shared.repository.StreamRepository
+import com.nuvio.shared.repository.SubtitleRepository
+import com.nuvio.shared.settings.AppSettings
+import com.nuvio.shared.model.Subtitle
 import com.nuvio.shared.repository.WatchProgressRepository
 import com.nuvio.shared.storage.KeyValueStore
 import com.nuvio.shared.util.currentTimeMillis
@@ -45,9 +48,12 @@ private class JobCancellable(private val job: Job) : CoreSubscription {
 class NuvioCore(
     store: KeyValueStore,
     httpClient: HttpClient,
-    dispatcher: CoroutineDispatcher
+    dispatcher: CoroutineDispatcher,
+    val config: NuvioConfig = NuvioConfig.EMPTY
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+    internal val store = store
+    internal val http = httpClient
+    internal val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val client = StremioClient(httpClient)
 
     val addonRepository = AddonRepository(client, store)
@@ -57,6 +63,8 @@ class NuvioCore(
     val streamRepository = StreamRepository(client)
     val watchProgress = WatchProgressRepository(store)
     val library = LibraryRepository(store)
+    val subtitleRepository = SubtitleRepository(client)
+    val settings = AppSettings(store)
 
     // --- Add-ons ---------------------------------------------------------------------------
 
@@ -83,7 +91,13 @@ class NuvioCore(
 
     // --- Browsing --------------------------------------------------------------------------
 
-    fun homeSlots(): List<CatalogSlot> = catalogRepository.homeSlots(addonRepository.currentAddons)
+    /** Home rows, without the catalogs hidden in Settings. */
+    fun homeSlots(): List<CatalogSlot> {
+        val hidden = settings.hiddenCatalogKeys.toSet()
+        return allHomeSlots().filterNot { it.key in hidden }
+    }
+
+    fun allHomeSlots(): List<CatalogSlot> = catalogRepository.homeSlots(addonRepository.currentAddons)
 
     @Throws(Exception::class)
     suspend fun loadCatalog(slot: CatalogSlot, skip: Int): CatalogRow = catalogRepository.loadSlot(slot, skip)
@@ -104,6 +118,20 @@ class NuvioCore(
     ): CoreSubscription = observe(
         streamRepository.streams(addonRepository.currentAddons, type, videoId, embedded),
         onUpdate
+    )
+
+    /** Add-on subtitles (OpenSubtitles etc.) for a video; never throws, returns [] on failure. */
+    @Throws(Exception::class)
+    suspend fun subtitles(
+        type: String,
+        contentId: String,
+        videoId: String?,
+        videoHash: String?,
+        videoSize: Long,
+        filename: String?
+    ): List<Subtitle> = subtitleRepository.subtitles(
+        addonRepository.currentAddons, type, contentId, videoId, videoHash,
+        videoSize.takeIf { it > 0 }, filename
     )
 
     // --- Progress & library ----------------------------------------------------------------
@@ -175,6 +203,6 @@ class NuvioCore(
 
     fun close() = scope.cancel()
 
-    private fun <T> observe(flow: Flow<T>, onChange: (T) -> Unit): CoreSubscription =
+    internal fun <T> observe(flow: Flow<T>, onChange: (T) -> Unit): CoreSubscription =
         JobCancellable(scope.launch { flow.collect { onChange(it) } })
 }

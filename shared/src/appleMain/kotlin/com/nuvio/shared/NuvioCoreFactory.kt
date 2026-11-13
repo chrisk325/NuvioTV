@@ -8,8 +8,9 @@ import kotlinx.coroutines.Dispatchers
 internal actual fun platformHttpClient(): HttpClient = HttpClient(Darwin)
 
 /** Swift: `NuvioCoreFactoryKt.createNuvioCore()` – UserDefaults storage, main-thread callbacks. */
-fun createNuvioCore(): NuvioCore = NuvioCore(
+fun createNuvioCore(config: NuvioConfig): NuvioCore = NuvioCore(
     store = UserDefaultsStore(),
     httpClient = createHttpClient(),
-    dispatcher = Dispatchers.Main
+    dispatcher = Dispatchers.Main,
+    config = config
 )

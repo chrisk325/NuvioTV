@@ -70,3 +70,4 @@ status-page/
 /tvos/DerivedData
 /tvos/build
 .kotlin
+/tvos/Config/Secrets.xcconfig
