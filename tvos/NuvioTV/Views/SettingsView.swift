@@ -118,6 +118,12 @@ private struct SettingsForm: View {
             }
 
             Section("Home") {
+                Picker("Layout", selection: s.bind({ $0.homeLayout }, { $0.homeLayout = $1; app.objectWillChange.send() })) {
+                    Text("Modern").tag(AppSettings.companion.LAYOUT_MODERN)
+                    Text("Classic").tag(AppSettings.companion.LAYOUT_CLASSIC)
+                    Text("Grid").tag(AppSettings.companion.LAYOUT_GRID)
+                }
+                Toggle("Hero carousel (Classic / Grid)", isOn: s.bind({ $0.showHero }, { $0.showHero = $1; app.objectWillChange.send() }))
                 Toggle("Continue Watching row", isOn: s.bind({ $0.showContinueWatching }, { $0.showContinueWatching = $1 }))
                 NavigationLink("Catalogs on Home") { HomeCatalogsSettings(binder: binder) }
             }
@@ -172,6 +178,7 @@ private struct HomeCatalogsSettings: View {
 
     var body: some View {
         List {
+            Section("Shown on Home") {
             ForEach(app.core.allHomeSlots(), id: \.key) { slot in
                 Toggle(isOn: Binding(
                     get: { !binder.settings.isCatalogHidden(key: slot.key) },
@@ -185,6 +192,19 @@ private struct HomeCatalogsSettings: View {
                         Text(slot.title)
                         Text(slot.addon.displayName).font(.caption).foregroundStyle(.secondary)
                     }
+                }
+            }
+            }
+            Section("Hero sources (none selected = all rows)") {
+                ForEach(app.core.allHomeSlots(), id: \.key) { slot in
+                    Toggle(slot.title, isOn: Binding(
+                        get: { binder.settings.isHeroCatalog(key: slot.key) },
+                        set: { on in
+                            binder.settings.setHeroCatalog(key: slot.key, enabled: on)
+                            binder.objectWillChange.send()
+                            app.objectWillChange.send()
+                        }
+                    ))
                 }
             }
         }

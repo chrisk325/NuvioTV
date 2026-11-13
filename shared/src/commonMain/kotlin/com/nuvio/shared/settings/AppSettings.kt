@@ -144,6 +144,26 @@ class AppSettings(private val store: KeyValueStore) {
 
     // --- Home / content -------------------------------------------------------------------
 
+    /** Android HomeLayout: "classic", "grid" or "modern". */
+    var homeLayout: String
+        get() = str("home.layout", LAYOUT_MODERN)
+        set(value) = put("home.layout", value)
+
+    var showHero: Boolean
+        get() = bool("home.hero", true)
+        set(value) = put("home.hero", value)
+
+    /** CatalogSlot.key values feeding the hero; empty = every row (Android fallback). */
+    var heroCatalogKeys: List<String>
+        get() = list("home.heroCatalogs")
+        set(value) = putList("home.heroCatalogs", value.distinct())
+
+    fun isHeroCatalog(key: String): Boolean = key in heroCatalogKeys
+
+    fun setHeroCatalog(key: String, enabled: Boolean) {
+        heroCatalogKeys = if (enabled) heroCatalogKeys + key else heroCatalogKeys - key
+    }
+
     var showContinueWatching: Boolean
         get() = bool("home.continueWatching", true)
         set(value) = put("home.continueWatching", value)
@@ -180,5 +200,8 @@ class AppSettings(private val store: KeyValueStore) {
     companion object {
         const val ENGINE_MPV = "mpv"
         const val ENGINE_AVPLAYER = "avplayer"
+        const val LAYOUT_CLASSIC = "classic"
+        const val LAYOUT_GRID = "grid"
+        const val LAYOUT_MODERN = "modern"
     }
 }

@@ -180,6 +180,29 @@ class NuvioCore(
         return allHomeSlots().filterNot { it.key in hidden }
     }
 
+    /**
+     * Hero items (port of HomeViewModelCatalogPipeline's hero selection): the chosen hero
+     * catalogs, else every loaded row, interleaved one item per row, artwork first, de-duplicated.
+     */
+    fun heroItems(rows: List<CatalogRow>, limit: Int): List<MetaPreview> {
+        val chosen = settings.heroCatalogKeys.toSet()
+        val selected = if (chosen.isEmpty()) rows else rows.filter { row ->
+            allHomeSlots().any { it.key in chosen && it.addon.baseUrl == row.addonBaseUrl && it.catalog.id == row.catalogId && it.catalog.apiType == row.apiType }
+        }
+        fun interleave(filter: (MetaPreview) -> Boolean): List<MetaPreview> {
+            val seen = HashSet<String>()
+            val lists = selected.map { row -> row.items.filter(filter) }
+            val out = mutableListOf<MetaPreview>()
+            var index = 0
+            while (out.size < limit && lists.any { index < it.size }) {
+                lists.forEach { list -> list.getOrNull(index)?.let { if (seen.add(it.id) && out.size < limit) out += it } }
+                index++
+            }
+            return out
+        }
+        return interleave { it.background != null || it.landscapePoster != null }.ifEmpty { interleave { true } }
+    }
+
     fun allHomeSlots(): List<CatalogSlot> = catalogRepository.homeSlots(addonRepository.currentAddons)
 
     @Throws(Exception::class)

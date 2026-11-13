@@ -17,10 +17,24 @@ struct RemoteImage: View {
     }
 }
 
+/// Calls [onFocus] when the enclosing focusable (card button) gains focus.
+struct FocusReporter: View {
+    @Environment(\.isFocused) private var isFocused
+    let onFocus: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: isFocused) { _, focused in
+                if focused { onFocus() }
+            }
+    }
+}
+
 /// Poster card used in every row and grid. Navigates to the detail screen.
 struct PosterCard: View {
     let item: MetaPreview
     var width: CGFloat = 220
+    var onFocus: ((MetaPreview) -> Void)? = nil
 
     private var height: CGFloat {
         let ratio = CGFloat(item.posterShape.aspectRatio())
@@ -41,6 +55,7 @@ struct PosterCard: View {
                 }
                 .frame(width: width, height: height)
                 .clipped()
+                .background(FocusReporter { onFocus?(item) })
             }
             .buttonStyle(.card)
 
@@ -53,11 +68,40 @@ struct PosterCard: View {
     }
 }
 
-/// Horizontal row of poster cards with a header.
+/// 16:9 backdrop card with the title on it (Modern layout rows).
+struct LandscapeCard: View {
+    let item: MetaPreview
+    var width: CGFloat = 420
+    var onFocus: ((MetaPreview) -> Void)? = nil
+
+    var body: some View {
+        NavigationLink(value: Route.detail(item)) {
+            ZStack(alignment: .bottomLeading) {
+                RemoteImage(url: item.backdropUrl ?? item.poster)
+                LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
+                if let logo = item.logo {
+                    RemoteImage(url: logo, contentMode: .fit)
+                        .frame(maxWidth: width * 0.55, maxHeight: 70, alignment: .bottomLeading)
+                        .padding(16)
+                } else {
+                    Text(item.name).font(.headline).lineLimit(2).padding(16)
+                }
+            }
+            .frame(width: width, height: width * 9 / 16)
+            .clipped()
+            .background(FocusReporter { onFocus?(item) })
+        }
+        .buttonStyle(.card)
+    }
+}
+
+/// Horizontal row of poster (or landscape) cards with a header.
 struct MetaRowView: View {
     let title: String
     let items: [MetaPreview]
     var seeAll: Route? = nil
+    var landscape = false
+    var onFocus: ((MetaPreview) -> Void)? = nil
     var onReachEnd: (() -> Void)? = nil
 
     var body: some View {
@@ -75,10 +119,16 @@ struct MetaRowView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 40) {
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                        PosterCard(item: item)
-                            .onAppear {
-                                if index == items.count - 1 { onReachEnd?() }
+                        Group {
+                            if landscape {
+                                LandscapeCard(item: item, onFocus: onFocus)
+                            } else {
+                                PosterCard(item: item, onFocus: onFocus)
                             }
+                        }
+                        .onAppear {
+                            if index == items.count - 1 { onReachEnd?() }
+                        }
                     }
                 }
                 .padding(.horizontal, 60)

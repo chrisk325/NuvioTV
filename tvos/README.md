@@ -14,7 +14,7 @@ tvos/     SwiftUI app (XcodeGen spec) that uses NuvioShared.
 | Area | Apple TV implementation |
 | --- | --- |
 | Add-ons | Install (URL / `stremio://`), enable, reorder, remove, cached manifests; Cinemeta + OpenSubtitles defaults. |
-| Home | Catalog rows (hideable), paging, "See all" with genre filters, Continue Watching, Jellyfin/Emby library rows. |
+| Home | All three Android layouts — **Modern** (focus-driven hero + landscape rows), **Classic** (hero carousel + poster rows over a focus backdrop), **Grid** (sectioned poster grids) — hero sources, catalog rows (hideable), paging, "See all" with genre filters, Continue Watching, Jellyfin/Emby library rows. |
 | Search | Every add-on search catalog in parallel. |
 | Details | Add-on meta (Android candidate rules), TMDB enrichment (logo, cast/crew photos, person pages, collections, "More like this", certification), MDBList ratings, seasons/episodes, watched marks, trailers. |
 | Streams | Add-ons in parallel, embedded streams, Jellyfin/Emby copies, debrid cache badges, auto-play regex. |
