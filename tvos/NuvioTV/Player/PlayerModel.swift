@@ -3,18 +3,31 @@ import Foundation
 import NuvioShared
 import UIKit
 
+/// The fast-changing playback clock (several updates a second). Only the seek bar and time
+/// labels observe it, so the rest of the player UI doesn't re-render while video plays.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published fileprivate(set) var position: Double = 0
+    @Published fileprivate(set) var duration: Double = 0
+    @Published fileprivate(set) var cacheSeconds: Double = 0
+
+    var remaining: Double { max(0, duration - position) }
+}
+
 /// Drives mpv for one playback session: options from AppSettings, add-on subtitles,
 /// progress saving, track selection, delays and auto-next episode.
 @MainActor
 final class PlayerModel: ObservableObject, MPVControllerDelegate {
     let controller = MPVController()
+    let clock = PlaybackClock()
 
     @Published private(set) var request: PlaybackRequest?
-    @Published private(set) var position: Double = 0
-    @Published private(set) var duration: Double = 0
+    // Plain (unpublished) copies for logic; the UI reads `clock`.
+    private(set) var position: Double = 0
+    private(set) var duration: Double = 0
+    @Published private(set) var hasDuration = false
     @Published private(set) var isPaused = false
     @Published private(set) var isBuffering = true
-    @Published private(set) var cacheSeconds: Double = 0
     @Published private(set) var speed: Double = 1
     @Published private(set) var audioTracks: [MPVTrack] = []
     @Published private(set) var subtitleTracks: [MPVTrack] = []
@@ -26,14 +39,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     @Published var subtitleScale: Double = 1 { didSet { controller.setSubtitleScale(subtitleScale) } }
     @Published private(set) var nextVideo: Video?
     @Published private(set) var isResolvingNext = false
-    @Published var nextPromptDismissed = false
-    @Published private(set) var skipSegments: [SkipSegment] = []
+    @Published var nextPromptDismissed = false { didSet { updateDerivedState() } }
+    private var skipSegments: [SkipSegment] = []
     private var skipLoadedFor: UUID?
 
-    /** The skip segment the playhead is in (shown as a "Skip intro" button). */
-    var activeSkipSegment: SkipSegment? {
-        skipSegments.first { position >= $0.startSeconds && position < $0.endSeconds - 1 }
-    }
+    /// The skip segment the playhead is in (published only when it changes).
+    @Published private(set) var activeSkipSegment: SkipSegment?
+    /// Whether the "Up next" card shows (published only when it changes).
+    @Published private(set) var showNextPrompt = false
 
     func skip(_ segment: SkipSegment) {
         seek(to: segment.endSeconds)
@@ -53,9 +66,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     var remaining: Double { max(0, duration - position) }
 
-    var showNextPrompt: Bool {
-        guard let settings, nextVideo != nil, !nextPromptDismissed, duration > 60 else { return false }
-        return remaining <= Double(settings.nextEpisodePromptSeconds) && remaining > 0
+    private func updateDerivedState() {
+        let segment = skipSegments.first { position >= $0.startSeconds && position < $0.endSeconds - 1 }
+        if segment != activeSkipSegment { activeSkipSegment = segment }
+        var prompt = false
+        if let settings, nextVideo != nil, !nextPromptDismissed, duration > 60 {
+            prompt = remaining <= Double(settings.nextEpisodePromptSeconds) && remaining > 0
+        }
+        if prompt != showNextPrompt { showNextPrompt = prompt }
     }
 
     // MARK: Lifecycle
@@ -104,11 +122,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         if let previous = self.request, previous.id != request.id { scrobble("stop", for: previous) }
         self.request = request
         skipSegments = []
+        activeSkipSegment = nil
+        showNextPrompt = false
         scrobbledStart = false
         finished = false
         nextPromptDismissed = false
         errorMessage = nil
         position = Double(request.startPositionMs) / 1000.0
+        clock.position = position
         nextVideo = request.nextVideo
         audioTracks = []
         subtitleTracks = []
@@ -174,16 +195,23 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     // MARK: Controls
 
-    func togglePause() { controller.togglePause() }
+    func togglePause() {
+        let paused = !isPaused
+        isPaused = paused // optimistic, so the button flips instantly
+        controller.setPaused(paused)
+    }
 
     func seek(by seconds: Double) {
         controller.seek(by: seconds)
         position = min(max(0, position + seconds), duration)
+        clock.position = position
     }
 
     func seek(to seconds: Double) {
         controller.seek(to: seconds)
         position = seconds
+        clock.position = seconds
+        updateDerivedState()
     }
 
     func selectAudio(_ track: MPVTrack) { controller.selectAudio(track.id) }
@@ -316,16 +344,24 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         }
         position = snapshot.position
         duration = snapshot.duration
-        isPaused = snapshot.isPaused
-        isBuffering = buffering
-        cacheSeconds = snapshot.cacheSeconds
-        speed = snapshot.speed
+        clock.position = snapshot.position
+        clock.duration = snapshot.duration
+        clock.cacheSeconds = snapshot.cacheSeconds
+        // Publish slow-changing state only when it actually changes.
+        if hasDuration != (snapshot.duration > 0) { hasDuration = snapshot.duration > 0 }
+        if isPaused != snapshot.isPaused { isPaused = snapshot.isPaused }
+        if isBuffering != buffering { isBuffering = buffering }
+        if speed != snapshot.speed { speed = snapshot.speed }
+        updateDerivedState()
         if duration > 0 { saveProgress() }
         if let request, request.tracksProgress, duration > 0, skipLoadedFor != request.id, let core {
             skipLoadedFor = request.id
             Task { @MainActor in
                 let segments = (try? await core.skipSegments(meta: request.meta, video: request.video, durationSeconds: duration)) ?? []
-                if self.request?.id == request.id { skipSegments = segments }
+                if self.request?.id == request.id {
+                    skipSegments = segments
+                    updateDerivedState()
+                }
             }
         }
     }

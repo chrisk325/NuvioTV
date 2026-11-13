@@ -115,6 +115,8 @@ final class MPVController {
 
     private var handle: OpaquePointer?
     private let queue = DispatchQueue(label: "nuvio.mpv.events", qos: .userInitiated)
+    /// Property sets and commands run here so a busy mpv core never stalls the UI thread.
+    private let commandQueue = DispatchQueue(label: "nuvio.mpv.commands", qos: .userInteractive)
     private var snapshot = Snapshot()
     private var didStartPlayback = false
     // Buffering = loading a file, seeking, or waiting on the network cache (mpv's own signals).
@@ -225,7 +227,9 @@ final class MPVController {
         guard let mpv = handle else { return }
         handle = nil
         mpv_set_wakeup_callback(mpv, nil, nil)
-        queue.async { mpv_terminate_destroy(mpv) }
+        // After any queued commands, then after any in-flight event read.
+        let events = queue
+        commandQueue.async { events.async { mpv_terminate_destroy(mpv) } }
     }
 
     // MARK: Playback
@@ -254,7 +258,7 @@ final class MPVController {
 
     func play() { set(flag: "pause", false) }
     func pause() { set(flag: "pause", true) }
-    func togglePause() { set(flag: "pause", !flag("pause")) }
+    func setPaused(_ paused: Bool) { set(flag: "pause", paused) }
 
     func seek(to seconds: Double) {
         command("seek", [String(format: "%.3f", max(0, seconds)), "absolute+keyframes"])
@@ -435,13 +439,15 @@ final class MPVController {
 
     private func set(property name: String, _ value: String) {
         guard let handle else { return }
-        mpv_set_property_string(handle, name, value)
+        commandQueue.async { mpv_set_property_string(handle, name, value) }
     }
 
     private func set(flag name: String, _ value: Bool) {
         guard let handle else { return }
-        var data: Int32 = value ? 1 : 0
-        mpv_set_property(handle, name, MPV_FORMAT_FLAG, &data)
+        commandQueue.async {
+            var data: Int32 = value ? 1 : 0
+            mpv_set_property(handle, name, MPV_FORMAT_FLAG, &data)
+        }
     }
 
     private func flag(_ name: String) -> Bool {
@@ -474,6 +480,10 @@ final class MPVController {
 
     private func command(_ name: String, _ args: [String]) {
         guard let handle else { return }
+        commandQueue.async { Self.run(handle, name, args) }
+    }
+
+    private static func run(_ handle: OpaquePointer, _ name: String, _ args: [String]) {
         var cStrings: [UnsafeMutablePointer<CChar>?] = ([name] + args).map { strdup($0) }
         cStrings.append(nil)
         defer { cStrings.forEach { free($0) } }

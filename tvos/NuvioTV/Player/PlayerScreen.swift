@@ -64,7 +64,10 @@ struct PlayerScreen: View {
             if controlsVisible && panel == nil {
                 controls.transition(.opacity)
             } else if let scrubTarget {
-                VStack { Spacer(); timeline(position: scrubTarget).padding(80) }
+                VStack {
+                    Spacer()
+                    TimelineBar(clock: model.clock, scrubTarget: scrubTarget, isFocused: false).padding(80)
+                }
             }
 
             if let segment = model.activeSkipSegment, panel == nil, !model.showNextPrompt {
@@ -90,8 +93,7 @@ struct PlayerScreen: View {
                     Spacer()
                     panelView(panel)
                         .frame(width: 760)
-                        .background(.ultraThinMaterial)
-                        .background(Color.black.opacity(0.35))
+                        .background(Color.black.opacity(0.82))
                         .focusSection()
                 }
                 .ignoresSafeArea()
@@ -151,14 +153,14 @@ struct PlayerScreen: View {
                     model.togglePause()
                     scheduleHide()
                 }) {
-                    if model.request?.isLive == true && model.duration <= 0 {
+                    if model.request?.isLive == true && !model.hasDuration {
                         HStack(spacing: 16) {
                             Text("LIVE").font(.caption.bold()).padding(.horizontal, 12).padding(.vertical, 4)
                                 .background(Color.red, in: Capsule())
                             Text("▲ / ▼ to change channel").font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
-                        timeline(position: scrubTarget ?? model.position)
+                        TimelineBar(clock: model.clock, scrubTarget: scrubTarget, isFocused: focus == .scrubber)
                     }
                 }
                 .buttonStyle(InvisibleButtonStyle())
@@ -197,45 +199,6 @@ struct PlayerScreen: View {
             Label(title, systemImage: icon).font(.callout)
         }
         .focused($focus, equals: field)
-    }
-
-    private func timeline(position: Double) -> some View {
-        let isFocused = focus == .scrubber
-        let duration = max(model.duration, 1)
-        let trackHeight: CGFloat = isFocused ? 10 : 6
-        let knob: CGFloat = isFocused ? 26 : 0
-        return VStack(alignment: .leading, spacing: 18) {
-            // The track sits centred in a box tall enough for the knob, so nothing overlaps the times.
-            GeometryReader { geo in
-                let played = geo.size.width * min(1, position / duration)
-                let buffered = geo.size.width * min(1, (model.position + model.cacheSeconds) / duration)
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.25))
-                        .frame(height: trackHeight)
-                    Capsule().fill(Color.white.opacity(0.4))
-                        .frame(width: buffered, height: trackHeight)
-                    Capsule().fill(Color.accentColor)
-                        .frame(width: played, height: trackHeight)
-                    Circle().fill(Color.white)
-                        .frame(width: knob, height: knob)
-                        .shadow(color: .black.opacity(0.4), radius: 6)
-                        .offset(x: played - knob / 2)
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-            }
-            .frame(height: 30)
-            HStack(spacing: 16) {
-                Text(formatTime(position))
-                if scrubTarget != nil {
-                    Text(String(format: "(%@%@)", position >= model.position ? "+" : "-", formatTime(abs(position - model.position))))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("-" + formatTime(max(0, model.duration - position)))
-            }
-            .font(.callout.monospacedDigit())
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 
     /// Big round play/pause button leading the controls row.
@@ -391,15 +354,21 @@ struct PlayerScreen: View {
                         Text("\(next.episodeLabel ?? "") · \(next.title)").font(.headline).lineLimit(1)
                     }
                     HStack(spacing: 20) {
-                        Button(model.isResolvingNext ? "Finding stream…" : "Play now (\(Int(model.remaining))s)") {
+                        Button {
                             model.playNext()
+                        } label: {
+                            if model.isResolvingNext {
+                                Text("Finding stream…")
+                            } else {
+                                NextCountdownLabel(clock: model.clock)
+                            }
                         }
                         .disabled(model.isResolvingNext)
                         Button("Dismiss") { model.nextPromptDismissed = true }
                     }
                 }
                 .padding(40)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 24))
                 .frame(maxWidth: 800)
                 .focusSection()
             }
@@ -547,10 +516,63 @@ struct PanelRowStyle: ButtonStyle {
                         .strokeBorder(Color.white.opacity(isSelected && !isFocused ? 0.6 : 0), lineWidth: 2)
                 )
                 .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.03 : 1))
-                .shadow(color: .black.opacity(isFocused ? 0.4 : 0), radius: 12, y: 6)
                 .animation(.easeOut(duration: 0.12), value: isFocused)
         }
     }
+}
+
+/// Seek bar + times. Observes only the playback clock, so it is the only part of the player
+/// that re-renders as the video plays.
+struct TimelineBar: View {
+    @ObservedObject var clock: PlaybackClock
+    let scrubTarget: Double?
+    let isFocused: Bool
+
+    var body: some View {
+        let position = scrubTarget ?? clock.position
+        let duration = max(clock.duration, 1)
+        let trackHeight: CGFloat = isFocused ? 10 : 6
+        let knob: CGFloat = isFocused ? 26 : 0
+        VStack(alignment: .leading, spacing: 18) {
+            GeometryReader { geo in
+                let played = geo.size.width * min(1, position / duration)
+                let buffered = geo.size.width * min(1, (clock.position + clock.cacheSeconds) / duration)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.25)).frame(height: trackHeight)
+                    Capsule().fill(Color.white.opacity(0.4)).frame(width: buffered, height: trackHeight)
+                    Capsule().fill(Color.accentColor).frame(width: played, height: trackHeight)
+                    Circle().fill(Color.white)
+                        .frame(width: knob, height: knob)
+                        .offset(x: played - knob / 2)
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+            .frame(height: 30)
+            HStack(spacing: 16) {
+                Text(Self.format(position))
+                if scrubTarget != nil {
+                    Text(String(format: "(%@%@)", position >= clock.position ? "+" : "-", Self.format(abs(position - clock.position))))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("-" + Self.format(max(0, clock.duration - position)))
+            }
+            .font(.callout.monospacedDigit())
+        }
+    }
+
+    static func format(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "--:--" }
+        let total = Int(seconds.rounded())
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+}
+
+/// "Play now (12s)" countdown, the other clock-driven bit.
+struct NextCountdownLabel: View {
+    @ObservedObject var clock: PlaybackClock
+    var body: some View { Text("Play now (\(Int(clock.remaining))s)") }
 }
 
 /// Circular translucent control that grows and turns white when focused.
@@ -567,10 +589,9 @@ struct RoundControlStyle: ButtonStyle {
             configuration.label
                 .foregroundStyle(isFocused ? Color.black : Color.white)
                 .background(
-                    Circle().fill(isFocused ? AnyShapeStyle(Color.white) : AnyShapeStyle(.ultraThinMaterial))
+                    Circle().fill(isFocused ? Color.white : Color.white.opacity(0.18))
                 )
                 .scaleEffect(configuration.isPressed ? 0.94 : (isFocused ? 1.12 : 1))
-                .shadow(color: .black.opacity(isFocused ? 0.45 : 0), radius: 14, y: 6)
                 .animation(.easeOut(duration: 0.15), value: isFocused)
         }
     }
