@@ -23,8 +23,13 @@ final class AppModel: ObservableObject {
 
     private var subscriptions: [CoreSubscription] = []
 
-    init() {
-        core = NuvioCoreFactoryKt.createNuvioCore(config: AppConfig.load())
+    init(profileIndex: Int32? = nil) {
+        if let profileIndex {
+            core = NuvioCoreFactoryKt.createNuvioCoreForProfile(config: AppConfig.load(), profileIndex: profileIndex)
+        } else {
+            core = NuvioCoreFactoryKt.createNuvioCore(config: AppConfig.load())
+        }
+        core.plugins.engine = JSPluginEngine()
         subscriptions.append(core.observeAddons { [weak self] list in
             MainActor.assumeIsolated { self?.addons = list }
         })
@@ -41,13 +46,36 @@ final class AppModel: ObservableObject {
 
     var settings: AppSettings { core.settings }
 
+    var currentProfile: UserProfile? {
+        core.profiles.profiles.first { $0.index == core.profileIndex }
+    }
+
+    func shutdown() {
+        subscriptions.forEach { $0.cancel() }
+        subscriptions.removeAll()
+        core.close()
+    }
+
     @Published private(set) var cloudSyncError: String?
+    @Published private(set) var serverLibraries: [ServerLibrary] = []
+
+    /** Reloads Jellyfin / Emby libraries for Home. */
+    func serversChanged() {
+        Task { @MainActor in
+            var all: [ServerLibrary] = []
+            for server in core.mediaServers.servers {
+                all += (try? await core.mediaServers.libraries(server: server)) ?? []
+            }
+            serverLibraries = all
+        }
+    }
 
     func start() async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         await syncCloud()
         await refreshAddons()
+        serversChanged()
         await syncTrackers()
     }
 

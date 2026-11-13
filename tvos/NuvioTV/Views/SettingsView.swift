@@ -107,9 +107,15 @@ private struct SettingsForm: View {
                           value: s.bind({ Int($0.subtitleDelayMs) }, { $0.subtitleDelayMs = Int32($1) }))
             }
 
+            Section("Profile") {
+                NavigationLink("Profiles (\(app.currentProfile?.name ?? "Main"))") { ProfilesSettingsView() }
+            }
+
             Section("Accounts & services") {
                 NavigationLink("Nuvio account, Trakt, Simkl & AniList") { AccountsView() }
                 NavigationLink("Debrid (Torbox, Premiumize, Real-Debrid)") { DebridSettingsView() }
+                NavigationLink("Media servers (Jellyfin, Emby)") { MediaServersView() }
+                NavigationLink("Plugins (local scrapers)") { PluginsView() }
             }
 
             Section("Home") {

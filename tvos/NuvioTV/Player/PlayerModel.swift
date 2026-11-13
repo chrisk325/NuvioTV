@@ -132,7 +132,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Add-on subtitles
 
     private func loadSubtitles(for request: PlaybackRequest) async {
-        guard let core, let settings, !request.isLive else { return }
+        guard let core, let settings, request.tracksProgress else { return }
         var list: [Subtitle] = request.streamSubtitles
         if settings.loadAddonSubtitles {
             isLoadingAddonSubtitles = true
@@ -266,7 +266,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Progress
 
     private func saveProgress(force: Bool = false, completed: Bool = false) {
-        guard let core, let request, !request.isLive, duration > 0 else { return }
+        guard let core, let request, request.tracksProgress, duration > 0 else { return }
         if !force, Date().timeIntervalSince(lastSavedAt) < 10 { return }
         lastSavedAt = Date()
         let pos = (completed || finished) ? duration : position
@@ -290,7 +290,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     private func scrobble(_ action: String, for request: PlaybackRequest) {
-        guard !request.isLive else { return }
+        guard request.tracksProgress else { return }
         core?.reportPlayback(meta: request.meta, video: request.video, action: action, progressPercent: progressPercent)
     }
 
@@ -314,7 +314,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         cacheSeconds = snapshot.cacheSeconds
         speed = snapshot.speed
         if duration > 0 { saveProgress() }
-        if let request, !request.isLive, duration > 0, skipLoadedFor != request.id, let core {
+        if let request, request.tracksProgress, duration > 0, skipLoadedFor != request.id, let core {
             skipLoadedFor = request.id
             Task { @MainActor in
                 let segments = (try? await core.skipSegments(meta: request.meta, video: request.video, durationSeconds: duration)) ?? []

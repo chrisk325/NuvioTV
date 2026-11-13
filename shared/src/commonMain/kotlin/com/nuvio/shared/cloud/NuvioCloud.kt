@@ -55,18 +55,21 @@ class NuvioCloud(
     private val http: HttpClient,
     private val store: KeyValueStore,
     private val baseUrl: String,
-    private val anonKey: String
+    private val anonKey: String,
+    /** Nuvio account profile this device profile syncs with (1 = primary). */
+    private val profileId: Int = 1,
+    /** Account sign-in is shared by all profiles on the device. */
+    private val accountStore: KeyValueStore = store
 ) {
     val isConfigured: Boolean get() = baseUrl.isNotBlank() && anonKey.isNotBlank()
-    val isSignedIn: Boolean get() = store.readToken(TOKEN) != null
-    val email: String? get() = store.readToken(TOKEN)?.username
+    val isSignedIn: Boolean get() = accountStore.readToken(TOKEN) != null
+    val email: String? get() = accountStore.readToken(TOKEN)?.username
 
     private val clientId: String
         get() = store.getString("cloud.clientId") ?: buildString {
             repeat(32) { append("0123456789abcdef"[Random.nextInt(16)]) }
         }.also { store.putString("cloud.clientId", it) }
 
-    private val profileId = 1
 
     // --- Auth -------------------------------------------------------------------------------
 
@@ -122,7 +125,7 @@ class NuvioCloud(
         storeSession(body)
     }
 
-    fun signOut() = store.writeToken(TOKEN, null)
+    fun signOut() = accountStore.writeToken(TOKEN, null)
 
     private fun storeSession(body: JsonObject) {
         val access = body.nonBlank("access_token") ?: throw CloudException("No access token")
@@ -134,7 +137,7 @@ class NuvioCloud(
     }
 
     private suspend fun accessToken(): String? {
-        val token = store.readToken(TOKEN) ?: return null
+        val token = accountStore.readToken(TOKEN) ?: return null
         if (!token.isExpired || token.refreshToken == null) return token.accessToken
         val response = http.post("$baseUrl/auth/v1/token?grant_type=refresh_token") {
             headers(auth = false)
@@ -144,9 +147,9 @@ class NuvioCloud(
         if (response.status.value == 400 || response.status.value == 401) { signOut(); return null }
         if (body != null && body.nonBlank("access_token") != null) {
             storeSession(body)
-            store.readToken(TOKEN)?.let { if (it.username == null) store.writeToken(TOKEN, it.copy(username = token.username)) }
+            accountStore.readToken(TOKEN)?.let { if (it.username == null) accountStore.writeToken(TOKEN, it.copy(username = token.username)) }
         }
-        return store.readToken(TOKEN)?.accessToken
+        return accountStore.readToken(TOKEN)?.accessToken
     }
 
     // --- Add-ons ----------------------------------------------------------------------------

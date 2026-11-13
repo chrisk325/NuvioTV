@@ -23,6 +23,9 @@ struct HomeView: View {
                         if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
                             ContinueWatchingRow(items: app.continueWatching)
                         }
+                        ForEach(app.serverLibraries, id: \.key) { library in
+                            ServerLibraryRow(library: library)
+                        }
                         ForEach(slots, id: \.key) { slot in
                             CatalogRowView(slot: slot)
                         }

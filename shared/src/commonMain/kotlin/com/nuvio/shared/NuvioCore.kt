@@ -2,6 +2,7 @@ package com.nuvio.shared
 
 import com.nuvio.shared.data.StremioClient
 import com.nuvio.shared.model.Addon
+import com.nuvio.shared.model.AddonStreams
 import com.nuvio.shared.model.CatalogRow
 import com.nuvio.shared.model.Meta
 import com.nuvio.shared.model.MetaPreview
@@ -36,6 +37,8 @@ import com.nuvio.shared.repository.WatchProgressRepository
 import com.nuvio.shared.storage.KeyValueStore
 import com.nuvio.shared.util.currentTimeMillis
 import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -65,7 +68,11 @@ class NuvioCore(
     store: KeyValueStore,
     httpClient: HttpClient,
     dispatcher: CoroutineDispatcher,
-    val config: NuvioConfig = NuvioConfig.EMPTY
+    val config: NuvioConfig = NuvioConfig.EMPTY,
+    /** Active profile (1 = primary); its data lives in [store]. */
+    val profileIndex: Int = 1,
+    /** Device-wide store for the profile list and the shared Nuvio account session. */
+    deviceStore: KeyValueStore = store
 ) {
     internal val store = store
     internal val http = httpClient
@@ -90,7 +97,10 @@ class NuvioCore(
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)
     val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
     val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
-    val cloud = com.nuvio.shared.cloud.NuvioCloud(httpClient, store, config.supabaseUrl.trimEnd('/'), config.supabaseAnonKey)
+    val mediaServers = com.nuvio.shared.mediaserver.MediaServerService(httpClient, store)
+    val plugins = com.nuvio.shared.plugins.PluginService(httpClient, store)
+    val cloud = com.nuvio.shared.cloud.NuvioCloud(httpClient, store, config.supabaseUrl.trimEnd('/'), config.supabaseAnonKey, profileIndex, deviceStore)
+    val profiles = com.nuvio.shared.settings.ProfileStore(deviceStore)
 
     // --- Add-ons ---------------------------------------------------------------------------
 
@@ -231,12 +241,39 @@ class NuvioCore(
         streamRepository.streams(addonRepository.currentAddons, type, videoId, embedded)
             .transform { update ->
                 emit(update)
-                if (update.isComplete && debrid.hasAnyProvider) {
-                    emit(update.copy(groups = debrid.annotateCache(update.groups)))
+                if (!update.isComplete) return@transform
+                var groups = update.groups
+                if (mediaServers.servers.isNotEmpty()) {
+                    val serverGroups = runCatching { mediaServers.streams(type, videoId) }.getOrDefault(emptyList())
+                    if (serverGroups.isNotEmpty()) {
+                        groups = serverGroups + groups
+                        emit(update.copy(groups = groups))
+                    }
                 }
+                if (plugins.engine != null && plugins.pluginsEnabled && plugins.scrapers.any { it.enabled }) {
+                    val pluginGroups = runCatching { pluginStreams(type, videoId) }.getOrDefault(emptyList())
+                    if (pluginGroups.isNotEmpty()) {
+                        groups = groups + pluginGroups
+                        emit(update.copy(groups = groups))
+                    }
+                }
+                if (debrid.hasAnyProvider) emit(update.copy(groups = debrid.annotateCache(groups)))
             },
         onUpdate
     )
+
+    /** Local JS scrapers need a TMDB id: taken from "tmdb:" ids or looked up from IMDb ids. */
+    private suspend fun pluginStreams(type: String, videoId: String): List<AddonStreams> {
+        val parts = videoId.split(':')
+        val season = if (parts.size >= 3) parts[parts.size - 2].toIntOrNull() else null
+        val episode = if (parts.size >= 3) parts.last().toIntOrNull() else null
+        val tmdbId = when {
+            parts.first() == "tmdb" -> parts.getOrNull(1)
+            parts.first().startsWith("tt") -> tmdb.findByImdb(parts.first(), com.nuvio.shared.model.isSeriesLikeType(type))?.toString()
+            else -> null
+        } ?: return emptyList()
+        return plugins.streams(tmdbId, type, season, episode, config.tmdbApiKey)
+    }
 
     /** Add-on subtitles (OpenSubtitles etc.) for a video; never throws, returns [] on failure. */
     @Throws(Exception::class)
@@ -414,6 +451,29 @@ class NuvioCore(
         if (!settings.skipIntroEnabled) return emptyList()
         return skipSegments.segments(TrackedMedia.from(meta, video), durationSeconds)
     }
+
+    /**
+     * A directly playable trailer URL via the trailer API (TRAILER_API_URL, as on Android), trying
+     * the add-on's YouTube ids, then TMDB's. Null when none resolves.
+     */
+    @Throws(Exception::class)
+    suspend fun trailerUrl(meta: Meta, tmdbKeys: List<String>): String? {
+        val api = config.trailerApiUrl.trim().trimEnd('/')
+        if (api.isEmpty()) return null
+        for (key in (meta.trailerYtIds + tmdbKeys).distinct().take(4)) {
+            val url = "$api/trailer?youtube_url=${com.nuvio.shared.util.encodeUrlComponent("https://www.youtube.com/watch?v=$key")}" +
+                "&title=${com.nuvio.shared.util.encodeUrlComponent(meta.name)}" +
+                (meta.releaseInfo?.take(4)?.let { "&year=$it" } ?: "")
+            val resolved = runCatching {
+                val body = com.nuvio.shared.data.AddonJson.parseToJsonElement(http.get(url).bodyAsText())
+                (body as? kotlinx.serialization.json.JsonObject)?.get("url")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            }.getOrNull()
+            if (!resolved.isNullOrBlank() && resolved != "null") return resolved
+        }
+        return null
+    }
+
+    val hasTrailerApi: Boolean get() = config.trailerApiUrl.isNotBlank()
 
     // --- Release calendar -------------------------------------------------------------------
 

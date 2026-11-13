@@ -10,6 +10,8 @@ struct DetailView: View {
     @State private var selectedSeason: Int32 = 1
     @State private var enrichment: TmdbEnrichment?
     @State private var ratings: [ExternalRating] = []
+    @State private var trailer: PlaybackRequest?
+    @State private var isLoadingTrailer = false
 
     var body: some View {
         Group {
@@ -25,6 +27,22 @@ struct DetailView: View {
             }
         }
         .task(id: preview.id) { await load() }
+        .fullScreenCover(item: $trailer) { request in
+            PlayerContainer(request: request).environmentObject(app)
+        }
+    }
+
+    private func playTrailer(_ meta: Meta) {
+        isLoadingTrailer = true
+        Task { @MainActor in
+            defer { isLoadingTrailer = false }
+            let keys = enrichment?.trailerYoutubeKeys ?? []
+            guard let url = (try? await app.core.trailerUrl(meta: meta, tmdbKeys: keys)) ?? nil else { return }
+            var request = PlaybackRequest(url: url, headers: [:], meta: meta, video: nil, videoId: meta.id,
+                                          title: "\(meta.name) · Trailer", startPositionMs: 0)
+            request.isTrailer = true
+            trailer = request
+        }
     }
 
     private func infoLine(_ meta: Meta) -> String {
@@ -151,6 +169,14 @@ struct DetailView: View {
                     } label: {
                         Label(watched ? "Watched" : "Mark watched", systemImage: watched ? "eye.fill" : "eye")
                     }
+                }
+                if app.core.hasTrailerApi && (!meta.trailerYtIds.isEmpty || !(enrichment?.trailerYoutubeKeys.isEmpty ?? true)) {
+                    Button {
+                        playTrailer(meta)
+                    } label: {
+                        Label(isLoadingTrailer ? "Loading…" : "Trailer", systemImage: "film")
+                    }
+                    .disabled(isLoadingTrailer)
                 }
                 Button {
                     app.toggleLibrary(meta)

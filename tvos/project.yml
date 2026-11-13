@@ -11,6 +11,10 @@ packages:
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
     exactVersion: 1.0.0
+  # HTML parsing for the plugins' cheerio bridge (Jsoup on Android).
+  SwiftSoup:
+    url: https://github.com/scinfu/SwiftSoup
+    exactVersion: 2.8.7
 configFiles:
   Debug: Config/Base.xcconfig
   Release: Config/Base.xcconfig
@@ -28,6 +32,9 @@ targets:
       - path: NuvioTV
         excludes:
           - Info.plist
+          - Resources
+      - path: NuvioTV/Resources
+        buildPhase: resources
       - path: Config
         buildPhase: none
     info:
@@ -66,5 +73,6 @@ targets:
         codeSign: true
       - package: MPVKit
         product: MPVKit
+      - package: SwiftSoup
     scheme:
       testTargets: []

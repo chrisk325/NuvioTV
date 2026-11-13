@@ -21,10 +21,14 @@ struct PlaybackRequest: Identifiable {
     var isLive = false
     var liveChannels: [LiveTvChannel] = []
     var liveIndex = 0
+    var isTrailer = false
+
+    /** Progress, scrobbling and add-on subtitles apply to real titles only. */
+    var tracksProgress: Bool { !isLive && !isTrailer }
 
     /// The episode after this one (watchable episodes only), for auto-next.
     var nextVideo: Video? {
-        guard !isLive, let video else { return nil }
+        guard tracksProgress, let video else { return nil }
         let episodes = meta.watchableEpisodes()
         guard let index = episodes.firstIndex(where: { $0.id == video.id }), index + 1 < episodes.count else { return nil }
         return episodes[index + 1]
