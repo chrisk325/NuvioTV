@@ -297,6 +297,9 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: MPVControllerDelegate
 
     func mpvDidUpdate(_ snapshot: MPVController.Snapshot) {
+        // Backstop: if the playhead is moving, we're not buffering, whatever the flags say.
+        let advancing = !snapshot.isPaused && snapshot.position > position + 0.05
+        let buffering = snapshot.isBuffering && !advancing
         if let request, snapshot.duration > 0 {
             if !scrobbledStart && !snapshot.isPaused && snapshot.position > 0 {
                 scrobbledStart = true
@@ -310,7 +313,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         position = snapshot.position
         duration = snapshot.duration
         isPaused = snapshot.isPaused
-        isBuffering = snapshot.isBuffering
+        isBuffering = buffering
         cacheSeconds = snapshot.cacheSeconds
         speed = snapshot.speed
         if duration > 0 { saveProgress() }

@@ -117,6 +117,14 @@ final class MPVController {
     private let queue = DispatchQueue(label: "nuvio.mpv.events", qos: .userInitiated)
     private var snapshot = Snapshot()
     private var didStartPlayback = false
+    // Buffering = loading a file, seeking, or waiting on the network cache (mpv's own signals).
+    private var waitingForFile = true
+    private var seeking = false
+    private var pausedForCache = false
+
+    private func updateBuffering() {
+        snapshot.isBuffering = waitingForFile || seeking || pausedForCache
+    }
     private var lastPublish = Date.distantPast
 
     init() {
@@ -195,6 +203,7 @@ final class MPVController {
         mpv_observe_property(mpv, 0, "pause", MPV_FORMAT_FLAG)
         mpv_observe_property(mpv, 0, "paused-for-cache", MPV_FORMAT_FLAG)
         mpv_observe_property(mpv, 0, "core-idle", MPV_FORMAT_FLAG)
+        mpv_observe_property(mpv, 0, "seeking", MPV_FORMAT_FLAG)
         mpv_observe_property(mpv, 0, "demuxer-cache-duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 0, "eof-reached", MPV_FORMAT_FLAG)
         mpv_observe_property(mpv, 0, "speed", MPV_FORMAT_DOUBLE)
@@ -233,6 +242,10 @@ final class MPVController {
         }
         if !options.title.isEmpty { set(property: "force-media-title", options.title) }
         didStartPlayback = false
+        queue.async { [weak self] in
+            self?.waitingForFile = true
+            self?.updateBuffering()
+        }
         var fileOptions: [String] = []
         if options.startSeconds > 1 { fileOptions.append("start=\(Int(options.startSeconds))") }
         // mpv ≥ 0.38: loadfile <url> <flags> <index> <options>
@@ -304,6 +317,8 @@ final class MPVController {
             guard let self, let mpv = self.handle else { return }
             var tracksChanged = false
             var videoParamsChanged = false
+            let wasBuffering = self.snapshot.isBuffering
+            let wasPaused = self.snapshot.isPaused
             var reachedEnd = false
             var failure: String?
             while true {
@@ -319,10 +334,19 @@ final class MPVController {
                     case "time-pos": self.snapshot.position = Self.doubleValue(property) ?? self.snapshot.position
                     case "duration": self.snapshot.duration = Self.doubleValue(property) ?? 0
                     case "pause": self.snapshot.isPaused = Self.flagValue(property) ?? false
-                    case "paused-for-cache": self.snapshot.isBuffering = Self.flagValue(property) ?? false
+                    case "paused-for-cache":
+                        self.pausedForCache = Self.flagValue(property) ?? false
+                        self.updateBuffering()
+                    case "seeking":
+                        self.seeking = Self.flagValue(property) ?? false
+                        self.updateBuffering()
                     case "core-idle":
                         let idle = Self.flagValue(property) ?? true
-                        if !idle { self.didStartPlayback = true; self.snapshot.isBuffering = false }
+                        if !idle {
+                            self.didStartPlayback = true
+                            self.waitingForFile = false
+                            self.updateBuffering()
+                        }
                     case "demuxer-cache-duration": self.snapshot.cacheSeconds = Self.doubleValue(property) ?? 0
                     case "speed": self.snapshot.speed = Self.doubleValue(property) ?? 1
                     case "eof-reached":
@@ -334,15 +358,26 @@ final class MPVController {
                 case MPV_EVENT_END_FILE:
                     if let raw = event.pointee.data {
                         let end = raw.assumingMemoryBound(to: mpv_event_end_file.self).pointee
+                        self.waitingForFile = false
+                        self.updateBuffering()
                         if end.reason == MPV_END_FILE_REASON_ERROR {
                             failure = String(cString: mpv_error_string(end.error))
                         } else if end.reason == MPV_END_FILE_REASON_EOF {
                             reachedEnd = true
                         }
                     }
+                case MPV_EVENT_START_FILE:
+                    self.waitingForFile = true
+                    self.updateBuffering()
                 case MPV_EVENT_FILE_LOADED:
                     tracksChanged = true
                     videoParamsChanged = true
+                case MPV_EVENT_PLAYBACK_RESTART:
+                    // First frame after loading or seeking is out.
+                    self.waitingForFile = false
+                    self.seeking = false
+                    self.didStartPlayback = true
+                    self.updateBuffering()
                 case MPV_EVENT_LOG_MESSAGE:
 #if DEBUG
                     if let raw = event.pointee.data {
@@ -359,7 +394,9 @@ final class MPVController {
 
             let snapshot = self.snapshot
             let now = Date()
-            let publishSnapshot = now.timeIntervalSince(self.lastPublish) > 0.25
+            // Position updates are throttled; state changes (buffering, pause) go out immediately.
+            let stateChanged = snapshot.isBuffering != wasBuffering || snapshot.isPaused != wasPaused
+            let publishSnapshot = stateChanged || now.timeIntervalSince(self.lastPublish) > 0.25
             if publishSnapshot { self.lastPublish = now }
             let tracks = tracksChanged ? self.readTracks() : nil
             let fps = videoParamsChanged ? self.double("container-fps") : 0
