@@ -1,0 +1,45 @@
+# XcodeGen spec for the tvOS app. Generate the project with: xcodegen generate
+# The NuvioShared framework must be built first: ./gradlew -p shared assembleNuvioSharedReleaseXCFramework
+name: NuvioTV
+options:
+  bundleIdPrefix: com.nuvio
+  deploymentTarget:
+    tvOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+targets:
+  NuvioTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: NuvioTV
+        excludes:
+          - Info.plist
+    info:
+      path: NuvioTV/Info.plist
+      properties:
+        CFBundleDisplayName: Nuvio
+        UIUserInterfaceStyle: Dark
+        UIRequiredDeviceCapabilities: [arm64]
+        # Add-ons and debrid/CDN streams are frequently plain HTTP.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nuvio.tv.appletv
+        PRODUCT_NAME: NuvioTV
+        TARGETED_DEVICE_FAMILY: "3"
+        # Kotlin/Native only builds arm64 simulator slices (Apple silicon).
+        "EXCLUDED_ARCHS[sdk=appletvsimulator*]": x86_64
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    dependencies:
+      - framework: ../shared/build/XCFrameworks/release/NuvioShared.xcframework
+        embed: true
+        codeSign: true
+    scheme:
+      testTargets: []

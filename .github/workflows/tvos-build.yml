@@ -1,0 +1,120 @@
+name: Build tvOS App
+
+on:
+  push:
+    paths:
+      - "shared/**"
+      - "tvos/**"
+      - "gradle/libs.versions.toml"
+      - ".github/workflows/tvos-build.yml"
+  pull_request:
+    paths:
+      - "shared/**"
+      - "tvos/**"
+      - "gradle/libs.versions.toml"
+      - ".github/workflows/tvos-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tvos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Shared core + tvOS app
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Test shared core (JVM)
+        run: ./gradlew -p shared jvmTest --no-daemon
+
+      - name: Build NuvioShared.xcframework
+        run: ./gradlew -p shared assembleNuvioSharedReleaseXCFramework --no-daemon
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd tvos
+          xcodegen generate
+
+      - name: Build for tvOS Simulator
+        working-directory: tvos
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project NuvioTV.xcodeproj \
+            -scheme NuvioTV \
+            -configuration Debug \
+            -sdk appletvsimulator \
+            -destination 'generic/platform=tvOS Simulator' \
+            -derivedDataPath build/sim \
+            CODE_SIGNING_ALLOWED=NO | tee build/xcodebuild-sim.log | grep -E "error:|warning: .*NuvioTV/|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/sim/Build/Products/Debug-appletvsimulator/NuvioTV.app
+
+      - name: Build for Apple TV device (unsigned)
+        working-directory: tvos
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project NuvioTV.xcodeproj \
+            -scheme NuvioTV \
+            -configuration Release \
+            -sdk appletvos \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath build/device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild-device.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          APP=build/device/Build/Products/Release-appletvos/NuvioTV.app
+          test -d "$APP"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -qry ../NuvioTV-unsigned.ipa Payload)
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: NuvioTV-tvOS-simulator
+          path: tvos/build/sim/Build/Products/Debug-appletvsimulator/NuvioTV.app
+          if-no-files-found: error
+
+      - name: Upload unsigned device IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NuvioTV-tvOS-unsigned-ipa
+          path: tvos/build/NuvioTV-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tvos-build-logs
+          path: tvos/build/*.log
+          if-no-files-found: ignore
