@@ -21,7 +21,7 @@ struct DetailView: View {
                 MessageView(title: "Couldn't load details", message: error)
             } else {
                 ZStack {
-                    RemoteImage(url: preview.backdropUrl).opacity(0.3).ignoresSafeArea()
+                    FullScreenBackdrop(url: preview.backdropUrl, opacity: 0.3)
                     LoadingView()
                 }
             }
@@ -130,15 +130,13 @@ struct DetailView: View {
             .padding(.bottom, 80)
         }
         .background {
-            RemoteImage(url: meta.backdropUrl)
-                .overlay(
-                    LinearGradient(
-                        colors: [.black.opacity(0.35), .black.opacity(0.85), .black],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+            FullScreenBackdrop(url: meta.backdropUrl) {
+                LinearGradient(
+                    colors: [.black.opacity(0.35), .black.opacity(0.85), .black],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-                .ignoresSafeArea()
+            }
         }
     }
 

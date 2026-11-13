@@ -17,6 +17,40 @@ struct RemoteImage: View {
     }
 }
 
+/// Artwork that always covers the whole screen, edge to edge (safe areas included), cropped
+/// to fill. Used behind details, Modern home and the Classic focus backdrop.
+struct FullScreenBackdrop<Overlay: View>: View {
+    let url: String?
+    var opacity: Double = 1
+    @ViewBuilder var overlay: () -> Overlay
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                if let url {
+                    RemoteImage(url: url)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .opacity(opacity)
+                        .id(url)
+                        .transition(.opacity)
+                }
+                overlay()
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.5), value: url)
+    }
+}
+
+extension FullScreenBackdrop where Overlay == EmptyView {
+    init(url: String?, opacity: Double = 1) {
+        self.init(url: url, opacity: opacity) { EmptyView() }
+    }
+}
+
 /// Calls [onFocus] when the enclosing focusable (card button) gains focus.
 struct FocusReporter: View {
     @Environment(\.isFocused) private var isFocused

@@ -138,19 +138,10 @@ struct FocusBackdrop: View {
     let url: String?
 
     var body: some View {
-        ZStack {
-            Color.black
-            if let url {
-                RemoteImage(url: url)
-                    .id(url)
-                    .blur(radius: 30)
-                    .opacity(0.45)
-                    .transition(.opacity)
-            }
+        FullScreenBackdrop(url: url, opacity: 0.45) {
             LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
         }
-        .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.5), value: url)
+        .blur(radius: 30, opaque: true)
     }
 }
 
@@ -236,18 +227,12 @@ struct ModernHomeView: View {
         let hero = focused ?? feed.heroItems(slots, core: app.core).first
         ZStack(alignment: .topLeading) {
             // Full-screen artwork of the focused title.
-            ZStack {
-                Color.black
-                if let url = hero?.backdropUrl {
-                    RemoteImage(url: url).id(url).transition(.opacity)
-                }
+            FullScreenBackdrop(url: hero?.backdropUrl) {
                 LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.2), .clear],
                                startPoint: .leading, endPoint: .trailing)
                 LinearGradient(colors: [.clear, .black.opacity(0.65), .black],
                                startPoint: .top, endPoint: .bottom)
             }
-            .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.5), value: hero?.id)
 
             VStack(alignment: .leading, spacing: 0) {
                 if let hero {
