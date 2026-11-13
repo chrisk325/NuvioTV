@@ -186,6 +186,7 @@ import com.nuvio.tv.libass.media.widget.AssSubtitleSurfaceView
 import com.nuvio.tv.libass.media.widget.AssCpuBlendSurfaceView
 import kotlin.math.abs
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 private const val PLAYER_CONTROLS_FADE_DURATION_MS = 200
@@ -232,6 +233,11 @@ fun PlayerScreen(
         },
         headers = remember(uiState.currentStreamUrl) { viewModel.getCurrentHeaders() },
     )
+    LaunchedEffect(seekPreview) {
+        val controller = seekPreview ?: return@LaunchedEffect
+        val timeline = viewModel.playbackTimeline.first { it.duration > 0L && !it.isLive }
+        controller.warmUp(timeline.currentPosition, timeline.duration)
+    }
     val partyState by viewModel.party.state.collectAsState()
     val partyPlayback by viewModel.party.playback.collectAsState()
     val partyAvailable by viewModel.party.available.collectAsState()
