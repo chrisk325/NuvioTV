@@ -26,6 +26,17 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     @Published private(set) var nextVideo: Video?
     @Published private(set) var isResolvingNext = false
     @Published var nextPromptDismissed = false
+    @Published private(set) var skipSegments: [SkipSegment] = []
+    private var skipLoadedFor: UUID?
+
+    /** The skip segment the playhead is in (shown as a "Skip intro" button). */
+    var activeSkipSegment: SkipSegment? {
+        skipSegments.first { position >= $0.startSeconds && position < $0.endSeconds - 1 }
+    }
+
+    func skip(_ segment: SkipSegment) {
+        seek(to: segment.endSeconds)
+    }
 
     weak var window: UIWindow?
     private var core: NuvioCore?
@@ -89,6 +100,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         }
         if let previous = self.request, previous.id != request.id { scrobble("stop", for: previous) }
         self.request = request
+        skipSegments = []
         scrobbledStart = false
         finished = false
         nextPromptDismissed = false
@@ -302,6 +314,13 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         cacheSeconds = snapshot.cacheSeconds
         speed = snapshot.speed
         if duration > 0 { saveProgress() }
+        if let request, !request.isLive, duration > 0, skipLoadedFor != request.id, let core {
+            skipLoadedFor = request.id
+            Task { @MainActor in
+                let segments = (try? await core.skipSegments(meta: request.meta, video: request.video, durationSeconds: duration)) ?? []
+                if self.request?.id == request.id { skipSegments = segments }
+            }
+        }
     }
 
     func mpvTracksChanged(_ tracks: [MPVTrack]) {

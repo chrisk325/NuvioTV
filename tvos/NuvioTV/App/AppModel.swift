@@ -41,11 +41,19 @@ final class AppModel: ObservableObject {
 
     var settings: AppSettings { core.settings }
 
+    @Published private(set) var cloudSyncError: String?
+
     func start() async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
+        await syncCloud()
         await refreshAddons()
         await syncTrackers()
+    }
+
+    /** Nuvio account sync (add-ons, library, progress, watched) shared with the Android app. */
+    func syncCloud() async {
+        cloudSyncError = (try? await core.syncCloud()) ?? nil
     }
 
     func syncTrackers() async {

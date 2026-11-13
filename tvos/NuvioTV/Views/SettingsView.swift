@@ -108,7 +108,7 @@ private struct SettingsForm: View {
             }
 
             Section("Accounts & services") {
-                NavigationLink("Trakt, Simkl & AniList") { AccountsView() }
+                NavigationLink("Nuvio account, Trakt, Simkl & AniList") { AccountsView() }
                 NavigationLink("Debrid (Torbox, Premiumize, Real-Debrid)") { DebridSettingsView() }
             }
 

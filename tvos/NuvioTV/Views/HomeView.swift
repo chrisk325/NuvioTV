@@ -154,11 +154,26 @@ struct CatalogGridView: View {
     @State private var hasMore = true
     @State private var isLoading = false
     @State private var error: String?
+    @State private var genre = ""
 
     private let columns = Array(repeating: GridItem(.fixed(220), spacing: 40), count: 7)
 
     var body: some View {
         ScrollView {
+            let genres = app.core.genres(slot: slot)
+            if !genres.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) {
+                        ForEach([""] + genres, id: \.self) { option in
+                            Button(option.isEmpty ? "All" : option) { select(genre: option) }
+                                .tint(option == genre ? .accentColor : nil)
+                        }
+                    }
+                    .padding(.horizontal, 60)
+                    .padding(.vertical, 20)
+                }
+                .focusSection()
+            }
             if let error, items.isEmpty {
                 MessageView(title: "Couldn't load catalog", message: error)
             }
@@ -177,13 +192,23 @@ struct CatalogGridView: View {
         .task { if items.isEmpty { await loadMore() } }
     }
 
+    private func select(genre option: String) {
+        guard option != genre else { return }
+        genre = option
+        items = []
+        nextSkip = 0
+        hasMore = true
+        error = nil
+        Task { await loadMore() }
+    }
+
     @MainActor
     private func loadMore() async {
         guard hasMore, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            let row = try await app.core.loadCatalog(slot: slot, skip: nextSkip)
+            let row = try await app.core.loadCatalogFiltered(slot: slot, skip: nextSkip, genre: genre)
             let known = Set(items.map(\.id))
             let fresh = row.items.filter { !known.contains($0.id) }
             items += fresh

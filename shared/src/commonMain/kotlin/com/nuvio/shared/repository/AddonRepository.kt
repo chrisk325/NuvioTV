@@ -138,6 +138,35 @@ class AddonRepository(
         persistAndPublish()
     }
 
+    /** Installed add-ons as (url, enabled) in priority order, for account sync. */
+    val syncSnapshot: List<Pair<String, Boolean>> get() = records.map { it.url to it.enabled }
+
+    /** Replaces the list with the account's, reusing cached manifests and fetching new ones. */
+    suspend fun replaceFromRemote(remote: List<Pair<String, Boolean>>) {
+        if (remote.isEmpty()) return
+        val known = mutex.withLock { records.associateBy { normalizeAddonKey(it.url) } }
+        val fresh = coroutineScope {
+            remote.map { (url, enabled) ->
+                async {
+                    val canonical = canonicalizeAddonUrl(url)
+                    val cached = known[normalizeAddonKey(canonical)]?.manifestJson
+                    val manifest = cached ?: try {
+                        client.fetchManifestJson(canonical)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    InstalledAddonRecord(canonical, enabled, manifest)
+                }
+            }.awaitAll()
+        }.distinctBy { normalizeAddonKey(it.url) }
+        mutex.withLock {
+            records = fresh
+            persistAndPublish()
+        }
+    }
+
     companion object {
         private const val KEY = "installed_addons_v1"
 

@@ -10,11 +10,45 @@ struct AccountsView: View {
     @State private var showAniList = false
     @State private var message: String?
     @State private var isSyncing = false
+    @State private var cloudLogin: CloudLoginBox?
+    @State private var showEmail = false
+    @State private var email = ""
+    @State private var password = ""
 
     private var core: NuvioCore { app.core }
 
     var body: some View {
         List {
+            Section("Nuvio account") {
+                if !core.cloud.isConfigured {
+                    Text("This build has no Nuvio account configuration.").foregroundStyle(.secondary)
+                } else if core.cloud.isSignedIn {
+                    LabeledContent("Signed in", value: core.cloud.email ?? "Nuvio")
+                    Button(isSyncing ? "Syncing…" : "Sync now") {
+                        Task { @MainActor in
+                            isSyncing = true
+                            await app.syncCloud()
+                            await app.refreshAddons()
+                            isSyncing = false
+                            message = app.cloudSyncError ?? "Add-ons, library, progress and watched history synced."
+                        }
+                    }
+                    .disabled(isSyncing)
+                    Button("Sign out", role: .destructive) { core.cloud.signOut(); revision += 1 }
+                } else {
+                    Button("Sign in with QR code") {
+                        message = nil
+                        Task { @MainActor in
+                            do {
+                                cloudLogin = CloudLoginBox(login: try await core.cloud.startTvLogin(deviceName: "Apple TV"))
+                            } catch {
+                                message = error.localizedDescription
+                            }
+                        }
+                    }
+                    Button("Sign in with email") { showEmail = true }
+                }
+            }
             Section("Trakt") {
                 if !core.trakt.isConfigured {
                     Text("This build has no Trakt client id.").foregroundStyle(.secondary)
@@ -77,6 +111,56 @@ struct AccountsView: View {
                 if success { Task { await app.syncTrackers() } }
             }
         }
+        .sheet(item: $cloudLogin) { box in
+            DeviceCodeSheet(
+                title: "Sign in to Nuvio",
+                code: box.login.code,
+                url: box.login.webUrl,
+                intervalSeconds: Int(box.login.pollIntervalSeconds),
+                poll: { try await core.cloud.pollTvLogin(login: box.login).boolValue }
+            ) { success in
+                cloudLogin = nil
+                revision += 1
+                if success {
+                    Task { @MainActor in
+                        await app.syncCloud()
+                        await app.refreshAddons()
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showEmail) {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Sign in to Nuvio").font(.title2).bold()
+                TextField("Email", text: $email)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Password", text: $password)
+                HStack(spacing: 30) {
+                    Button("Sign in") {
+                        Task { @MainActor in
+                            do {
+                                try await core.cloud.signInWithEmail(email: email, password: password)
+                                showEmail = false
+                                password = ""
+                                revision += 1
+                                await app.syncCloud()
+                                await app.refreshAddons()
+                            } catch {
+                                message = error.localizedDescription
+                                showEmail = false
+                            }
+                        }
+                    }
+                    .disabled(email.isEmpty || password.isEmpty)
+                    Button("Cancel", role: .cancel) { showEmail = false }
+                }
+            }
+            .padding(80)
+            .frame(maxWidth: 1200)
+        }
         .sheet(isPresented: $showAniList) {
             HStack(spacing: 60) {
                 QRCodeView(text: core.aniList.authorizeUrl)
@@ -115,6 +199,11 @@ struct AccountsView: View {
             }
         }
     }
+}
+
+private struct CloudLoginBox: Identifiable {
+    let login: CloudTvLogin
+    var id: String { login.code }
 }
 
 private struct SignInPrompt: Identifiable {

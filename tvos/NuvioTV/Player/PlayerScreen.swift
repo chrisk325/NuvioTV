@@ -16,7 +16,7 @@ struct PlayerContainer: View {
 }
 
 private enum PlayerFocus: Hashable {
-    case catcher, scrubber, audio, subtitles, adjust, speed, next, panel
+    case catcher, scrubber, audio, subtitles, adjust, speed, next, panel, skip
 }
 
 private enum PlayerPanel: Identifiable {
@@ -62,6 +62,20 @@ struct PlayerScreen: View {
                 controls.transition(.opacity)
             } else if let scrubTarget {
                 VStack { Spacer(); timeline(position: scrubTarget).padding(80) }
+            }
+
+            if let segment = model.activeSkipSegment, panel == nil, !model.showNextPrompt {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button(segment.label) { model.skip(segment) }
+                            .focused($focus, equals: .skip)
+                    }
+                }
+                .padding(.horizontal, 80)
+                .padding(.bottom, controlsVisible ? 260 : 80)
+                .onAppear { if !controlsVisible { focus = .skip } }
             }
 
             if model.showNextPrompt && panel == nil {

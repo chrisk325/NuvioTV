@@ -88,7 +88,9 @@ class NuvioCore(
     val aniList = AniListService(httpClient, store, config.aniListClientId)
     val mdbList = MdbListService(httpClient)
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)
+    val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
     val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
+    val cloud = com.nuvio.shared.cloud.NuvioCloud(httpClient, store, config.supabaseUrl.trimEnd('/'), config.supabaseAnonKey)
 
     // --- Add-ons ---------------------------------------------------------------------------
 
@@ -102,16 +104,64 @@ class NuvioCore(
     suspend fun refreshAddons(): List<String> = addonRepository.refreshAll()
 
     @Throws(Exception::class)
-    suspend fun installAddon(url: String): Addon = addonRepository.install(url)
+    suspend fun installAddon(url: String): Addon = addonRepository.install(url).also { pushAddonsToCloud() }
 
     @Throws(Exception::class)
-    suspend fun removeAddon(baseUrl: String) = addonRepository.remove(baseUrl)
+    suspend fun removeAddon(baseUrl: String) { addonRepository.remove(baseUrl); pushAddonsToCloud() }
 
     @Throws(Exception::class)
-    suspend fun setAddonEnabled(baseUrl: String, enabled: Boolean) = addonRepository.setEnabled(baseUrl, enabled)
+    suspend fun setAddonEnabled(baseUrl: String, enabled: Boolean) { addonRepository.setEnabled(baseUrl, enabled); pushAddonsToCloud() }
 
     @Throws(Exception::class)
-    suspend fun moveAddon(baseUrl: String, offset: Int) = addonRepository.move(baseUrl, offset)
+    suspend fun moveAddon(baseUrl: String, offset: Int) { addonRepository.move(baseUrl, offset); pushAddonsToCloud() }
+
+    private fun pushAddonsToCloud() {
+        if (!cloud.isSignedIn) return
+        val snapshot = addonRepository.syncSnapshot.mapIndexed { i, (url, enabled) -> com.nuvio.shared.cloud.CloudAddon(url, enabled, i) }
+        scope.launch { runCatching { cloud.pushAddons(snapshot) } }
+    }
+
+    /**
+     * Two-way Nuvio account sync (add-ons, library, progress, watched) with the Android app.
+     * The account wins for add-ons; library / watched are merged; progress keeps the newest.
+     * Returns an error text, or null.
+     */
+    @Throws(Exception::class)
+    suspend fun syncCloud(): String? {
+        if (!cloud.isSignedIn) return null
+        return try {
+            val remoteAddons = cloud.pullAddons()
+            if (remoteAddons.isNotEmpty()) addonRepository.replaceFromRemote(remoteAddons.map { it.url to it.enabled })
+            else pushAddonsToCloud()
+
+            val remoteLibrary = cloud.pullLibrary()
+            val localIds = library.items.value.map { it.id }.toSet()
+            remoteLibrary.filter { it.id !in localIds }.forEach { library.toggle(it) }
+            val remoteIds = remoteLibrary.map { it.id }.toSet()
+            cloud.pushLibrary(library.items.value.filter { it.id !in remoteIds })
+
+            cloud.pullProgress().forEach { remote ->
+                val local = watchProgress.progressFor(remote.videoId)
+                if (local == null || local.updatedAtMs < remote.updatedAtMs) {
+                    val imdb = remote.contentId.takeIf { it.startsWith("tt") }
+                    watchProgress.update(remote.copy(
+                        name = local?.name ?: library.items.value.firstOrNull { it.id == remote.contentId }?.name ?: remote.contentId,
+                        poster = local?.poster ?: imdb?.let(TraktService::poster),
+                        background = local?.background ?: imdb?.let(TraktService::background),
+                        logo = local?.logo,
+                        episodeTitle = local?.episodeTitle
+                    ))
+                }
+            }
+            cloud.pushProgress(watchProgress.entries.value.take(100))
+            watched.addAll(cloud.pullWatched())
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e.message ?: "Account sync failed"
+        }
+    }
 
     // --- Browsing --------------------------------------------------------------------------
 
@@ -125,6 +175,15 @@ class NuvioCore(
 
     @Throws(Exception::class)
     suspend fun loadCatalog(slot: CatalogSlot, skip: Int): CatalogRow = catalogRepository.loadSlot(slot, skip)
+
+    /** Catalog page filtered by genre ("" = all), for the "See all" grid. */
+    @Throws(Exception::class)
+    suspend fun loadCatalogFiltered(slot: CatalogSlot, skip: Int, genre: String): CatalogRow =
+        catalogRepository.loadRow(slot.addon, slot.catalog, skip, if (genre.isBlank()) emptyMap() else mapOf("genre" to genre))
+
+    /** Genre options a catalog declares (empty when it has no genre extra). */
+    fun genres(slot: CatalogSlot): List<String> =
+        slot.catalog.extra.firstOrNull { it.name.equals("genre", ignoreCase = true) }?.options.orEmpty()
 
     @Throws(Exception::class)
     suspend fun search(query: String): List<CatalogRow> =
@@ -251,6 +310,9 @@ class NuvioCore(
         if (isWatched) {
             val media = TrackedMedia.from(meta, video)
             scope.launch {
+                if (cloud.isSignedIn) runCatching {
+                    cloud.pushWatched(meta.id, meta.apiType, meta.name, video?.season, video?.episode)
+                }
                 runCatching { trakt.markWatched(media) }
                 runCatching { simkl.markWatched(media) }
                 runCatching { aniList.updateProgress(media, completedTitle = false) }
@@ -272,7 +334,11 @@ class NuvioCore(
         scope.launch {
             runCatching { trakt.scrobble(media, scrobble, progressPercent) }
             runCatching { simkl.scrobble(media, scrobble, progressPercent) }
+            if (scrobble == ScrobbleAction.STOP && cloud.isSignedIn) {
+                runCatching { cloud.pushProgress(watchProgress.entries.value.filter { it.contentId == meta.id }.take(5)) }
+            }
             if (scrobble == ScrobbleAction.STOP && progressPercent >= 80.0) {
+                if (cloud.isSignedIn) runCatching { cloud.pushWatched(meta.id, meta.apiType, meta.name, video?.season, video?.episode) }
                 watched.mark(watchedKey(meta, video), true)
                 runCatching { aniList.updateProgress(media, completedTitle = false) }
             }
@@ -324,6 +390,12 @@ class NuvioCore(
         if (trakt.isConnected && imdb != null) {
             scope.launch { runCatching { trakt.setShowInWatchlist(imdb, meta.isSeriesLike, saved) } }
         }
+        if (cloud.isSignedIn) scope.launch {
+            runCatching {
+                if (saved) cloud.pushLibrary(library.items.value.filter { it.id == meta.id })
+                else cloud.deleteLibrary(meta.id, meta.apiType)
+            }
+        }
     }
 
     /** Preview used to open the detail screen from a continue-watching card. */
@@ -335,6 +407,13 @@ class NuvioCore(
         background = progress.background,
         savedAtMs = progress.updatedAtMs
     ).toPreview()
+
+    /** Intro / recap / credits segments for the skip button (empty when disabled or unknown). */
+    @Throws(Exception::class)
+    suspend fun skipSegments(meta: Meta, video: Video?, durationSeconds: Double): List<com.nuvio.shared.tracking.SkipSegment> {
+        if (!settings.skipIntroEnabled) return emptyList()
+        return skipSegments.segments(TrackedMedia.from(meta, video), durationSeconds)
+    }
 
     // --- Release calendar -------------------------------------------------------------------
 
