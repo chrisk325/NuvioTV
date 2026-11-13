@@ -337,6 +337,7 @@ struct EpisodeRow: View {
                 Spacer(minLength: 0)
             }
             .padding(20)
+            .focusBorder()
         }
         .buttonStyle(.card)
     }

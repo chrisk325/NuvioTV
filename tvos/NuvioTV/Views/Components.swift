@@ -51,6 +51,28 @@ extension FullScreenBackdrop where Overlay == EmptyView {
     }
 }
 
+/// White border drawn inside a card while it has focus (tvOS card style lifts it with the card).
+struct FocusBorder: View {
+    @Environment(\.isFocused) private var isFocused
+    var cornerRadius: CGFloat = 12
+    var lineWidth: CGFloat = 4
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(Color.white, lineWidth: lineWidth)
+            .opacity(isFocused ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+            .allowsHitTesting(false)
+    }
+}
+
+extension View {
+    /// Adds the white focus border; apply inside a `.card` button's label.
+    func focusBorder(cornerRadius: CGFloat = 12) -> some View {
+        overlay(FocusBorder(cornerRadius: cornerRadius))
+    }
+}
+
 /// Calls [onFocus] when the enclosing focusable (card button) gains focus.
 struct FocusReporter: View {
     @Environment(\.isFocused) private var isFocused
@@ -89,6 +111,7 @@ struct PosterCard: View {
                 }
                 .frame(width: width, height: height)
                 .clipped()
+                .focusBorder()
                 .background(FocusReporter { onFocus?(item) })
             }
             .buttonStyle(.card)
@@ -123,6 +146,7 @@ struct LandscapeCard: View {
             }
             .frame(width: width, height: width * 9 / 16)
             .clipped()
+            .focusBorder()
             .background(FocusReporter { onFocus?(item) })
         }
         .buttonStyle(.card)

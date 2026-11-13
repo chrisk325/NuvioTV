@@ -149,6 +149,7 @@ struct ContinueWatchingRow: View {
                                 }
                                 .frame(width: 400, height: 225)
                                 .clipped()
+                                .focusBorder()
                                 .background(FocusReporter {
                                     guard let onFocus else { return }
                                     Task { @MainActor in onFocus(await app.continueWatchingPreview(progress)) }

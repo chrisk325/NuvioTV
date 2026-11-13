@@ -29,6 +29,7 @@ struct HeroCarousel: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: height)
                     .clipped()
+                    .focusBorder()
                     .background(FocusReporter { isFocused = true })
                 }
                 .buttonStyle(.card)
@@ -198,6 +199,7 @@ private struct GridSection: View {
                             }
                             .frame(width: 220, height: 326)
                             .background(Color.white.opacity(0.08))
+                            .focusBorder()
                         }
                         .buttonStyle(.card)
                     }
