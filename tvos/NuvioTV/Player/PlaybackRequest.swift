@@ -17,10 +17,14 @@ struct PlaybackRequest: Identifiable {
     var videoHash: String? = nil
     var videoSize: Int64 = 0
     var filename: String? = nil
+    /** Live TV: no progress, subtitles lookup, scrobbling or next episode; up/down zaps channels. */
+    var isLive = false
+    var liveChannels: [LiveTvChannel] = []
+    var liveIndex = 0
 
     /// The episode after this one (watchable episodes only), for auto-next.
     var nextVideo: Video? {
-        guard let video else { return nil }
+        guard !isLive, let video else { return nil }
         let episodes = meta.watchableEpisodes()
         guard let index = episodes.firstIndex(where: { $0.id == video.id }), index + 1 < episodes.count else { return nil }
         return episodes[index + 1]

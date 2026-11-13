@@ -7,6 +7,8 @@ struct RootView: View {
                 .tabItem { Label("Home", systemImage: "house") }
             NavigationStack { SearchView().nuvioDestinations() }
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
+            NavigationStack { LiveTvView() }
+                .tabItem { Label("Live TV", systemImage: "tv") }
             NavigationStack { LibraryView().nuvioDestinations() }
                 .tabItem { Label("Library", systemImage: "bookmark") }
             NavigationStack { AddonsView() }

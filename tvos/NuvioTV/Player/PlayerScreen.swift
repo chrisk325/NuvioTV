@@ -133,7 +133,15 @@ struct PlayerScreen: View {
                     model.togglePause()
                     scheduleHide()
                 }) {
-                    timeline(position: scrubTarget ?? model.position)
+                    if model.request?.isLive == true && model.duration <= 0 {
+                        HStack(spacing: 16) {
+                            Text("LIVE").font(.caption.bold()).padding(.horizontal, 12).padding(.vertical, 4)
+                                .background(Color.red, in: Capsule())
+                            Text("▲ / ▼ to change channel").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        timeline(position: scrubTarget ?? model.position)
+                    }
                 }
                 .buttonStyle(InvisibleButtonStyle())
                 .focused($focus, equals: .scrubber)
@@ -376,6 +384,13 @@ struct PlayerScreen: View {
     }
 
     private func handleMoveWhileHidden(_ direction: MoveCommandDirection) {
+        if model.request?.isLive == true {
+            switch direction {
+            case .up: model.zap(by: -1); return
+            case .down: model.zap(by: 1); return
+            default: break
+            }
+        }
         switch direction {
         case .left: stepScrub(-seekStep)
         case .right: stepScrub(seekStep)

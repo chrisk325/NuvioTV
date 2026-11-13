@@ -14,8 +14,26 @@ data class Stream(
     val addonName: String,
     val addonLogo: String?,
     val sources: List<String>? = null,
-    val subtitles: List<Subtitle> = emptyList()
+    val subtitles: List<Subtitle> = emptyList(),
+    val clientResolve: StreamClientResolve? = null,
+    /** Set when the stream was checked against the user's debrid service. */
+    val debridCache: StreamDebridCache? = null,
+    /** True when [url] was produced by Nuvio's own debrid resolver. */
+    val debridResolved: Boolean = false
 ) {
+    /** Info hash from the stream, its clientResolve block, or a magnet / torrent: URL. */
+    fun effectiveInfoHash(): String? =
+        infoHash?.takeIf { it.isNotBlank() }
+            ?: clientResolve?.infoHash?.takeIf { it.isNotBlank() }
+            ?: listOfNotNull(url, externalUrl, clientResolve?.magnetUri).firstNotNullOfOrNull { extractInfoHash(it) }
+
+    fun effectiveFileIdx(): Int? = fileIdx ?: clientResolve?.fileIdx
+
+    /** Torrent the user's debrid service could resolve (tvOS has no torrent engine). */
+    val needsDebridResolve: Boolean
+        get() = !isDirectlyPlayable && (isTorrent() || clientResolve?.type.equals("debrid", ignoreCase = true) ||
+            clientResolve?.type.equals("torrent", ignoreCase = true)) && effectiveInfoHash() != null
+
     /** Primary playable URL (never a magnet / torrent: link). */
     fun getStreamUrl(): String? =
         listOfNotNull(url, externalUrl).firstOrNull { !it.isMagnetLink() && !it.isTorrentUrl() }
@@ -109,6 +127,39 @@ data class StreamsUpdate(
     val isComplete: Boolean,
     val failedAddons: List<String>
 )
+
+/** `clientResolve` block emitted by debrid-aware add-ons (Comet, AIOStreams, …). */
+data class StreamClientResolve(
+    val type: String?,
+    val infoHash: String?,
+    val fileIdx: Int?,
+    val magnetUri: String?,
+    val sources: List<String>?,
+    val torrentName: String?,
+    val filename: String?,
+    val season: Int?,
+    val episode: Int?,
+    val service: String?,
+    val isCached: Boolean?
+)
+
+data class StreamDebridCache(
+    val providerId: String,
+    val providerName: String,
+    val isCached: Boolean
+)
+
+internal fun extractInfoHash(value: String): String? {
+    val trimmed = value.trim()
+    val candidate = when {
+        trimmed.startsWith("magnet:", ignoreCase = true) ->
+            trimmed.substringAfter("urn:btih:", "").substringBefore('&').substringBefore('?')
+        trimmed.startsWith("torrent:", ignoreCase = true) ->
+            trimmed.substringAfter("torrent://").substringAfter("torrent:").substringBefore('?').substringBefore('/')
+        else -> return null
+    }
+    return candidate.takeIf { it.length == 40 || it.length == 32 }
+}
 
 private fun String?.isMagnetLink(): Boolean =
     this?.trimStart()?.startsWith("magnet:", ignoreCase = true) == true

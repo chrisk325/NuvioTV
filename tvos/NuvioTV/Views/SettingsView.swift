@@ -107,6 +107,11 @@ private struct SettingsForm: View {
                           value: s.bind({ Int($0.subtitleDelayMs) }, { $0.subtitleDelayMs = Int32($1) }))
             }
 
+            Section("Accounts & services") {
+                NavigationLink("Trakt, Simkl & AniList") { AccountsView() }
+                NavigationLink("Debrid (Torbox, Premiumize, Real-Debrid)") { DebridSettingsView() }
+            }
+
             Section("Home") {
                 Toggle("Continue Watching row", isOn: s.bind({ $0.showContinueWatching }, { $0.showContinueWatching = $1 }))
                 NavigationLink("Catalogs on Home") { HomeCatalogsSettings(binder: binder) }

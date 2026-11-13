@@ -15,6 +15,7 @@ import com.nuvio.shared.model.PosterShape
 import com.nuvio.shared.model.ProxyHeaders
 import com.nuvio.shared.model.Stream
 import com.nuvio.shared.model.StreamBehaviorHints
+import com.nuvio.shared.model.StreamClientResolve
 import com.nuvio.shared.model.Subtitle
 import com.nuvio.shared.model.Video
 import kotlinx.serialization.json.JsonArray
@@ -279,6 +280,21 @@ internal fun JsonObject.toStream(addonName: String, addonLogo: String?): Stream 
     addonName = addonName,
     addonLogo = addonLogo,
     sources = strings("sources").takeIf { it.isNotEmpty() },
+    clientResolve = obj("clientResolve")?.let { cr ->
+        StreamClientResolve(
+            type = cr.nonBlank("type"),
+            infoHash = cr.nonBlank("infoHash"),
+            fileIdx = cr.int("fileIdx"),
+            magnetUri = cr.nonBlank("magnetUri"),
+            sources = cr.strings("sources").takeIf { it.isNotEmpty() },
+            torrentName = cr.nonBlank("torrentName"),
+            filename = cr.nonBlank("filename") ?: cr.obj("stream")?.obj("raw")?.nonBlank("filename"),
+            season = cr.int("season"),
+            episode = cr.int("episode"),
+            service = cr.nonBlank("service"),
+            isCached = cr.bool("isCached")
+        )
+    },
     subtitles = objects("subtitles").mapNotNull { sub ->
         val url = sub.nonBlank("url") ?: return@mapNotNull null
         Subtitle(

@@ -40,3 +40,22 @@ private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
     val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
     return era * 146097L + doe - 719468L
 }
+
+/** [year, month, day, hour, minute, second] (zero-padded) in UTC for epoch seconds. */
+fun utcFields(epochSeconds: Long): List<String> {
+    val days = epochSeconds.floorDiv(86_400L)
+    val secs = epochSeconds.mod(86_400L)
+    // civil_from_days (Howard Hinnant)
+    val z = days + 719468
+    val era = (if (z >= 0) z else z - 146096) / 146097
+    val doe = z - era * 146097
+    val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    val y = yoe + era * 400
+    val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    val mp = (5 * doy + 2) / 153
+    val d = doy - (153 * mp + 2) / 5 + 1
+    val m = if (mp < 10) mp + 3 else mp - 9
+    val year = if (m <= 2) y + 1 else y
+    fun two(v: Long) = v.toString().padStart(2, '0')
+    return listOf(year.toString().padStart(4, '0'), two(m), two(d), two(secs / 3600), two(secs % 3600 / 60), two(secs % 60))
+}

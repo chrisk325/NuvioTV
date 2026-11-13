@@ -34,6 +34,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     private var streamSubscription: CoreSubscription?
     private var finished = false
     private var started = false
+    private var scrobbledStart = false
+    private var lastPausedState = false
 
     var remaining: Double { max(0, duration - position) }
 
@@ -85,7 +87,9 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             errorMessage = "Invalid stream URL."
             return
         }
+        if let previous = self.request, previous.id != request.id { scrobble("stop", for: previous) }
         self.request = request
+        scrobbledStart = false
         finished = false
         nextPromptDismissed = false
         errorMessage = nil
@@ -105,6 +109,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     func stop() {
         saveProgress(force: true)
+        if let request { scrobble("stop", for: request) }
         streamSubscription?.cancel()
         streamSubscription = nil
         controller.pause()
@@ -115,7 +120,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Add-on subtitles
 
     private func loadSubtitles(for request: PlaybackRequest) async {
-        guard let core, let settings else { return }
+        guard let core, let settings, !request.isLive else { return }
         var list: [Subtitle] = request.streamSubtitles
         if settings.loadAddonSubtitles {
             isLoadingAddonSubtitles = true
@@ -178,6 +183,39 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         settings?.subtitleSize = Int32(subtitleScale * 100)
     }
 
+    // MARK: Live TV zapping
+
+    @Published private(set) var isZapping = false
+
+    func zap(by offset: Int) {
+        guard let core, let request, request.isLive, !request.liveChannels.isEmpty, !isZapping else { return }
+        let count = request.liveChannels.count
+        let index = ((request.liveIndex + offset) % count + count) % count
+        let channel = request.liveChannels[index]
+        isZapping = true
+        Task { @MainActor in
+            defer { isZapping = false }
+            do {
+                let playback = try await core.liveTv.playback(channel: channel)
+                var next = PlaybackRequest(
+                    url: playback.url,
+                    headers: playback.headers,
+                    meta: core.liveTvMeta(channel: channel),
+                    video: nil,
+                    videoId: channel.id,
+                    title: playback.title,
+                    startPositionMs: 0
+                )
+                next.isLive = true
+                next.liveChannels = request.liveChannels
+                next.liveIndex = index
+                play(next)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: Next episode
 
     func playNext() {
@@ -216,7 +254,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Progress
 
     private func saveProgress(force: Bool = false, completed: Bool = false) {
-        guard let core, let request, duration > 0 else { return }
+        guard let core, let request, !request.isLive, duration > 0 else { return }
         if !force, Date().timeIntervalSince(lastSavedAt) < 10 { return }
         lastSavedAt = Date()
         let pos = (completed || finished) ? duration : position
@@ -232,9 +270,31 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         )
     }
 
+    // MARK: Scrobbling (Trakt / Simkl / AniList via the shared core)
+
+    private var progressPercent: Double {
+        guard duration > 0 else { return 0 }
+        return min(100, max(0, (finished ? duration : position) / duration * 100))
+    }
+
+    private func scrobble(_ action: String, for request: PlaybackRequest) {
+        guard !request.isLive else { return }
+        core?.reportPlayback(meta: request.meta, video: request.video, action: action, progressPercent: progressPercent)
+    }
+
     // MARK: MPVControllerDelegate
 
     func mpvDidUpdate(_ snapshot: MPVController.Snapshot) {
+        if let request, snapshot.duration > 0 {
+            if !scrobbledStart && !snapshot.isPaused && snapshot.position > 0 {
+                scrobbledStart = true
+                lastPausedState = false
+                scrobble("start", for: request)
+            } else if scrobbledStart && snapshot.isPaused != lastPausedState {
+                lastPausedState = snapshot.isPaused
+                scrobble(snapshot.isPaused ? "pause" : "start", for: request)
+            }
+        }
         position = snapshot.position
         duration = snapshot.duration
         isPaused = snapshot.isPaused

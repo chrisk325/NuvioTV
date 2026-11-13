@@ -8,6 +8,8 @@ struct DetailView: View {
     @State private var meta: Meta?
     @State private var error: String?
     @State private var selectedSeason: Int32 = 1
+    @State private var enrichment: TmdbEnrichment?
+    @State private var ratings: [ExternalRating] = []
 
     var body: some View {
         Group {
@@ -23,6 +25,17 @@ struct DetailView: View {
             }
         }
         .task(id: preview.id) { await load() }
+    }
+
+    private func infoLine(_ meta: Meta) -> String {
+        var line = meta.infoLine
+        if meta.ageRating == nil, let cert = enrichment?.certification {
+            line = line.isEmpty ? cert : line + "  ·  " + cert
+        }
+        if let networks = enrichment?.networks, !networks.isEmpty, meta.isSeriesLike {
+            line += "  ·  " + networks.prefix(2).joined(separator: ", ")
+        }
+        return line
     }
 
     @MainActor
@@ -42,6 +55,9 @@ struct DetailView: View {
                 selectedSeason = seasons.first ?? 1
             }
             meta = loaded
+            // Kotlin suspend functions must be called on the main thread, so no `async let` here.
+            enrichment = (try? await app.core.tmdbEnrichment(meta: loaded)) ?? nil
+            ratings = (try? await app.core.ratings(meta: loaded)) ?? []
         } catch {
             self.error = error.localizedDescription
         }
@@ -55,7 +71,9 @@ struct DetailView: View {
                 if meta.isSeriesLike && !meta.videos.isEmpty {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason)
                 }
-                if !meta.cast.isEmpty {
+                if let enrichment, !enrichment.cast.isEmpty {
+                    PeopleRow(title: "Cast", people: enrichment.cast)
+                } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
                         Text(meta.cast.prefix(12).joined(separator: ", "))
@@ -63,12 +81,20 @@ struct DetailView: View {
                     }
                     .padding(.horizontal, 80)
                 }
-                if !meta.director.isEmpty {
+                if let enrichment, !enrichment.crew.isEmpty {
+                    PeopleRow(title: "Crew", people: enrichment.crew)
+                } else if !meta.director.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Director").font(.headline)
                         Text(meta.director.joined(separator: ", ")).foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 80)
+                }
+                if let enrichment, !enrichment.collectionParts.isEmpty {
+                    MetaRowView(title: enrichment.collectionName ?? "Collection", items: enrichment.collectionParts)
+                }
+                if let enrichment, !enrichment.recommendations.isEmpty {
+                    MetaRowView(title: "More like this", items: enrichment.recommendations)
                 }
             }
             .padding(.bottom, 80)
@@ -89,14 +115,28 @@ struct DetailView: View {
     @ViewBuilder
     private func hero(_ meta: Meta) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            if let logo = meta.logo {
+            if let logo = meta.logo ?? enrichment?.logo {
                 RemoteImage(url: logo, contentMode: .fit)
                     .frame(maxWidth: 600, maxHeight: 200, alignment: .leading)
             } else {
                 Text(meta.name).font(.largeTitle).bold()
             }
-            Text(meta.infoLine).font(.callout).foregroundStyle(.secondary)
-            if let description = meta.description_, !description.isEmpty {
+            Text(infoLine(meta)).font(.callout).foregroundStyle(.secondary)
+            if !ratings.isEmpty {
+                HStack(spacing: 16) {
+                    ForEach(ratings, id: \.source) { rating in
+                        Text("\(rating.label) \(rating.value)")
+                            .font(.caption)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+            if let tagline = enrichment?.tagline {
+                Text(tagline).font(.callout).italic().foregroundStyle(.secondary)
+            }
+            if let description = meta.description_ ?? enrichment?.overview, !description.isEmpty {
                 Text(description)
                     .font(.body)
                     .lineLimit(5)
@@ -104,6 +144,14 @@ struct DetailView: View {
             }
             HStack(spacing: 30) {
                 playButton(meta)
+                if !meta.isSeriesLike {
+                    let watched = app.isWatched(meta, nil)
+                    Button {
+                        app.core.setWatched(meta: meta, video: nil, isWatched: !watched)
+                    } label: {
+                        Label(watched ? "Watched" : "Mark watched", systemImage: watched ? "eye.fill" : "eye")
+                    }
+                }
                 Button {
                     app.toggleLibrary(meta)
                 } label: {
@@ -184,7 +232,18 @@ struct EpisodesSection: View {
 
             LazyVStack(alignment: .leading, spacing: 24) {
                 ForEach(meta.episodesForSeason(season: selectedSeason), id: \.id) { video in
-                    EpisodeRow(meta: meta, video: video, progress: app.core.progressFor(videoId: video.id))
+                    EpisodeRow(
+                        meta: meta,
+                        video: video,
+                        progress: app.core.progressFor(videoId: video.id),
+                        isWatched: app.isWatched(meta, video)
+                    )
+                    .contextMenu {
+                        let watched = app.isWatched(meta, video)
+                        Button(watched ? "Mark unwatched" : "Mark watched") {
+                            app.core.setWatched(meta: meta, video: video, isWatched: !watched)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 80)
@@ -197,6 +256,7 @@ struct EpisodeRow: View {
     let meta: Meta
     let video: Video
     let progress: WatchProgress?
+    var isWatched = false
 
     var body: some View {
         NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
@@ -219,9 +279,14 @@ struct EpisodeRow: View {
                 .cornerRadius(12)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("\(video.episode?.int32Value ?? 0). \(video.title)")
-                        .font(.headline)
-                        .lineLimit(1)
+                    HStack(spacing: 12) {
+                        Text("\(video.episode?.int32Value ?? 0). \(video.title)")
+                            .font(.headline)
+                            .lineLimit(1)
+                        if isWatched {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        }
+                    }
                     HStack(spacing: 16) {
                         if let released = video.released { Text(String(released.prefix(10))) }
                         if video.runtimeMinutes > 0 { Text("\(video.runtimeMinutes) min") }

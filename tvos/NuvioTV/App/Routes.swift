@@ -18,6 +18,7 @@ enum Route: Hashable {
     case detail(MetaPreview)
     case streams(StreamTarget)
     case catalog(CatalogSlot)
+    case person(Int32)
 }
 
 struct RouteDestination: View {
@@ -31,6 +32,8 @@ struct RouteDestination: View {
             StreamsView(target: target)
         case .catalog(let slot):
             CatalogGridView(slot: slot)
+        case .person(let id):
+            PersonView(personId: id)
         }
     }
 }

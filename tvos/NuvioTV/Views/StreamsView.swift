@@ -10,6 +10,8 @@ struct StreamsView: View {
     @State private var playback: PlaybackRequest?
     @State private var showUnplayable: AddonStream?
     @State private var autoPlayed = false
+    @State private var resolving: AddonStream?
+    @State private var resolveError: String?
 
     var body: some View {
         Group {
@@ -36,6 +38,22 @@ struct StreamsView: View {
         .fullScreenCover(item: $playback) { request in
             PlayerContainer(request: request)
                 .environmentObject(app)
+        }
+        .alert(
+            "Debrid couldn't play this stream",
+            isPresented: Binding(get: { resolveError != nil }, set: { if !$0 { resolveError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(resolveError ?? "")
+        }
+        .overlay {
+            if resolving != nil {
+                ZStack {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    LoadingView(label: "Resolving with \(app.core.debrid.preferredProviderId.isEmpty ? "debrid" : app.core.debrid.preferredProviderId)…")
+                }
+            }
         }
         .alert(
             "Can't play this stream on Apple TV",
@@ -90,7 +108,7 @@ struct StreamsView: View {
                         Button {
                             select(stream)
                         } label: {
-                            StreamRow(stream: stream)
+                            StreamRow(stream: stream, debridEnabled: app.core.debrid.hasAnyProvider)
                         }
                     }
                 }
@@ -100,13 +118,24 @@ struct StreamsView: View {
 
     /// Directly playable streams first, then by quality.
     private func sorted(_ streams: [AddonStream]) -> [AddonStream] {
-        streams.enumerated().sorted { a, b in
-            if a.element.isDirectlyPlayable != b.element.isDirectlyPlayable { return a.element.isDirectlyPlayable }
-            return a.offset < b.offset
-        }.map(\.element)
+        let debrid = app.core.debrid.hasAnyProvider
+        func playable(_ s: AddonStream) -> Bool {
+            s.isDirectlyPlayable || (debrid && s.needsDebridResolve && s.debridCache?.isCached != false)
+        }
+        return streams.enumerated()
+            .filter { debrid ? (app.core.debrid.showUncached || $0.element.debridCache?.isCached != false) : true }
+            .sorted { a, b in
+                if playable(a.element) != playable(b.element) { return playable(a.element) }
+                return a.offset < b.offset
+            }
+            .map(\.element)
     }
 
     private func select(_ stream: AddonStream) {
+        if stream.needsDebridResolve && app.core.debrid.hasAnyProvider {
+            resolveWithDebrid(stream)
+            return
+        }
         guard let url = stream.directPlaybackUrl else {
             if stream.isExternal(), let external = stream.externalUrl, let link = URL(string: external) {
                 // tvOS has no browser; try handing the link to whichever app claims it.
@@ -124,9 +153,31 @@ struct StreamsView: View {
         )
     }
 
+    private func resolveWithDebrid(_ stream: AddonStream) {
+        guard resolving == nil else { return }
+        resolving = stream
+        Task { @MainActor in
+            defer { resolving = nil }
+            do {
+                let playable = try await app.core.debrid.resolveToPlayable(
+                    stream: stream,
+                    season: target.video?.season?.int32Value ?? 0,
+                    episode: target.video?.episode?.int32Value ?? 0
+                )
+                playback = PlaybackRequest.make(
+                    stream: playable,
+                    target: target,
+                    resume: app.core.progressFor(videoId: target.videoId)
+                )
+            } catch {
+                resolveError = error.localizedDescription
+            }
+        }
+    }
+
     private func unplayableReason(_ stream: AddonStream) -> String {
-        if stream.isTorrent() {
-            return "This is a torrent stream. The Apple TV app has no torrent engine yet; use a debrid add-on that returns HTTP links."
+        if stream.isTorrent() || stream.needsDebridResolve {
+            return "This is a torrent stream. Connect Torbox, Premiumize or Real-Debrid in Settings ▸ Debrid to play it."
         }
         if stream.isYouTube() {
             return "YouTube streams aren't supported in the Apple TV app yet."
@@ -137,6 +188,11 @@ struct StreamsView: View {
 
 struct StreamRow: View {
     let stream: AddonStream
+    var debridEnabled = false
+
+    private var isPlayable: Bool {
+        stream.isDirectlyPlayable || (debridEnabled && stream.needsDebridResolve)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
@@ -152,12 +208,18 @@ struct StreamRow: View {
                 }
             }
             Spacer()
-            if stream.isTorrent() {
-                Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
+            if let cache = stream.debridCache {
+                Text(cache.isCached ? "⚡ \(cache.providerName)" : "\(cache.providerName) · not cached")
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background((cache.isCached ? Color.green : Color.gray).opacity(0.35), in: Capsule())
+            } else if stream.needsDebridResolve {
+                Image(systemName: debridEnabled ? "bolt.circle" : "arrow.down.circle").foregroundStyle(.secondary)
             } else if !stream.isDirectlyPlayable {
                 Image(systemName: "nosign").foregroundStyle(.secondary)
             }
         }
-        .opacity(stream.isDirectlyPlayable ? 1 : 0.5)
+        .opacity(isPlayable ? 1 : 0.5)
     }
 }

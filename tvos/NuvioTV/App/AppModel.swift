@@ -17,6 +17,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var library: [SavedItem] = []
     @Published private(set) var isRefreshingAddons = false
     @Published private(set) var failedAddonUrls: [String] = []
+    @Published private(set) var watched: Set<String> = []
+    @Published private(set) var traktWatchlist: [MetaPreview] = []
+    @Published private(set) var trackerSyncError: String?
 
     private var subscriptions: [CoreSubscription] = []
 
@@ -31,6 +34,9 @@ final class AppModel: ObservableObject {
         subscriptions.append(core.observeLibrary { [weak self] list in
             MainActor.assumeIsolated { self?.library = list }
         })
+        subscriptions.append(core.observeWatched { [weak self] set in
+            MainActor.assumeIsolated { self?.watched = set }
+        })
     }
 
     var settings: AppSettings { core.settings }
@@ -39,6 +45,16 @@ final class AppModel: ObservableObject {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         await refreshAddons()
+        await syncTrackers()
+    }
+
+    func syncTrackers() async {
+        trackerSyncError = try? await core.syncTrackers()
+        traktWatchlist = core.traktWatchlistCache
+    }
+
+    func isWatched(_ meta: Meta, _ video: Video?) -> Bool {
+        watched.contains(core.watchedKey(meta: meta, video: video))
     }
 
     func refreshAddons() async {
