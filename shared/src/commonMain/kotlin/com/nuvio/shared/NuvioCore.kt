@@ -629,6 +629,29 @@ class NuvioCore(
         links = emptyList()
     )
 
+    /**
+     * Full preview for a Continue Watching entry (logo, description, genres, year…) from the
+     * title's add-on meta; progress only stores name and artwork. Falls back to the basic preview.
+     */
+    @Throws(Exception::class)
+    suspend fun continueWatchingPreview(progress: WatchProgress): MetaPreview {
+        val basic = previewFor(progress)
+        val meta = metaRepository.cached(progress.contentType, progress.contentId)
+            ?: try {
+                meta(progress.contentType, progress.contentId, null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return basic
+            }
+        val full = meta.toPreview()
+        return full.copy(
+            background = full.background ?: basic.background,
+            poster = full.poster ?: basic.poster,
+            logo = full.logo ?: progress.logo
+        )
+    }
+
     fun close() = scope.cancel()
 
     internal fun <T> observe(flow: Flow<T>, onChange: (T) -> Unit): CoreSubscription =

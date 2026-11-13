@@ -33,7 +33,10 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated { self?.addons = list }
         })
         subscriptions.append(core.observeContinueWatching { [weak self] list in
-            MainActor.assumeIsolated { self?.continueWatching = list }
+            MainActor.assumeIsolated {
+                self?.continueWatching = list
+                self?.preloadContinueWatchingPreviews()
+            }
         })
         subscriptions.append(core.observeLibrary { [weak self] list in
             MainActor.assumeIsolated { self?.library = list }
@@ -86,6 +89,29 @@ final class AppModel: ObservableObject {
     func syncTrackers() async {
         trackerSyncError = try? await core.syncTrackers()
         traktWatchlist = core.traktWatchlistCache
+    }
+
+    /// Full previews for Continue Watching items (logo, description…), keyed by content id.
+    private(set) var continueWatchingPreviews: [String: MetaPreview] = [:]
+    private var loadingPreviews: Set<String> = []
+
+    func continueWatchingPreview(_ progress: WatchProgress) async -> MetaPreview {
+        if let cached = continueWatchingPreviews[progress.contentId] { return cached }
+        let preview = (try? await core.continueWatchingPreview(progress: progress)) ?? core.previewFor(progress: progress)
+        continueWatchingPreviews[progress.contentId] = preview
+        return preview
+    }
+
+    /// Loads full previews for the first Continue Watching items so the hero is ready on focus.
+    func preloadContinueWatchingPreviews() {
+        for progress in continueWatching.prefix(10)
+        where continueWatchingPreviews[progress.contentId] == nil && !loadingPreviews.contains(progress.contentId) {
+            loadingPreviews.insert(progress.contentId)
+            Task { @MainActor in
+                _ = await continueWatchingPreview(progress)
+                loadingPreviews.remove(progress.contentId)
+            }
+        }
     }
 
     func isWatched(_ meta: Meta, _ video: Video?) -> Bool {

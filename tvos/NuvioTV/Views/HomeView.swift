@@ -149,7 +149,10 @@ struct ContinueWatchingRow: View {
                                 }
                                 .frame(width: 400, height: 225)
                                 .clipped()
-                                .background(FocusReporter { onFocus?(app.core.previewFor(progress: progress)) })
+                                .background(FocusReporter {
+                                    guard let onFocus else { return }
+                                    Task { @MainActor in onFocus(await app.continueWatchingPreview(progress)) }
+                                })
                             }
                             .buttonStyle(.card)
                             Text(subtitle(progress))
