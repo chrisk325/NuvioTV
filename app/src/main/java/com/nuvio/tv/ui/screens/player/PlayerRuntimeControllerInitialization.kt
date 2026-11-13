@@ -1802,6 +1802,9 @@ internal fun PlayerRuntimeController.initializePlayer(
                         if (tryRefreshExpiredLinkAfterError(detailedError)) {
                             return
                         }
+                        if (tryFallbackToNextSourceAfterError(detailedError)) {
+                            return
+                        }
 
                         // ── Main Engine Failover ──
                         if (maybeAutoSwitchInternalPlayerOnStartupError(detailedError = detailedError, allowEngineFailover = allowEngineFailover)) {
@@ -2267,6 +2270,7 @@ internal fun PlayerRuntimeController.buildStartupSubtitleConfigurations(startupS
 internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     cancelFirstFrameWatchdog()
     cancelStallWatchdog()
+    scheduleSourceStartupTimeout()
     val preparingMessage = context.getString(R.string.player_loading_preparing)
     resetLoadingDiagnostics(
         phase = "preparing",
