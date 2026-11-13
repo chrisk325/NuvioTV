@@ -14,22 +14,37 @@ struct StreamsView: View {
     @State private var resolveError: String?
 
     var body: some View {
-        Group {
-            if let update, !update.groups.isEmpty {
-                list(update)
-            } else if let update, update.isComplete {
-                MessageView(
-                    title: "No streams found",
-                    message: update.failedAddons.isEmpty
-                        ? "None of your add-ons returned streams for this title."
-                        : "Failed: \(update.failedAddons.joined(separator: ", "))",
-                    systemImage: "play.slash"
-                )
-            } else {
-                LoadingView(label: "Finding streams…")
+        ZStack {
+            // The title's artwork behind everything, dimmed toward the stream cards.
+            FullScreenBackdrop(url: target.meta.backdropUrl) {
+                LinearGradient(colors: [.black.opacity(0.85), .black.opacity(0.55), .black.opacity(0.75)],
+                               startPoint: .leading, endPoint: .trailing)
             }
+
+            HStack(alignment: .top, spacing: 60) {
+                header
+                    .frame(width: 520, alignment: .topLeading)
+                    .padding(.top, 40)
+
+                Group {
+                    if let update, !update.groups.isEmpty {
+                        list(update)
+                    } else if let update, update.isComplete {
+                        MessageView(
+                            title: "No streams found",
+                            message: update.failedAddons.isEmpty
+                                ? "None of your add-ons returned streams for this title."
+                                : "Failed: \(update.failedAddons.joined(separator: ", "))",
+                            systemImage: "play.slash"
+                        )
+                    } else {
+                        LoadingView(label: "Finding streams…")
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .padding(.horizontal, 80)
         }
-        .navigationTitle(target.title)
         .onAppear(perform: start)
         .onDisappear {
             subscription?.cancel()
@@ -93,26 +108,68 @@ struct StreamsView: View {
         select(match)
     }
 
-    @ViewBuilder
-    private func list(_ update: StreamsUpdate) -> some View {
-        List {
-            if !update.isComplete {
-                HStack(spacing: 20) {
-                    ProgressView()
-                    Text("Still searching other add-ons…").foregroundStyle(.secondary)
+    private var movieInfo: String {
+        [target.meta.releaseInfo, target.meta.runtime].compactMap { $0 }.joined(separator: "  ·  ")
+    }
+
+    /// Logo / title, episode and search progress on the left.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if let logo = target.meta.logo {
+                RemoteImage(url: logo, contentMode: .fit)
+                    .frame(maxWidth: 460, maxHeight: 160, alignment: .leading)
+            } else {
+                Text(target.meta.name).font(.system(size: 48, weight: .bold)).lineLimit(3)
+            }
+            if let video = target.video {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let label = video.episodeLabel {
+                        Text(label).font(.headline).foregroundStyle(.secondary)
+                    }
+                    Text(video.title).font(.title3).bold().lineLimit(2)
+                    if let overview = video.overview, !overview.isEmpty {
+                        Text(overview).font(.callout).foregroundStyle(.secondary).lineLimit(5)
+                    }
+                }
+            } else if !movieInfo.isEmpty {
+                Text(movieInfo).font(.callout).foregroundStyle(.secondary)
+            }
+            if let update {
+                let count = update.groups.reduce(0) { $0 + $1.streams.count }
+                HStack(spacing: 14) {
+                    if !update.isComplete { ProgressView() }
+                    Text(update.isComplete ? "\(count) streams" : "\(count) streams · searching…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
-            ForEach(Array(update.groups.enumerated()), id: \.offset) { _, group in
-                Section(group.addonName) {
+        }
+    }
+
+    private func list(_ update: StreamsUpdate) -> some View {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                ForEach(Array(update.groups.enumerated()), id: \.offset) { _, group in
+                    HStack(spacing: 14) {
+                        if let logo = group.addonLogo {
+                            RemoteImage(url: logo, contentMode: .fit).frame(width: 40, height: 40)
+                        }
+                        Text(group.addonName).font(.headline)
+                        Text("\(group.streams.count)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 20)
                     ForEach(Array(sorted(group.streams).enumerated()), id: \.offset) { _, stream in
                         Button {
                             select(stream)
                         } label: {
                             StreamRow(stream: stream, debridEnabled: app.core.debrid.hasAnyProvider)
                         }
+                        .buttonStyle(StreamCardStyle())
                     }
                 }
             }
+            .padding(.vertical, 40)
+            .padding(.horizontal, 20) // room for the focus scale
         }
     }
 
@@ -186,6 +243,8 @@ struct StreamsView: View {
     }
 }
 
+/// One stream like Stremio lays it out: the add-on's name column on the left and the full
+/// description on the right, every line kept, so formatter layouts (AIOStreams etc.) show in full.
 struct StreamRow: View {
     let stream: AddonStream
     var debridEnabled = false
@@ -195,31 +254,74 @@ struct StreamRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(stream.getDisplayName())
-                    .font(.headline)
-                    .lineLimit(2)
+        HStack(alignment: .top, spacing: 28) {
+            Text(stream.getDisplayName())
+                .font(.headline)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 260, alignment: .leading)
+            VStack(alignment: .leading, spacing: 10) {
                 if let detail = stream.getDisplayDescription(), detail != stream.getDisplayName() {
                     Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(4)
+                        .font(.callout)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }
-            Spacer()
-            if let cache = stream.debridCache {
-                Text(cache.isCached ? "⚡ \(cache.providerName)" : "\(cache.providerName) · not cached")
-                    .font(.caption)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background((cache.isCached ? Color.green : Color.gray).opacity(0.35), in: Capsule())
-            } else if stream.needsDebridResolve {
-                Image(systemName: debridEnabled ? "bolt.circle" : "arrow.down.circle").foregroundStyle(.secondary)
-            } else if !stream.isDirectlyPlayable {
-                Image(systemName: "nosign").foregroundStyle(.secondary)
+                badges
             }
         }
-        .opacity(isPlayable ? 1 : 0.5)
+        .opacity(isPlayable ? 1 : 0.55)
+    }
+
+    @ViewBuilder
+    private var badges: some View {
+        if let cache = stream.debridCache {
+            Text(cache.isCached ? "⚡ Cached on \(cache.providerName)" : "\(cache.providerName) · not cached")
+                .font(.caption)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background((cache.isCached ? Color.green : Color.gray).opacity(0.4), in: Capsule())
+        } else if stream.needsDebridResolve {
+            Label(debridEnabled ? "Torrent · via debrid" : "Torrent", systemImage: debridEnabled ? "bolt.circle" : "arrow.down.circle")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if !stream.isDirectlyPlayable {
+            Label("Not playable on Apple TV", systemImage: "nosign").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Frosted glass card that lifts and brightens when focused.
+struct StreamCardStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StreamCard(configuration: configuration)
+    }
+
+    private struct StreamCard: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(.white)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .fill(Color.white.opacity(isFocused ? 0.18 : 0.02))
+                        )
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.white.opacity(isFocused ? 0.85 : 0.12), lineWidth: isFocused ? 3 : 1)
+                )
+                .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.02 : 1))
+                .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 24, y: 10)
+                .animation(.easeOut(duration: 0.15), value: isFocused)
+        }
     }
 }
