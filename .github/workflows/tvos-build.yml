@@ -1,4 +1,5 @@
 name: Build tvOS App
+run-name: ${{ inputs.description != '' && format('Build tvOS App - {0}', inputs.description) || 'Build tvOS App' }}
 
 on:
   push:
@@ -14,6 +15,33 @@ on:
       - "gradle/libs.versions.toml"
       - ".github/workflows/tvos-build.yml"
   workflow_dispatch:
+    inputs:
+      description:
+        description: Run description (shown in the run name)
+        required: false
+        type: string
+      target:
+        description: What to build
+        required: true
+        type: choice
+        options:
+          - all
+          - simulator-only
+          - device-only
+        default: all
+      runner:
+        description: Runner label (blank = TVOS_RUNNER variable, else xcode-27)
+        required: false
+        type: string
+      xcode_developer_dir:
+        description: Xcode Developer dir (blank = XCODE_DEVELOPER_DIR variable, else Xcode 27.1)
+        required: false
+        type: string
+      run_tests:
+        description: Run the shared core JVM tests
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -27,11 +55,13 @@ jobs:
     name: Shared core + tvOS app
     # Same runner as NuvioMobile's iOS build (GitHub's macos-15 arm64 pool often never picks jobs up).
     # Override with the repository variables TVOS_RUNNER / XCODE_DEVELOPER_DIR.
-    runs-on: ${{ vars.TVOS_RUNNER || 'xcode-27' }}
+    runs-on: ${{ inputs.runner || vars.TVOS_RUNNER || 'xcode-27' }}
     timeout-minutes: 120
     env:
       GRADLE_OPTS: -Dfile.encoding=UTF-8
-      PREFERRED_DEVELOPER_DIR: ${{ vars.XCODE_DEVELOPER_DIR || '/Applications/Xcode_27.1.app/Contents/Developer' }}
+      PREFERRED_DEVELOPER_DIR: ${{ inputs.xcode_developer_dir || vars.XCODE_DEVELOPER_DIR || '/Applications/Xcode_27.1.app/Contents/Developer' }}
+      # Push / pull_request runs have no inputs: build everything and run the tests.
+      BUILD_TARGET: ${{ inputs.target || 'all' }}
       LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 || secrets.NUVIO_LOCAL_PROPERTIES_BASE64 }}
     steps:
       - name: Check out
@@ -91,6 +121,7 @@ jobs:
           fi
 
       - name: Test shared core (JVM)
+        if: github.event_name != 'workflow_dispatch' || inputs.run_tests
         run: ./gradlew -p shared jvmTest --no-daemon
 
       - name: Build NuvioShared.xcframework
@@ -106,6 +137,7 @@ jobs:
           xcodegen generate
 
       - name: Build for tvOS Simulator
+        if: env.BUILD_TARGET != 'device-only'
         working-directory: tvos
         run: |
           set -o pipefail
@@ -122,6 +154,7 @@ jobs:
           test -d build/sim/Build/Products/Debug-appletvsimulator/NuvioTV.app
 
       - name: Build for Apple TV device (unsigned)
+        if: env.BUILD_TARGET != 'simulator-only'
         working-directory: tvos
         run: |
           set -o pipefail
@@ -143,6 +176,7 @@ jobs:
           (cd build/ipa && zip -qry ../NuvioTV-unsigned.ipa Payload)
 
       - name: Upload simulator app
+        if: env.BUILD_TARGET != 'device-only'
         uses: actions/upload-artifact@v7
         with:
           name: NuvioTV-tvOS-simulator
@@ -150,6 +184,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload unsigned device IPA
+        if: env.BUILD_TARGET != 'simulator-only'
         uses: actions/upload-artifact@v7
         with:
           name: NuvioTV-tvOS-unsigned-ipa
