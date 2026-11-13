@@ -51,6 +51,8 @@ data class Meta(
     val cast: List<String>,
     val castMembers: List<MetaCastMember> = emptyList(),
     val videos: List<Video>,
+    val productionCompanies: List<String> = emptyList(),
+    val networks: List<String> = emptyList(),
     val ageRating: String? = null,
     val country: String?,
     val awards: String?,
@@ -131,7 +133,8 @@ fun List<Video>.watchableEpisodes(): List<Video> {
 data class MetaCastMember(
     val name: String,
     val character: String? = null,
-    val photo: String? = null
+    val photo: String? = null,
+    val tmdbId: Int? = null
 )
 
 data class Video(

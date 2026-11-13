@@ -230,7 +230,8 @@ private fun mapPeople(people: List<JsonObject>?, roleFallback: String? = null, f
         MetaCastMember(
             name = name,
             character = if (forceRole) roleFallback else person.nonBlank("character") ?: roleFallback,
-            photo = person.nonBlank("photo")
+            photo = person.nonBlank("photo"),
+            tmdbId = person.int("tmdbId")
         )
     }
 

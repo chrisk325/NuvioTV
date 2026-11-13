@@ -8,7 +8,7 @@ struct DetailView: View {
     @State private var meta: Meta?
     @State private var error: String?
     @State private var selectedSeason: Int32 = 1
-    @State private var enrichment: TmdbEnrichment?
+    @State private var details: DetailContent?
     @State private var ratings: [ExternalRating] = []
     @State private var trailer: PlaybackRequest?
     @State private var isLoadingTrailer = false
@@ -36,7 +36,7 @@ struct DetailView: View {
         isLoadingTrailer = true
         Task { @MainActor in
             defer { isLoadingTrailer = false }
-            let keys = enrichment?.trailerYoutubeKeys ?? []
+            let keys: [String] = [] // TMDB trailers are already merged into meta.trailerYtIds
             guard let url = (try? await app.core.trailerUrl(meta: meta, tmdbKeys: keys)) ?? nil else { return }
             var request = PlaybackRequest(url: url, headers: [:], meta: meta, video: nil, videoId: meta.id,
                                           title: "\(meta.name) · Trailer", startPositionMs: 0)
@@ -47,11 +47,11 @@ struct DetailView: View {
 
     private func infoLine(_ meta: Meta) -> String {
         var line = meta.infoLine
-        if meta.ageRating == nil, let cert = enrichment?.certification {
-            line = line.isEmpty ? cert : line + "  ·  " + cert
+        if let tmdbRating = details?.tmdbRating {
+            line += "  ·  TMDB \(tmdbRating)"
         }
-        if let networks = enrichment?.networks, !networks.isEmpty, meta.isSeriesLike {
-            line += "  ·  " + networks.prefix(2).joined(separator: ", ")
+        if meta.isSeriesLike, !meta.networks.isEmpty {
+            line += "  ·  " + meta.networks.prefix(2).joined(separator: ", ")
         }
         return line
     }
@@ -73,8 +73,13 @@ struct DetailView: View {
                 selectedSeason = seasons.first ?? 1
             }
             meta = loaded
-            // Kotlin suspend functions must be called on the main thread, so no `async let` here.
-            enrichment = (try? await app.core.tmdbEnrichment(meta: loaded)) ?? nil
+            // Add-on meta shows immediately; the merged version (TMDB groups that are enabled,
+            // add-on data for the rest) replaces it when ready. Kotlin suspend calls stay on the
+            // main thread, so no `async let`.
+            if let merged = try? await app.core.details(meta: loaded) {
+                details = merged
+                meta = merged.meta
+            }
             ratings = (try? await app.core.ratings(meta: loaded)) ?? []
         } catch {
             self.error = error.localizedDescription
@@ -89,8 +94,8 @@ struct DetailView: View {
                 if meta.isSeriesLike && !meta.videos.isEmpty {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason)
                 }
-                if let enrichment, !enrichment.cast.isEmpty {
-                    PeopleRow(title: "Cast", people: enrichment.cast)
+                if let people = details?.people, !people.isEmpty {
+                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured)
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
@@ -99,20 +104,27 @@ struct DetailView: View {
                     }
                     .padding(.horizontal, 80)
                 }
-                if let enrichment, !enrichment.crew.isEmpty {
-                    PeopleRow(title: "Crew", people: enrichment.crew)
-                } else if !meta.director.isEmpty {
+                if !meta.director.isEmpty || !meta.writer.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Director").font(.headline)
-                        Text(meta.director.joined(separator: ", ")).foregroundStyle(.secondary)
+                        if !meta.director.isEmpty {
+                            Text("Director: \(meta.director.joined(separator: ", "))")
+                        }
+                        if !meta.writer.isEmpty {
+                            Text("Writer: \(meta.writer.prefix(4).joined(separator: ", "))")
+                        }
+                        if !meta.productionCompanies.isEmpty {
+                            Text("Production: \(meta.productionCompanies.prefix(3).joined(separator: ", "))")
+                        }
                     }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 80)
                 }
-                if let enrichment, !enrichment.collectionParts.isEmpty {
-                    MetaRowView(title: enrichment.collectionName ?? "Collection", items: enrichment.collectionParts)
+                if let details, !details.collectionParts.isEmpty {
+                    MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts)
                 }
-                if let enrichment, !enrichment.recommendations.isEmpty {
-                    MetaRowView(title: "More like this", items: enrichment.recommendations)
+                if let details, !details.recommendations.isEmpty {
+                    MetaRowView(title: "More like this", items: details.recommendations)
                 }
             }
             .padding(.bottom, 80)
@@ -133,7 +145,7 @@ struct DetailView: View {
     @ViewBuilder
     private func hero(_ meta: Meta) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            if let logo = meta.logo ?? enrichment?.logo {
+            if let logo = meta.logo {
                 RemoteImage(url: logo, contentMode: .fit)
                     .frame(maxWidth: 600, maxHeight: 200, alignment: .leading)
             } else {
@@ -151,10 +163,10 @@ struct DetailView: View {
                     }
                 }
             }
-            if let tagline = enrichment?.tagline {
+            if let tagline = details?.tagline {
                 Text(tagline).font(.callout).italic().foregroundStyle(.secondary)
             }
-            if let description = meta.description_ ?? enrichment?.overview, !description.isEmpty {
+            if let description = meta.description_, !description.isEmpty {
                 Text(description)
                     .font(.body)
                     .lineLimit(5)
@@ -170,7 +182,7 @@ struct DetailView: View {
                         Label(watched ? "Watched" : "Mark watched", systemImage: watched ? "eye.fill" : "eye")
                     }
                 }
-                if app.core.hasTrailerApi && (!meta.trailerYtIds.isEmpty || !(enrichment?.trailerYoutubeKeys.isEmpty ?? true)) {
+                if app.core.hasTrailerApi && !meta.trailerYtIds.isEmpty {
                     Button {
                         playTrailer(meta)
                     } label: {

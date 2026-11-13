@@ -134,6 +134,19 @@ private struct SettingsForm: View {
                 if !app.core.config.hasTmdb {
                     Text("No TMDB key in this build.").font(.caption).foregroundStyle(.secondary)
                 }
+                if binder.settings.tmdbEnrichment {
+                    Text("Groups switched off keep the add-on's own data.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Artwork (logo, backdrop)", isOn: s.bind({ $0.tmdbUseArtwork }, { $0.tmdbUseArtwork = $1 }))
+                    Toggle("Basic info (title, description, genres, rating)", isOn: s.bind({ $0.tmdbUseBasicInfo }, { $0.tmdbUseBasicInfo = $1 }))
+                    Toggle("Details (runtime, status, age rating, country)", isOn: s.bind({ $0.tmdbUseDetails }, { $0.tmdbUseDetails = $1 }))
+                    Toggle("Credits (cast photos, director, writer)", isOn: s.bind({ $0.tmdbUseCredits }, { $0.tmdbUseCredits = $1 }))
+                    Toggle("Production companies", isOn: s.bind({ $0.tmdbUseProductions }, { $0.tmdbUseProductions = $1 }))
+                    Toggle("Networks", isOn: s.bind({ $0.tmdbUseNetworks }, { $0.tmdbUseNetworks = $1 }))
+                    Toggle("Episodes (titles, overviews, thumbnails)", isOn: s.bind({ $0.tmdbUseEpisodes }, { $0.tmdbUseEpisodes = $1 }))
+                    Toggle("Trailers", isOn: s.bind({ $0.tmdbUseTrailers }, { $0.tmdbUseTrailers = $1 }))
+                    Toggle("More like this", isOn: s.bind({ $0.tmdbUseMoreLikeThis }, { $0.tmdbUseMoreLikeThis = $1 }))
+                    Toggle("Collections", isOn: s.bind({ $0.tmdbUseCollections }, { $0.tmdbUseCollections = $1 }))
+                }
                 TextField("TMDB language (en-US)", text: s.bind({ $0.tmdbLanguage }, { $0.tmdbLanguage = $1 }))
                     .autocorrectionDisabled()
                 Toggle("MDBList ratings", isOn: s.bind({ $0.showMdbListRatings }, { $0.showMdbListRatings = $1 }))

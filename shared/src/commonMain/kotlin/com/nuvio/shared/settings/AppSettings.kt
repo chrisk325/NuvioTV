@@ -179,10 +179,58 @@ class AppSettings(private val store: KeyValueStore) {
         hiddenCatalogKeys = if (hidden) hiddenCatalogKeys + key else hiddenCatalogKeys - key
     }
 
-    /** Enrich add-on metadata with TMDB (needs a TMDB key in the build config). */
+    /**
+     * Enrich add-on metadata with TMDB (needs a TMDB key). Off by default, like Android's
+     * TmdbSettings; when off — or a group below is off — the add-on's own data is shown.
+     */
     var tmdbEnrichment: Boolean
-        get() = bool("tmdb.enabled", true)
+        get() = bool("tmdb.enabled", false)
         set(value) = put("tmdb.enabled", value)
+
+    /** Logo and backdrop. */
+    var tmdbUseArtwork: Boolean
+        get() = bool("tmdb.artwork", true)
+        set(value) = put("tmdb.artwork", value)
+
+    /** Title, description, genres, TMDB rating. */
+    var tmdbUseBasicInfo: Boolean
+        get() = bool("tmdb.basic", true)
+        set(value) = put("tmdb.basic", value)
+
+    /** Runtime, status, age rating, country, language. */
+    var tmdbUseDetails: Boolean
+        get() = bool("tmdb.details", true)
+        set(value) = put("tmdb.details", value)
+
+    /** Cast with photos, director, writer. */
+    var tmdbUseCredits: Boolean
+        get() = bool("tmdb.credits", true)
+        set(value) = put("tmdb.credits", value)
+
+    var tmdbUseProductions: Boolean
+        get() = bool("tmdb.productions", true)
+        set(value) = put("tmdb.productions", value)
+
+    var tmdbUseNetworks: Boolean
+        get() = bool("tmdb.networks", true)
+        set(value) = put("tmdb.networks", value)
+
+    /** Episode titles, overviews, thumbnails, runtimes. */
+    var tmdbUseEpisodes: Boolean
+        get() = bool("tmdb.episodes", true)
+        set(value) = put("tmdb.episodes", value)
+
+    var tmdbUseTrailers: Boolean
+        get() = bool("tmdb.trailers", true)
+        set(value) = put("tmdb.trailers", value)
+
+    var tmdbUseMoreLikeThis: Boolean
+        get() = bool("tmdb.moreLikeThis", true)
+        set(value) = put("tmdb.moreLikeThis", value)
+
+    var tmdbUseCollections: Boolean
+        get() = bool("tmdb.collections", true)
+        set(value) = put("tmdb.collections", value)
 
     /** TMDB language, e.g. "en-US". */
     var tmdbLanguage: String

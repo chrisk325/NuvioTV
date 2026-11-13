@@ -33,6 +33,16 @@ data class TmdbEnrichment(
     val isShow: Boolean,
     val logo: String?,
     val backdrop: String?,
+    val localizedTitle: String?,
+    val genres: List<String>,
+    val rating: String?,
+    val runtimeMinutes: Int?,
+    val status: String?,
+    val countries: List<String>,
+    val language: String?,
+    val productionCompanies: List<String>,
+    val directors: List<String>,
+    val writers: List<String>,
     val overview: String?,
     val tagline: String?,
     val cast: List<TmdbPerson>,
@@ -43,6 +53,15 @@ data class TmdbEnrichment(
     val certification: String?,
     val networks: List<String>,
     val trailerYoutubeKeys: List<String>
+)
+
+data class TmdbEpisode(
+    val season: Int,
+    val episode: Int,
+    val title: String?,
+    val overview: String?,
+    val thumbnail: String?,
+    val runtimeMinutes: Int?
 )
 
 data class TmdbPersonDetail(
@@ -121,11 +140,27 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
         val parts = collection?.int("id")?.let { cid -> get("collection/$cid?language=${encodeUrlComponent(lang)}") }
             ?.objects("parts").orEmpty().sortedBy { it.str("release_date") ?: "9999" }.mapNotNull { it.toPreview(false) }
 
+        val crewJobs = credits?.objects("crew").orEmpty()
+        fun crewNames(jobs: Set<String>) = crewJobs.filter {
+            (it.str("job") ?: it.objects("jobs").firstOrNull()?.str("job")) in jobs
+        }.mapNotNull { it.nonBlank("name") }.distinct()
+        val runtime = body.int("runtime") ?: body["episode_run_time"]?.let { com.nuvio.shared.data.coerceStringList(it) }?.firstOrNull()?.toIntOrNull()
         val result = TmdbEnrichment(
             tmdbId = tmdbId,
             isShow = isShow,
             logo = image(logo, "w500"),
             backdrop = image(body.str("backdrop_path"), "original"),
+            localizedTitle = body.nonBlank(if (isShow) "name" else "title"),
+            genres = body.objects("genres").mapNotNull { it.nonBlank("name") },
+            rating = body.str("vote_average")?.toDoubleOrNull()?.takeIf { it > 0 }?.let { ((it * 10).toInt() / 10.0).toString() },
+            runtimeMinutes = runtime?.takeIf { it > 0 },
+            status = body.nonBlank("status"),
+            countries = body.objects("production_countries").mapNotNull { it.nonBlank("iso_3166_1") }
+                .ifEmpty { com.nuvio.shared.data.coerceStringList(body["origin_country"]) },
+            language = body.nonBlank("original_language"),
+            productionCompanies = body.objects("production_companies").mapNotNull { it.nonBlank("name") },
+            directors = crewNames(setOf("Director")) + body.objects("created_by").mapNotNull { it.nonBlank("name") },
+            writers = crewNames(setOf("Screenplay", "Writer")),
             overview = body.nonBlank("overview"),
             tagline = body.nonBlank("tagline"),
             cast = cast,
@@ -134,7 +169,7 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             collectionName = collection?.nonBlank("name"),
             collectionParts = parts,
             certification = certification,
-            networks = (body.objects("networks") + body.objects("production_companies")).mapNotNull { it.nonBlank("name") }.distinct().take(4),
+            networks = body.objects("networks").mapNotNull { it.nonBlank("name") }.distinct(),
             trailerYoutubeKeys = body.obj("videos")?.objects("results").orEmpty()
                 .filter { it.str("site") == "YouTube" && it.str("type") in setOf("Trailer", "Teaser") }
                 .mapNotNull { it.nonBlank("key") }
@@ -145,6 +180,21 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
         }
         return result
     }
+
+    /** One season's episodes (Android useEpisodes: titles, overviews, stills, runtimes). */
+    @Throws(Exception::class)
+    suspend fun seasonEpisodes(tmdbId: Int, season: Int, language: String): List<TmdbEpisode> =
+        get("tv/$tmdbId/season/$season?language=${encodeUrlComponent(language.ifBlank { "en-US" })}")
+            ?.objects("episodes").orEmpty().mapNotNull { e ->
+                TmdbEpisode(
+                    season = season,
+                    episode = e.int("episode_number") ?: return@mapNotNull null,
+                    title = e.nonBlank("name"),
+                    overview = e.nonBlank("overview"),
+                    thumbnail = image(e.str("still_path"), "w500"),
+                    runtimeMinutes = e.int("runtime")
+                )
+            }
 
     @Throws(Exception::class)
     suspend fun person(id: Int, language: String): TmdbPersonDetail? {

@@ -50,6 +50,17 @@ import kotlinx.coroutines.launch
 
 data class CalendarEntry(val show: MetaPreview, val video: Video, val releaseEpochMs: Long)
 
+/** Merged details (add-on meta + enabled TMDB groups). People with id 0 have no TMDB page. */
+data class DetailContent(
+    val meta: Meta,
+    val people: List<com.nuvio.shared.tmdb.TmdbPerson>,
+    val tmdbRating: String?,
+    val tagline: String?,
+    val recommendations: List<MetaPreview>,
+    val collectionName: String?,
+    val collectionParts: List<MetaPreview>
+)
+
 /** Handle returned to Swift for observations; call [cancel] when the view goes away. */
 interface CoreSubscription {
     fun cancel()
@@ -241,6 +252,83 @@ class NuvioCore(
     suspend fun tmdbEnrichment(meta: Meta): TmdbEnrichment? {
         if (!settings.tmdbEnrichment || !tmdb.isConfigured) return null
         return tmdb.enrich(meta.id, meta.imdbId, meta.isSeriesLike, settings.tmdbLanguage)
+    }
+
+    /**
+     * The details screen's data: add-on meta with TMDB layered on per group, exactly like
+     * MetaDetailsViewModel on Android. With enrichment (or a group) off, the add-on's own
+     * artwork, description, cast (with photos), episodes etc. are used.
+     */
+    @Throws(Exception::class)
+    suspend fun details(meta: Meta): DetailContent {
+        val e = try {
+            tmdbEnrichment(meta)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+            null
+        }
+        val s = settings
+        var m = meta
+        if (e != null && s.tmdbUseArtwork) {
+            m = m.copy(background = e.backdrop ?: m.background, logo = e.logo ?: m.logo)
+        }
+        if (e != null && s.tmdbUseBasicInfo) {
+            m = m.copy(name = e.localizedTitle ?: m.name, description = e.overview ?: m.description)
+            if (e.genres.isNotEmpty()) m = m.copy(genres = e.genres)
+        }
+        if (e != null && s.tmdbUseDetails) {
+            m = m.copy(
+                runtime = e.runtimeMinutes?.let { "$it min" } ?: m.runtime,
+                status = e.status ?: m.status,
+                ageRating = e.certification ?: m.ageRating,
+                country = e.countries.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: m.country,
+                language = e.language ?: m.language
+            )
+        }
+        val tmdbPeople = if (e != null && s.tmdbUseCredits) e.crew + e.cast else emptyList()
+        if (e != null && s.tmdbUseCredits) {
+            m = m.copy(
+                cast = e.cast.takeIf { it.isNotEmpty() }?.map { it.name } ?: m.cast,
+                director = e.directors.ifEmpty { m.director },
+                writer = e.writers.ifEmpty { m.writer }
+            )
+        }
+        if (e != null && s.tmdbUseProductions && e.productionCompanies.isNotEmpty()) m = m.copy(productionCompanies = e.productionCompanies)
+        if (e != null && s.tmdbUseNetworks && e.networks.isNotEmpty()) m = m.copy(networks = e.networks)
+        if (e != null && s.tmdbUseTrailers && e.trailerYoutubeKeys.isNotEmpty()) {
+            m = m.copy(trailerYtIds = (m.trailerYtIds + e.trailerYoutubeKeys).distinct())
+        }
+        if (e != null && e.isShow && s.tmdbUseEpisodes && m.videos.isNotEmpty()) {
+            val seasons = m.videos.mapNotNull { it.season }.distinct().filter { it > 0 }.take(30)
+            val episodes = seasons.flatMap { season ->
+                runCatching { tmdb.seasonEpisodes(e.tmdbId, season, s.tmdbLanguage) }.getOrDefault(emptyList())
+            }.associateBy { it.season to it.episode }
+            if (episodes.isNotEmpty()) {
+                m = m.copy(videos = m.videos.map { v ->
+                    val ep = if (v.season != null && v.episode != null) episodes[v.season to v.episode] else null
+                    if (ep == null) v else v.copy(
+                        title = ep.title ?: v.title,
+                        overview = ep.overview ?: v.overview,
+                        thumbnail = ep.thumbnail ?: v.thumbnail,
+                        runtimeMinutes = ep.runtimeMinutes ?: v.runtimeMinutes
+                    )
+                })
+            }
+        }
+        // People row: TMDB credits when enabled, otherwise the add-on's own cast (app_extras, with photos).
+        val people = tmdbPeople.ifEmpty {
+            meta.castMembers.map { com.nuvio.shared.tmdb.TmdbPerson(it.tmdbId ?: 0, it.name, it.character, it.photo) }
+        }
+        return DetailContent(
+            meta = m,
+            people = people,
+            tmdbRating = if (e != null && s.tmdbUseBasicInfo) e.rating else null,
+            tagline = if (e != null && s.tmdbUseBasicInfo) e.tagline else null,
+            recommendations = if (e != null && s.tmdbUseMoreLikeThis) e.recommendations else emptyList(),
+            collectionName = if (e != null && s.tmdbUseCollections) e.collectionName else null,
+            collectionParts = if (e != null && s.tmdbUseCollections) e.collectionParts else emptyList()
+        )
     }
 
     @Throws(Exception::class)

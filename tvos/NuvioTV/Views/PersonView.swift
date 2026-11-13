@@ -5,6 +5,8 @@ import NuvioShared
 struct PeopleRow: View {
     let title: String
     let people: [TmdbPerson]
+    /// Add-on cast without a TMDB id (or builds without a TMDB key) can't open a person page.
+    var linksToTmdb = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -13,20 +15,15 @@ struct PeopleRow: View {
                 LazyHStack(spacing: 36) {
                     ForEach(people, id: \.id) { person in
                         VStack(spacing: 10) {
-                            NavigationLink(value: Route.person(person.id)) {
-                                ZStack {
-                                    Circle().fill(Color.white.opacity(0.1))
-                                    if person.photo != nil {
-                                        RemoteImage(url: person.photo)
-                                    } else {
-                                        Text(String(person.name.prefix(1))).font(.title)
-                                    }
-                                }
-                                .frame(width: 170, height: 170)
-                                .clipShape(Circle())
+                            if linksToTmdb && person.id > 0 {
+                                NavigationLink(value: Route.person(person.id)) { avatar(person) }
+                                    .buttonStyle(.card)
+                                    .clipShape(Circle())
+                            } else {
+                                Button {} label: { avatar(person) }
+                                    .buttonStyle(.card)
+                                    .clipShape(Circle())
                             }
-                            .buttonStyle(.card)
-                            .clipShape(Circle())
                             Text(person.name).font(.caption).lineLimit(1).frame(width: 190)
                             if let role = person.role {
                                 Text(role).font(.caption2).foregroundStyle(.secondary).lineLimit(1).frame(width: 190)
@@ -39,6 +36,19 @@ struct PeopleRow: View {
             }
         }
         .focusSection()
+    }
+
+    private func avatar(_ person: TmdbPerson) -> some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.1))
+            if person.photo != nil {
+                RemoteImage(url: person.photo)
+            } else {
+                Text(String(person.name.prefix(1))).font(.title)
+            }
+        }
+        .frame(width: 170, height: 170)
+        .clipShape(Circle())
     }
 }
 
