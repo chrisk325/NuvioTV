@@ -403,7 +403,74 @@ class NuvioCore(
     // --- Progress & library ----------------------------------------------------------------
 
     fun observeContinueWatching(onChange: (List<WatchProgress>) -> Unit): CoreSubscription =
-        observe(watchProgress.entries) { onChange(watchProgress.continueWatching()) }
+        observe(kotlinx.coroutines.flow.combine(watchProgress.entries, upNext, watched.watched) { _, _, _ -> Unit }) {
+            onChange(continueWatching())
+        }
+
+    /**
+     * Continue Watching: titles in progress, plus "up next" episodes from trackers (Simkl's
+     * Watching list) for shows that have nothing in progress here, newest first. Up next entries
+     * have no position (durationMs 0).
+     */
+    fun continueWatching(): List<WatchProgress> {
+        val inProgress = watchProgress.continueWatching()
+        val busy = inProgress.map { it.contentId }.toSet()
+        val next = upNext.value.filter {
+            it.contentId !in busy && upNextKey(it) !in dismissedUpNext && !watched.isWatched(it.videoId)
+        }
+        return (inProgress + next).sortedByDescending { it.updatedAtMs }
+    }
+
+    fun isUpNext(progress: WatchProgress): Boolean = progress.durationMs <= 0L
+
+    // --- Up next & dismissals ------------------------------------------------------------------
+
+    private val progressJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    private val progressListSerializer =
+        kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
+    private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
+    private var dismissedUpNext: Set<String> =
+        store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
+    /** contentId → time it was removed from Continue Watching; older tracker entries stay hidden. */
+    private var dismissedProgress: Map<String, Long> =
+        store.getString("progress.dismissed")?.split('\n')?.mapNotNull { line ->
+            val (id, time) = line.split('|').takeIf { it.size == 2 } ?: return@mapNotNull null
+            time.toLongOrNull()?.let { id to it }
+        }?.toMap().orEmpty()
+
+    private fun upNextKey(p: WatchProgress) = "${p.contentId}|${p.videoId}"
+
+    private fun loadUpNext(): List<WatchProgress> =
+        store.getString("upnext.simkl")?.let { runCatching { progressJson.decodeFromString(progressListSerializer, it) }.getOrNull() }
+            .orEmpty()
+
+    private fun setUpNext(list: List<WatchProgress>) {
+        store.putString("upnext.simkl", progressJson.encodeToString(progressListSerializer, list))
+        upNext.value = list
+    }
+
+    private fun dismissFromContinueWatching(contentId: String) {
+        val keys = upNext.value.filter { it.contentId == contentId }.map(::upNextKey)
+        if (keys.isNotEmpty()) {
+            dismissedUpNext = dismissedUpNext + keys
+            store.putString("upnext.dismissed", dismissedUpNext.joinToString("\n"))
+        }
+        dismissedProgress = dismissedProgress + (contentId to currentTimeMillis())
+        store.putString("progress.dismissed", dismissedProgress.entries.joinToString("\n") { "${it.key}|${it.value}" })
+        upNext.value = upNext.value.filterNot { it.contentId == contentId }
+    }
+
+    /** Tracker playback entry → local progress, unless older than local or than a dismissal. */
+    private fun mergeRemoteProgress(remote: WatchProgress) {
+        if (remote.updatedAtMs <= (dismissedProgress[remote.contentId] ?: 0L)) return
+        val local = watchProgress.progressFor(remote.videoId)
+        if (local == null || local.updatedAtMs < remote.updatedAtMs) {
+            watchProgress.update(
+                local?.let { remote.copy(durationMs = it.durationMs, positionMs = (it.durationMs * remote.fraction).toLong()) }
+                    ?: remote
+            )
+        }
+    }
 
     fun progressFor(videoId: String): WatchProgress? = watchProgress.progressFor(videoId)
 
@@ -441,7 +508,10 @@ class NuvioCore(
         )
     }
 
-    fun removeProgress(contentId: String) = watchProgress.remove(contentId)
+    fun removeProgress(contentId: String) {
+        watchProgress.remove(contentId)
+        dismissFromContinueWatching(contentId)
+    }
 
     // --- Watched & trackers -----------------------------------------------------------------
 
@@ -512,18 +582,19 @@ class NuvioCore(
             val state = trakt.watchedState()
             watched.addAll(state.keys)
             setTrackerCompleted("trakt", state.completedSeries)
-            trakt.playbackProgress().forEach { remote ->
-                val local = watchProgress.progressFor(remote.videoId)
-                if (local == null || local.updatedAtMs < remote.updatedAtMs) {
-                    watchProgress.update(local?.let { remote.copy(durationMs = it.durationMs, positionMs = (it.durationMs * remote.fraction).toLong()) } ?: remote)
-                }
-            }
+            trakt.playbackProgress().forEach(::mergeRemoteProgress)
             traktWatchlistCache = trakt.watchlist()
         }
         if (simkl.isConnected) sync("Simkl") {
             val state = simkl.completedItems()
             watched.addAll(state.keys)
             setTrackerCompleted("simkl", state.completedSeries)
+            // Shows and anime: partly watched episodes, and the next episode of each show on the
+            // Watching list (movies come through playback too).
+            simkl.playbackProgress().forEach(::mergeRemoteProgress)
+            setUpNext(simkl.upNext())
+        } else if (upNext.value.isNotEmpty()) {
+            setUpNext(emptyList())
         }
         if (aniList.isConnected) sync("AniList") {
             val state = aniList.completedItems()
@@ -699,9 +770,11 @@ class NuvioCore(
      * it from Continue Watching.
      */
     fun markProgressWatched(progress: WatchProgress) {
-        val isEpisode = progress.season != null && progress.episode != null
+        // Kitsu anime episodes have no season but are still episodes.
+        val isEpisode = progress.episode != null && progress.contentType != "movie"
         watched.mark(if (isEpisode) progress.videoId else "movie:${progress.contentId}", true)
         watchProgress.remove(progress.contentId)
+        dismissFromContinueWatching(progress.contentId)
         val media = TrackedMedia(
             isEpisode = isEpisode,
             imdbId = progress.contentId.takeIf { it.startsWith("tt") }?.substringBefore(':'),

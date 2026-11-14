@@ -213,8 +213,13 @@ struct ContinueWatchingRow: View {
     }
 
     private func subtitle(_ p: WatchProgress) -> String {
+        // Up next (from Simkl's Watching list): the episode to start, not one to resume.
+        let prefix = app.core.isUpNext(progress: p) ? "Next: " : ""
         if let s = p.season?.int32Value, let e = p.episode?.int32Value {
-            return "\(p.name) · S\(s) E\(e)"
+            return "\(p.name) · \(prefix)S\(s) E\(e)"
+        }
+        if let e = p.episode?.int32Value {
+            return "\(p.name) · \(prefix)E\(e)"
         }
         return p.name
     }

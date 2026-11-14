@@ -74,6 +74,55 @@ class TrackerWatchedTest {
     }
 }
 
+class SimklContinueWatchingTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun playbackAndUpNextIncludeShowsAndAnime() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/sync/playback" -> respond(
+                    """[
+                      {"id":1,"progress":40,"paused_at":"2026-11-10T20:00:00Z","type":"episode",
+                       "episode":{"season":2,"number":3,"title":"Ep"},"show":{"title":"Show","ids":{"imdb":"tt100"}}},
+                      {"id":2,"progress":50,"paused_at":"2026-11-11T20:00:00Z","type":"episode",
+                       "episode":{"number":7},"anime":{"title":"Anime","ids":{"kitsu":"42"}}},
+                      {"id":3,"progress":10,"paused_at":"2026-11-12T20:00:00Z","type":"movie",
+                       "movie":{"title":"Film","ids":{"imdb":"tt200"}}}
+                    ]""", HttpStatusCode.OK, json
+                )
+                "/sync/all-items/shows/watching" -> {
+                    assertEquals("full", request.url.parameters["extended"])
+                    respond(
+                        """{"shows":[
+                          {"show":{"title":"Next Show","ids":{"imdb":"tt300"}},"next_to_watch":"S01E05",
+                           "last_watched_at":"2026-11-09T10:00:00Z","total_episodes_count":10,"watched_episodes_count":4,"not_aired_episodes_count":0},
+                          {"show":{"title":"Caught Up","ids":{"imdb":"tt400"}},"next_to_watch":"S02E01",
+                           "total_episodes_count":10,"watched_episodes_count":8,"not_aired_episodes_count":2}
+                        ]}""", HttpStatusCode.OK, json
+                    )
+                }
+                "/sync/all-items/anime/watching" -> respond(
+                    """{"anime":[{"show":{"title":"Anime Next","ids":{"kitsu":"77"}},"next_to_watch":"E12",
+                        "total_episodes_count":24,"watched_episodes_count":11}]}""", HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply { writeToken("simkl.token.v2", StoredToken("tok")) }
+        val simkl = SimklService(http, store, "cid")
+
+        val playback = simkl.playbackProgress()
+        assertEquals(listOf("tt100:2:3", "kitsu:42:7", "tt200"), playback.map { it.videoId })
+        assertEquals(0.4, playback[0].fraction, 0.001)
+        assertEquals("series", playback[1].contentType)
+
+        val upNext = simkl.upNext()
+        assertEquals(listOf("tt300:1:5", "kitsu:77:12"), upNext.map { it.videoId })
+        assertTrue(upNext.all { it.durationMs == 0L })
+    }
+}
+
 class IntroDbTest {
     private fun parse(json: String) = com.nuvio.shared.data.AddonJson.parseToJsonElement(json) as kotlinx.serialization.json.JsonObject
 

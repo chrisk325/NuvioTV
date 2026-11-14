@@ -9,7 +9,10 @@ import com.nuvio.shared.data.nonBlank
 import com.nuvio.shared.data.obj
 import com.nuvio.shared.data.objects
 import com.nuvio.shared.data.str
+import com.nuvio.shared.model.WatchProgress
 import com.nuvio.shared.storage.KeyValueStore
+import com.nuvio.shared.util.currentTimeMillis
+import com.nuvio.shared.util.parseReleaseEpochMs
 import com.nuvio.shared.util.encodeUrlComponent
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -250,6 +253,111 @@ class SimklService(
     private fun JsonObject.idString(key: String): String? =
         nonBlank(key) ?: int(key)?.toString()
 
+    private suspend fun getJson(path: String, query: String = ""): kotlinx.serialization.json.JsonElement? {
+        val token = accessToken() ?: return null
+        val response = http.get(url(path) + query) {
+            baseHeaders()
+            header("Authorization", "Bearer $token")
+        }
+        if (!response.status.isSuccess()) throw TrackerException("Simkl returned ${response.status.value}")
+        return runCatching { AddonJson.parseToJsonElement(response.bodyAsText()) }.getOrNull()
+    }
+
+    /**
+     * Partly watched movies and episodes (sync/playback) as Continue Watching entries. Episodes of
+     * shows use IMDb ids with the TVDB season / number Simkl reports; anime without an IMDb id
+     * uses its Kitsu id ("kitsu:<id>:<episode>"), as the Kitsu add-on does.
+     */
+    @Throws(Exception::class)
+    suspend fun playbackProgress(): List<WatchProgress> {
+        val sessions = getJson("/sync/playback").asArray() ?: return emptyList()
+        val duration = 6_000_000L // Simkl gives a percentage only
+        return sessions.mapNotNull { element ->
+            val o = element.asObject() ?: return@mapNotNull null
+            val percent = o.str("progress")?.toDoubleOrNull() ?: return@mapNotNull null
+            val updated = parseReleaseEpochMs(o.str("paused_at")) ?: currentTimeMillis()
+            val position = (duration * percent / 100).toLong()
+            val movie = o.obj("movie")
+            if (movie != null || o.str("type") == "movie") {
+                val media = movie ?: return@mapNotNull null
+                val id = mediaId(media.obj("ids"), anime = false) ?: return@mapNotNull null
+                return@mapNotNull WatchProgress(
+                    contentId = id, contentType = "movie", videoId = id,
+                    name = media.str("title") ?: id, poster = posterUrl(media, id), background = backgroundUrl(id),
+                    positionMs = position, durationMs = duration, updatedAtMs = updated
+                )
+            }
+            val isAnime = o.obj("anime") != null
+            val media = o.obj("show") ?: o.obj("anime") ?: return@mapNotNull null
+            val ep = o.obj("episode") ?: return@mapNotNull null
+            val season = ep.int("tvdb_season") ?: ep.int("season")
+            val number = ep.int("tvdb_number") ?: ep.int("number") ?: return@mapNotNull null
+            val target = episodeTarget(media.obj("ids"), isAnime, season, number, ep.int("number") ?: number)
+                ?: return@mapNotNull null
+            WatchProgress(
+                contentId = target.contentId, contentType = "series", videoId = target.videoId,
+                name = media.str("title") ?: target.contentId, poster = posterUrl(media, target.contentId),
+                background = backgroundUrl(target.contentId), season = target.season, episode = target.episode,
+                episodeTitle = ep.str("title"), positionMs = position, durationMs = duration, updatedAtMs = updated
+            )
+        }
+    }
+
+    /**
+     * "Up next" for shows and anime on the Watching list: Simkl's own next_to_watch episode, when
+     * aired episodes remain. Entries carry no position (durationMs 0) and the time the show was
+     * last watched, so they sort with Continue Watching.
+     */
+    @Throws(Exception::class)
+    suspend fun upNext(): List<WatchProgress> {
+        val result = mutableListOf<WatchProgress>()
+        for (type in listOf("shows", "anime")) {
+            val root = getJson("/sync/all-items/$type/watching", "&extended=full").asObject() ?: continue
+            root.objects(type).forEach { entry ->
+                val media = entry.obj("show") ?: return@forEach
+                val marker = entry.str("next_to_watch") ?: return@forEach
+                val total = entry.int("total_episodes_count") ?: 0
+                val notAired = entry.int("not_aired_episodes_count") ?: 0
+                val watchedCount = entry.int("watched_episodes_count") ?: 0
+                if (total > 0 && watchedCount >= total - notAired) return@forEach
+                val (season, episode) = parseEpisodeMarker(marker) ?: return@forEach
+                val target = episodeTarget(media.obj("ids"), type == "anime", season, episode, episode) ?: return@forEach
+                result += WatchProgress(
+                    contentId = target.contentId, contentType = "series", videoId = target.videoId,
+                    name = media.str("title") ?: target.contentId, poster = posterUrl(media, target.contentId),
+                    background = backgroundUrl(target.contentId), season = target.season, episode = target.episode,
+                    positionMs = 0, durationMs = 0,
+                    updatedAtMs = parseReleaseEpochMs(entry.str("last_watched_at")) ?: 0
+                )
+            }
+        }
+        return result
+    }
+
+    private data class EpisodeTarget(val contentId: String, val videoId: String, val season: Int?, val episode: Int)
+
+    /** IMDb "tt…:s:e" when there is an IMDb id and a season, else Kitsu "kitsu:<id>:<episode>". */
+    private fun episodeTarget(ids: JsonObject?, anime: Boolean, season: Int?, episode: Int, animeEpisode: Int): EpisodeTarget? {
+        val imdb = ids?.nonBlank("imdb")
+        if (imdb != null && season != null) return EpisodeTarget(imdb, "$imdb:$season:$episode", season, episode)
+        val kitsu = ids?.idString("kitsu")
+        if (anime && kitsu != null) return EpisodeTarget("kitsu:$kitsu", "kitsu:$kitsu:$animeEpisode", null, animeEpisode)
+        val tmdb = ids?.idString("tmdb")
+        if (tmdb != null && season != null) return EpisodeTarget("tmdb:$tmdb", "tmdb:$tmdb:$season:$episode", season, episode)
+        return null
+    }
+
+    private fun mediaId(ids: JsonObject?, anime: Boolean): String? =
+        ids?.nonBlank("imdb") ?: ids?.idString("kitsu")?.takeIf { anime }?.let { "kitsu:$it" }
+            ?: ids?.idString("tmdb")?.let { "tmdb:$it" }
+
+    private fun posterUrl(media: JsonObject, contentId: String): String? =
+        media.nonBlank("poster")?.let { "https://simkl.in/posters/${it}_m.jpg" }
+            ?: contentId.takeIf { it.startsWith("tt") }?.let { TraktService.poster(it) }
+
+    private fun backgroundUrl(contentId: String): String? =
+        contentId.takeIf { it.startsWith("tt") }?.let { TraktService.background(it) }
+
     private fun ids(media: TrackedMedia): JsonObject? {
         if (media.imdbId == null && media.tmdbId == null && media.kitsuId == null) return null
         return buildJsonObject {
@@ -474,4 +582,14 @@ class MdbListService(private val http: HttpClient) {
             "audience" to "Popcornmeter", "letterboxd" to "Letterboxd", "metacritic" to "Metacritic", "mal" to "MyAnimeList"
         )
     }
+}
+
+/** Simkl episode markers: "S01E05", "s1e5", or "E05" / "5" (anime, season-less). */
+internal fun parseEpisodeMarker(marker: String): Pair<Int?, Int>? {
+    val value = marker.trim()
+    Regex("""[Ss](\d+)\s*[Ee](\d+)""").find(value)?.let { m ->
+        return m.groupValues[1].toInt() to m.groupValues[2].toInt()
+    }
+    Regex("""^[Ee]?(\d+)$""").find(value)?.let { m -> return null to m.groupValues[1].toInt() }
+    return null
 }
