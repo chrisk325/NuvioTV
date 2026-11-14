@@ -295,11 +295,28 @@ struct ModernHomeView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 if let hero {
-                    HeroInfo(item: hero, maxWidth: 820, descriptionLines: 3)
-                        .padding(.horizontal, 80)
-                        .padding(.top, 70)
-                        .frame(height: 470, alignment: .topLeading)
-                        .animation(.easeInOut(duration: 0.3), value: hero.id)
+                    // Focusable hero: opens the title; left / right flick through the featured titles.
+                    NavigationLink(value: Route.detail(hero)) {
+                        HeroInfo(item: hero, maxWidth: 820, descriptionLines: 3)
+                            .padding(.horizontal, 30)
+                            .padding(.vertical, 24)
+                            .frame(maxWidth: 900, alignment: .leading)
+                            .animation(.easeInOut(duration: 0.3), value: hero.id)
+                    }
+                    .buttonStyle(ModernHeroStyle())
+                    .focused($homeFocus, equals: .hero)
+                    .onMoveCommand { direction in
+                        switch direction {
+                        case .left: stepHero(-1, from: hero)
+                        case .right: stepHero(1, from: hero)
+                        default: break
+                        }
+                    }
+                    .padding(.horizontal, 50)
+                    .padding(.top, 46)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 470, alignment: .topLeading)
+                    .focusSection()
                 }
                 ScrollViewReader { proxy in
                 ScrollView(.vertical) {
@@ -316,7 +333,8 @@ struct ModernHomeView: View {
                                     withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(Self.topAnchor, anchor: .top) }
                                 },
                                 focus: $homeFocus,
-                                lastFocusedId: $lastContinueWatchingId
+                                lastFocusedId: $lastContinueWatchingId,
+                                onMoveUp: { homeFocus = .hero }
                             )
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
@@ -336,11 +354,12 @@ struct ModernHomeView: View {
         app.settings.showContinueWatching && !app.continueWatching.isEmpty
     }
 
-    /// First catalog right under Continue Watching: Up goes there explicitly.
+    /// First catalog: Up goes to Continue Watching, or to the hero when there is none.
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
-        guard showsContinueWatching, app.serverLibraries.isEmpty,
+        guard app.serverLibraries.isEmpty,
               slot.key == slots.first(where: { !feed.state($0).items.isEmpty })?.key
         else { return nil }
+        guard showsContinueWatching else { return { homeFocus = .hero } }
         return {
             let items = app.continueWatching
             let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
@@ -350,6 +369,16 @@ struct ModernHomeView: View {
 
     private static let topAnchor = "modern.top"
 
+    /// Left / right on the focused hero: previous / next featured title.
+    private func stepHero(_ offset: Int, from current: MetaPreview) {
+        let items = feed.heroItems(slots, core: app.core)
+        guard !items.isEmpty else { return }
+        let index = items.firstIndex { $0.id == current.id } ?? -1
+        let next = items[((index + offset) % items.count + items.count) % items.count]
+        debounce?.cancel()
+        withAnimation(.easeInOut(duration: 0.3)) { focused = next }
+    }
+
     /// Debounced like Android (MODERN_HERO_FOCUS_DEBOUNCE_MS = 450) so fast scrolling doesn't flicker.
     private func setFocus(_ item: MetaPreview) {
         pending = item
@@ -358,6 +387,31 @@ struct ModernHomeView: View {
             try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled, let pending else { return }
             focused = pending
+        }
+    }
+}
+
+/// Modern hero when focused: a soft glass panel with the glossy rim behind the title info.
+struct ModernHeroStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Panel(configuration: configuration)
+    }
+
+    private struct Panel: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color.black.opacity(isFocused ? 0.35 : 0))
+                        .background(.ultraThinMaterial.opacity(isFocused ? 1 : 0),
+                                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                )
+                .overlay(FocusBorder(cornerRadius: 24))
+                .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.02 : 1), anchor: .leading)
+                .animation(.easeOut(duration: 0.15), value: isFocused)
         }
     }
 }

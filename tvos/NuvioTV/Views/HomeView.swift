@@ -156,6 +156,8 @@ struct ContinueWatchingMenu: View {
 enum HomeFocus: Hashable {
     /// One per Continue Watching card (by video id), always attached, so focus never rebuilds a card.
     case continueWatching(String)
+    /// The Modern layout's hero (info of the focused / featured title).
+    case hero
 }
 
 struct ContinueWatchingRow: View {
@@ -166,6 +168,8 @@ struct ContinueWatchingRow: View {
     var focus: FocusState<HomeFocus?>.Binding? = nil
     /// The card last focused here, kept by the layout so Up from the first catalog returns to it.
     var lastFocusedId: Binding<String?>? = nil
+    /// Up on any card (Modern: goes to the hero).
+    var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -207,6 +211,7 @@ struct ContinueWatchingRow: View {
                             }
                             .buttonStyle(.card)
                             .homeFocus(focus, .continueWatching(progress.videoId))
+                            .onMoveUp(onMoveUp)
                             .contextMenu { ContinueWatchingMenu(app: app, progress: progress) }
                             Text(subtitle(progress))
                                 .font(.caption)
