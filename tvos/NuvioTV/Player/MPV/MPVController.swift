@@ -120,7 +120,8 @@ struct MPVSetupOptions {
 protocol MPVControllerDelegate: AnyObject {
     @MainActor func mpvDidUpdate(_ snapshot: MPVController.Snapshot)
     @MainActor func mpvTracksChanged(_ tracks: [MPVTrack])
-    @MainActor func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?)
+    /// [frameReady]: the first frame is decoded, so fps and gamma (SDR / HDR) are final.
+    @MainActor func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?, frameReady: Bool)
     @MainActor func mpvDidReachEnd()
     @MainActor func mpvDidFail(_ message: String)
 }
@@ -415,7 +416,8 @@ final class MPVController {
                     tracksChanged = true
                     videoParamsChanged = true
                 case MPV_EVENT_PLAYBACK_RESTART:
-                    // First frame after loading or seeking is out.
+                    // First frame after loading or seeking is out (also while paused).
+                    videoParamsChanged = true
                     self.waitingForFile = false
                     self.seeking = false
                     self.didStartPlayback = true
@@ -441,7 +443,10 @@ final class MPVController {
             let publishSnapshot = stateChanged || now.timeIntervalSince(self.lastPublish) > 0.25
             if publishSnapshot { self.lastPublish = now }
             let tracks = tracksChanged ? self.readTracks() : nil
-            let fps = videoParamsChanged ? self.double("container-fps") : 0
+            // Container rate, else the decoder's estimate (HLS / some MKVs report none).
+            let containerFps = videoParamsChanged ? self.double("container-fps") : 0
+            let fps = containerFps > 1 ? containerFps : (videoParamsChanged ? self.double("estimated-vf-fps") : 0)
+            let frameReady = self.didStartPlayback
             let gamma = videoParamsChanged ? self.string("video-params/gamma") : nil
             let primaries = videoParamsChanged ? self.string("video-params/primaries") : nil
 
@@ -450,7 +455,9 @@ final class MPVController {
                 MainActor.assumeIsolated {
                     if publishSnapshot || reachedEnd { delegate.mpvDidUpdate(snapshot) }
                     if let tracks { delegate.mpvTracksChanged(tracks) }
-                    if videoParamsChanged { delegate.mpvVideoParamsChanged(fps: fps, gamma: gamma, primaries: primaries) }
+                    if videoParamsChanged {
+                        delegate.mpvVideoParamsChanged(fps: fps, gamma: gamma, primaries: primaries, frameReady: frameReady)
+                    }
                     if let failure { delegate.mpvDidFail(failure) }
                     if reachedEnd { delegate.mpvDidReachEnd() }
                 }

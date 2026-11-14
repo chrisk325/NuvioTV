@@ -55,6 +55,18 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     weak var window: UIWindow?
     /// Held strongly: by the time the player closes its view has already left the window.
     private var displayManager: AVDisplayManager?
+    /// With Match Content on, a new file starts paused on its first frame until the TV has
+    /// switched to the video's frame rate / dynamic range (no playback at the old rate, then a
+    /// black flash mid-scene).
+    private var holdingForDisplay = false
+    private var displayHoldTask: Task<Void, Never>?
+
+    private var playerWindow: UIWindow? {
+        window ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+    }
     private var core: NuvioCore?
     private var settings: AppSettings?
     private var lastSavedAt = Date.distantPast
@@ -139,13 +151,26 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         nextVideo = request.nextVideo
         audioTracks = []
         subtitleTracks = []
+        displayHoldTask?.cancel()
+        holdingForDisplay = playerWindow?.avDisplayManager.isDisplayCriteriaMatchingEnabled == true
+        // Paused before loading, so the first frame waits for the display switch.
+        controller.setPaused(holdingForDisplay)
         controller.load(MPVLoadOptions(
             url: url,
             headers: request.headers,
             startSeconds: Double(request.startPositionMs) / 1000.0,
             title: request.title
         ))
-        controller.play()
+        if holdingForDisplay {
+            // Never hold forever (no video track, stalled decode, …).
+            displayHoldTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.endDisplayHold()
+            }
+        } else {
+            controller.play()
+        }
         if aspectMode != .fit { controller.setAspect(aspectMode) }
         Task { await loadSubtitles(for: request) }
     }
@@ -155,6 +180,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         if let request { scrobble("stop", for: request) }
         streamSubscription?.cancel()
         streamSubscription = nil
+        displayHoldTask?.cancel()
+        holdingForDisplay = false
         controller.pause()
         controller.destroy()
         DisplayCriteria.reset(displayManager)
@@ -203,6 +230,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Controls
 
     func togglePause() {
+        if holdingForDisplay { endDisplayHold(); return }
         let paused = !isPaused
         isPaused = paused // optimistic, so the button flips instantly
         controller.setPaused(paused)
@@ -346,7 +374,9 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     func mpvDidUpdate(_ snapshot: MPVController.Snapshot) {
         // Backstop: if the playhead is moving, we're not buffering, whatever the flags say.
         let advancing = !snapshot.isPaused && snapshot.position > position + 0.05
-        let buffering = snapshot.isBuffering && !advancing
+        // While waiting for the display switch it shows as loading, not as paused.
+        let buffering = holdingForDisplay || (snapshot.isBuffering && !advancing)
+        let paused = snapshot.isPaused && !holdingForDisplay
         if let request, snapshot.duration > 0 {
             if !scrobbledStart && !snapshot.isPaused && snapshot.position > 0 {
                 scrobbledStart = true
@@ -364,7 +394,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         clock.cacheSeconds = snapshot.cacheSeconds
         // Publish slow-changing state only when it actually changes.
         if hasDuration != (snapshot.duration > 0) { hasDuration = snapshot.duration > 0 }
-        if isPaused != snapshot.isPaused { isPaused = snapshot.isPaused }
+        if isPaused != paused { isPaused = paused }
         if isBuffering != buffering { isBuffering = buffering }
         if speed != snapshot.speed { speed = snapshot.speed }
         updateDerivedState()
@@ -386,10 +416,41 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         subtitleTracks = tracks.filter { $0.type == "sub" }
     }
 
-    func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?) {
-        if let manager = DisplayCriteria.apply(fps: fps, gamma: gamma, in: window) {
-            displayManager = manager
+    func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?, frameReady: Bool) {
+        // During the hold, wait for the first decoded frame so SDR / HDR is known: one switch, not two.
+        if holdingForDisplay && !frameReady { return }
+        let manager = DisplayCriteria.apply(fps: fps, gamma: gamma, in: playerWindow)
+        if let manager { displayManager = manager }
+        guard holdingForDisplay else { return }
+        displayHoldTask?.cancel()
+        displayHoldTask = Task { @MainActor [weak self] in
+            if let manager {
+                // The switch starts shortly after the criteria change (none if the TV is already
+                // in that mode); then wait for it to finish, and a moment for the TV to show picture.
+                var waited = 0
+                while !manager.isDisplayModeSwitchInProgress && waited < 8 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    waited += 1
+                }
+                var switching = 0
+                while manager.isDisplayModeSwitchInProgress && switching < 100 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    switching += 1
+                }
+                if switching > 0 { try? await Task.sleep(nanoseconds: 600_000_000) }
+            }
+            guard !Task.isCancelled else { return }
+            self?.endDisplayHold()
         }
+    }
+
+    /// Starts playback after the display switch (or the safety timeout, or the user pressing play).
+    private func endDisplayHold() {
+        guard holdingForDisplay else { return }
+        holdingForDisplay = false
+        displayHoldTask?.cancel()
+        displayHoldTask = nil
+        controller.play()
     }
 
     func mpvDidReachEnd() {
