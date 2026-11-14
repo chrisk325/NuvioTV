@@ -264,6 +264,44 @@ class SimklService(
     }
 
     /**
+     * Watched episodes of every show and anime in the Simkl library (all lists), as
+     * WatchedRepository keys: "tt…:s:e" for shows, and for anime "kitsu:<id>:<episode>" plus
+     * "tt…:s:e" when Simkl maps the episode to a TVDB season / number. Episodes Simkl reports
+     * without a watched_at are skipped.
+     */
+    @Throws(Exception::class)
+    suspend fun watchedEpisodeKeys(): List<String> {
+        val keys = mutableListOf<String>()
+        for (type in listOf("shows", "anime")) {
+            val query = if (type == "anime") "&extended=full_anime_seasons&episode_watched_at=yes&episode_tvdb_id=yes"
+            else "&extended=full&episode_watched_at=yes"
+            val root = getJson("/sync/all-items/$type", query).asObject() ?: continue
+            root.objects(type).forEach { entry ->
+                val ids = entry.obj("show")?.obj("ids") ?: return@forEach
+                val imdb = ids.nonBlank("imdb")
+                val kitsu = ids.idString("kitsu")
+                entry.objects("seasons").forEach { season ->
+                    val seasonNumber = season.int("number")
+                    season.objects("episodes").forEach episodes@{ ep ->
+                        if (ep.containsKey("watched_at") && ep.str("watched_at") == null) return@episodes
+                        val number = ep.int("number") ?: return@episodes
+                        if (type == "anime") {
+                            kitsu?.let { keys += "kitsu:$it:$number" }
+                            val tvdb = ep.obj("tvdb")
+                            val ts = tvdb?.int("season")
+                            val te = tvdb?.int("episode")
+                            if (imdb != null && ts != null && te != null) keys += "$imdb:$ts:$te"
+                        } else if (imdb != null && seasonNumber != null) {
+                            keys += "$imdb:$seasonNumber:$number"
+                        }
+                    }
+                }
+            }
+        }
+        return keys
+    }
+
+    /**
      * Partly watched movies and episodes (sync/playback) as Continue Watching entries. Episodes of
      * shows use IMDb ids with the TVDB season / number Simkl reports; anime without an IMDb id
      * uses its Kitsu id ("kitsu:<id>:<episode>"), as the Kitsu add-on does.

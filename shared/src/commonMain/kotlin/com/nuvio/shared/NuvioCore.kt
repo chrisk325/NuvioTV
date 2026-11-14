@@ -596,7 +596,7 @@ class NuvioCore(
         }
         if (simkl.isConnected) sync("Simkl") {
             val state = simkl.completedItems()
-            watched.addAll(state.keys)
+            watched.addAll(state.keys + simkl.watchedEpisodeKeys())
             setTrackerCompleted("simkl", state.completedSeries)
             // Shows and anime: partly watched episodes, and the next episode of each show on the
             // Watching list (movies come through playback too).

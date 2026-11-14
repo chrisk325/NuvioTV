@@ -130,6 +130,16 @@ class SimklContinueWatchingTest {
                         ]}""", HttpStatusCode.OK, json
                     )
                 }
+                "/sync/all-items/shows" -> respond(
+                    """{"shows":[{"show":{"ids":{"imdb":"tt500"}},"seasons":[{"number":1,"episodes":[
+                        {"number":1,"watched_at":"2026-01-01T00:00:00Z"},{"number":2,"watched_at":"2026-01-02T00:00:00Z"},
+                        {"number":3,"watched_at":null}]}]}]}""", HttpStatusCode.OK, json
+                )
+                "/sync/all-items/anime" -> respond(
+                    """{"anime":[{"show":{"ids":{"imdb":"tt600","kitsu":88}},"seasons":[{"number":1,"episodes":[
+                        {"number":1,"watched_at":"2026-01-01T00:00:00Z","tvdb":{"season":2,"episode":1}}]}]}]}""",
+                    HttpStatusCode.OK, json
+                )
                 "/sync/all-items/anime/watching" -> respond(
                     """{"anime":[{"show":{"title":"Anime Next","ids":{"kitsu":"77"}},"next_to_watch":"E12",
                         "total_episodes_count":24,"watched_episodes_count":11}]}""", HttpStatusCode.OK, json
@@ -144,6 +154,9 @@ class SimklContinueWatchingTest {
         assertEquals(listOf("tt100:2:3", "kitsu:42:7", "tt200"), playback.map { it.videoId })
         assertEquals(0.4, playback[0].fraction, 0.001)
         assertEquals("series", playback[1].contentType)
+
+        val episodes = simkl.watchedEpisodeKeys()
+        assertEquals(listOf("tt500:1:1", "tt500:1:2", "kitsu:88:1", "tt600:2:1"), episodes)
 
         val upNext = simkl.upNext()
         assertEquals(listOf("tt300:1:5", "kitsu:77:12"), upNext.map { it.videoId })
