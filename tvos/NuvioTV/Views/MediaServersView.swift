@@ -33,10 +33,7 @@ struct MediaServersView: View {
                 }
             }
             Section("Add a server") {
-                Picker("Type", selection: $kind) {
-                    Text("Jellyfin").tag("jellyfin")
-                    Text("Emby").tag("emby")
-                }
+                ChoiceRow(title: "Server type", options: [("jellyfin", "Jellyfin"), ("emby", "Emby")], selection: $kind)
                 TextField("Address (http://192.168.1.10:8096)", text: $address)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()

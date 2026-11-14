@@ -211,10 +211,10 @@ private struct PlayerSettingsPane: View {
         let s = binder
         List {
             Section {
-                Picker("Video engine", selection: s.bind({ $0.playerEngine }, { $0.playerEngine = $1 })) {
-                    Text("mpv (MKV, ASS, all codecs)").tag(AppSettings.companion.ENGINE_MPV)
-                    Text("Apple player (HLS/MP4)").tag(AppSettings.companion.ENGINE_AVPLAYER)
-                }
+                ChoiceRow(title: "Video engine",
+                          options: [(AppSettings.companion.ENGINE_MPV, "mpv (MKV, ASS, all codecs)"),
+                                    (AppSettings.companion.ENGINE_AVPLAYER, "Apple player (HLS/MP4)")],
+                          selection: s.bind({ $0.playerEngine }, { $0.playerEngine = $1 }))
                 Toggle("Hardware decoding", isOn: s.bind({ $0.hardwareDecoding }, { $0.hardwareDecoding = $1 }))
             } header: {
                 Text("Playback engine")
@@ -231,12 +231,10 @@ private struct PlayerSettingsPane: View {
             }
 
             Section("Audio") {
-                Picker("Audio language", selection: s.bind({ $0.preferredAudioLanguage }, { $0.preferredAudioLanguage = $1 })) {
-                    ForEach(languageOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                Picker("Second audio language", selection: s.bind({ $0.secondaryAudioLanguage }, { $0.secondaryAudioLanguage = $1 })) {
-                    ForEach(languageOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
+                ChoiceRow(title: "Preferred audio language", options: languageOptions,
+                          selection: s.bind({ $0.preferredAudioLanguage }, { $0.preferredAudioLanguage = $1 }))
+                ChoiceRow(title: "Fallback audio language", options: languageOptions,
+                          selection: s.bind({ $0.secondaryAudioLanguage }, { $0.secondaryAudioLanguage = $1 }))
                 NumberRow(title: "Audio delay", unit: "ms", step: 50, range: -5000...5000,
                           value: s.bind({ Int($0.audioDelayMs) }, { $0.audioDelayMs = Int32($1) }))
             }
@@ -244,7 +242,7 @@ private struct PlayerSettingsPane: View {
             Section("Controls & buffering") {
                 NumberRow(title: "Seek step", unit: "s", step: 5, range: 5...60,
                           value: s.bind({ Int($0.seekStepSeconds) }, { $0.seekStepSeconds = Int32($1) }))
-                NumberRow(title: "Buffer", unit: "s", step: 30, range: 10...600,
+                NumberRow(title: "Buffer ahead", unit: "s", step: 30, range: 10...600,
                           value: s.bind({ Int($0.cacheSeconds) }, { $0.cacheSeconds = Int32($1) }))
                 Toggle("Skip intro / recap / credits button", isOn: s.bind({ $0.skipIntroEnabled }, { $0.skipIntroEnabled = $1 }))
             }
@@ -275,12 +273,10 @@ private struct SubtitleSettingsPane: View {
         List {
             Section {
                 Toggle("Show subtitles", isOn: s.bind({ $0.subtitlesEnabled }, { $0.subtitlesEnabled = $1 }))
-                Picker("Language", selection: s.bind({ $0.subtitleLanguage }, { $0.subtitleLanguage = $1 })) {
-                    ForEach(languageOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                Picker("Second language", selection: s.bind({ $0.secondarySubtitleLanguage }, { $0.secondarySubtitleLanguage = $1 })) {
-                    ForEach(languageOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
+                ChoiceRow(title: "Preferred subtitle language", options: languageOptions,
+                          selection: s.bind({ $0.subtitleLanguage }, { $0.subtitleLanguage = $1 }))
+                ChoiceRow(title: "Fallback subtitle language", options: languageOptions,
+                          selection: s.bind({ $0.secondarySubtitleLanguage }, { $0.secondarySubtitleLanguage = $1 }))
                 Toggle("Forced subtitles", isOn: s.bind({ $0.useForcedSubtitles }, { $0.useForcedSubtitles = $1 }))
                 Toggle("Add-on subtitles (OpenSubtitles…)", isOn: s.bind({ $0.loadAddonSubtitles }, { $0.loadAddonSubtitles = $1 }))
             } header: {
@@ -290,19 +286,17 @@ private struct SubtitleSettingsPane: View {
             }
 
             Section("Style") {
-                NumberRow(title: "Size", unit: "%", step: 10, range: 50...200,
+                NumberRow(title: "Subtitle size", unit: "%", step: 10, range: 50...200,
                           value: s.bind({ Int($0.subtitleSize) }, { $0.subtitleSize = Int32($1) }))
-                NumberRow(title: "Position from bottom", unit: "%", step: 1, range: 0...50,
+                NumberRow(title: "Distance from bottom", unit: "%", step: 1, range: 0...50,
                           value: s.bind({ Int($0.subtitleVerticalOffset) }, { $0.subtitleVerticalOffset = Int32($1) }))
                 Toggle("Bold", isOn: s.bind({ $0.subtitleBold }, { $0.subtitleBold = $1 }))
-                Picker("Text colour", selection: s.bind({ $0.subtitleTextColor }, { $0.subtitleTextColor = $1 })) {
-                    ForEach(colorOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                NumberRow(title: "Outline", unit: "", step: 1, range: 0...5,
+                ChoiceRow(title: "Text colour", options: colorOptions,
+                          selection: s.bind({ $0.subtitleTextColor }, { $0.subtitleTextColor = $1 }))
+                NumberRow(title: "Outline thickness", unit: "px", step: 1, range: 0...5,
                           value: s.bind({ Int($0.subtitleOutlineWidth) }, { $0.subtitleOutlineWidth = Int32($1) }))
-                Picker("Background", selection: s.bind({ $0.subtitleBackgroundColor }, { $0.subtitleBackgroundColor = $1 })) {
-                    ForEach(backgroundOptions, id: \.0) { Text($0.1).tag($0.0) }
-                }
+                ChoiceRow(title: "Background behind text", options: backgroundOptions,
+                          selection: s.bind({ $0.subtitleBackgroundColor }, { $0.subtitleBackgroundColor = $1 }))
             }
 
             Section {
@@ -327,11 +321,11 @@ private struct HomeSettingsPane: View {
         let s = binder
         List {
             Section {
-                Picker("Layout", selection: s.bind({ $0.homeLayout }, { $0.homeLayout = $1; app.objectWillChange.send() })) {
-                    Text("Modern").tag(AppSettings.companion.LAYOUT_MODERN)
-                    Text("Classic").tag(AppSettings.companion.LAYOUT_CLASSIC)
-                    Text("Grid").tag(AppSettings.companion.LAYOUT_GRID)
-                }
+                ChoiceRow(title: "Home layout",
+                          options: [(AppSettings.companion.LAYOUT_MODERN, "Modern"),
+                                    (AppSettings.companion.LAYOUT_CLASSIC, "Classic"),
+                                    (AppSettings.companion.LAYOUT_GRID, "Grid")],
+                          selection: s.bind({ $0.homeLayout }, { $0.homeLayout = $1; app.objectWillChange.send() }))
                 Toggle("Hero carousel (Classic / Grid)", isOn: s.bind({ $0.showHero }, { $0.showHero = $1; app.objectWillChange.send() }))
                 Toggle("Landscape posters (Modern)", isOn: s.bind({ $0.modernLandscapePosters }, { $0.modernLandscapePosters = $1; app.objectWillChange.send() }))
             } header: {
@@ -422,7 +416,8 @@ private struct AboutSettingsPane: View {
     }
 }
 
-/// tvOS has no Stepper; a row with − / + buttons instead.
+/// tvOS has no Stepper: the setting's name on the left, − value + on the right. The two
+/// buttons use their own style so the List doesn't turn each into a full-width row.
 struct NumberRow: View {
     let title: String
     let unit: String
@@ -431,15 +426,104 @@ struct NumberRow: View {
     @Binding var value: Int
 
     var body: some View {
-        HStack {
+        HStack(spacing: 24) {
             Text(title)
-            Spacer()
-            Button { value = max(range.lowerBound, value - step) } label: { Image(systemName: "minus") }
-            Text("\(value)\(unit.isEmpty ? "" : " " + unit)")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { value = max(range.lowerBound, value - step) } label: {
+                Image(systemName: "minus")
+            }
+            .buttonStyle(StepButtonStyle())
+            .disabled(value <= range.lowerBound)
+            Text(formatted)
                 .monospacedDigit()
-                .frame(minWidth: 160)
-            Button { value = min(range.upperBound, value + step) } label: { Image(systemName: "plus") }
+                .frame(minWidth: 170)
+            Button { value = min(range.upperBound, value + step) } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(StepButtonStyle())
+            .disabled(value >= range.upperBound)
         }
+        .padding(.vertical, 6)
+    }
+
+    private var formatted: String {
+        let sign = range.lowerBound < 0 && value > 0 ? "+" : ""
+        return unit.isEmpty ? "\(sign)\(value)" : "\(sign)\(value) \(unit)"
+    }
+}
+
+/// Round − / + button: white when focused.
+struct StepButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StepCircle(configuration: configuration)
+    }
+
+    private struct StepCircle: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(.headline)
+                .foregroundStyle(isFocused ? Color.black : Color.white)
+                .frame(width: 72, height: 72)
+                .background(Circle().fill(isFocused ? Color.white : Color.white.opacity(0.12)))
+                .opacity(isEnabled ? 1 : 0.35)
+                .scaleEffect(configuration.isPressed ? 0.92 : (isFocused ? 1.1 : 1))
+                .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
+    }
+}
+
+/// A labelled setting with a list of choices: shows the setting's name and the current
+/// choice, and opens the full list (tvOS Pickers in a List render as an unlabelled
+/// segmented control that squeezes long option lists into single letters).
+struct ChoiceRow: View {
+    let title: String
+    let options: [(String, String)]
+    @Binding var selection: String
+
+    var body: some View {
+        NavigationLink {
+            ChoiceList(title: title, options: options, selection: $selection)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(options.first { $0.0 == selection }?.1 ?? selection)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct ChoiceList: View {
+    let title: String
+    let options: [(String, String)]
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section(title) {
+                ForEach(options, id: \.0) { option in
+                    Button {
+                        selection = option.0
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(option.1)
+                            Spacer()
+                            if option.0 == selection {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: 1100)
     }
 }
 

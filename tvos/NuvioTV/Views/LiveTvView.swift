@@ -279,11 +279,9 @@ struct LiveTvSourcesView: View {
                 }
             }
             Section("Add a source") {
-                Picker("Type", selection: $type) {
-                    Text("M3U playlist").tag("m3u")
-                    Text("Xtream Codes").tag("xtream")
-                    Text("Stalker portal").tag("stalker")
-                }
+                ChoiceRow(title: "Source type",
+                          options: [("m3u", "M3U playlist"), ("xtream", "Xtream Codes"), ("stalker", "Stalker portal")],
+                          selection: $type)
                 TextField("Name (optional)", text: $name)
                 TextField(type == "m3u" ? "Playlist URL" : type == "xtream" ? "Server URL (http://host:port)" : "Portal URL", text: $url)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
