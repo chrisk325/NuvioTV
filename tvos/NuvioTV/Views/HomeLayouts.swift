@@ -136,6 +136,7 @@ struct ClassicHomeView: View {
     let slots: [CatalogSlot]
     @State private var focused: MetaPreview?
     @FocusState private var homeFocus: HomeFocus?
+    @State private var lastContinueWatchingId: String?
 
     var body: some View {
         ZStack {
@@ -148,7 +149,8 @@ struct ClassicHomeView: View {
                         HeroCarousel(items: feed.heroItems(slots, core: app.core))
                     }
                     if showsContinueWatching {
-                        ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus)
+                        ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus,
+                                            lastFocusedId: $lastContinueWatchingId)
                     }
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                     ForEach(slots, id: \.key) { slot in
@@ -171,7 +173,11 @@ struct ClassicHomeView: View {
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
         guard showsContinueWatching, app.serverLibraries.isEmpty,
               slot.key == firstLoadedSlotKey else { return nil }
-        return { homeFocus = .continueWatching }
+        return {
+            let items = app.continueWatching
+            let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
+            homeFocus = .continueWatching(id)
+        }
     }
 
     /// Empty or loading catalogs have no cards, so the first focusable row is the first with items.
@@ -274,6 +280,7 @@ struct ModernHomeView: View {
     @State private var pending: MetaPreview?
     @State private var debounce: Task<Void, Never>?
     @FocusState private var homeFocus: HomeFocus?
+    @State private var lastContinueWatchingId: String?
 
     var body: some View {
         let hero = focused ?? feed.heroItems(slots, core: app.core).first
@@ -299,7 +306,8 @@ struct ModernHomeView: View {
                     // nothing above on Up (first catalog → Continue Watching / hero).
                     VStack(alignment: .leading, spacing: 24) {
                         if showsContinueWatching {
-                            ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus)
+                            ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus,
+                                            lastFocusedId: $lastContinueWatchingId)
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                         ForEach(slots, id: \.key) { slot in
@@ -322,7 +330,11 @@ struct ModernHomeView: View {
         guard showsContinueWatching, app.serverLibraries.isEmpty,
               slot.key == slots.first(where: { !feed.state($0).items.isEmpty })?.key
         else { return nil }
-        return { homeFocus = .continueWatching }
+        return {
+            let items = app.continueWatching
+            let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
+            homeFocus = .continueWatching(id)
+        }
     }
 
     /// Debounced like Android (MODERN_HERO_FOCUS_DEBOUNCE_MS = 450) so fast scrolling doesn't flicker.

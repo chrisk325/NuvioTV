@@ -154,16 +154,18 @@ struct ContinueWatchingMenu: View {
 
 /// Focus anchors on Home: rows below send focus here explicitly on Up.
 enum HomeFocus: Hashable {
-    case continueWatching
+    /// One per Continue Watching card (by video id), always attached, so focus never rebuilds a card.
+    case continueWatching(String)
 }
 
 struct ContinueWatchingRow: View {
     @EnvironmentObject private var app: AppModel
     let items: [WatchProgress]
     var onFocus: ((MetaPreview) -> Void)? = nil
-    /// The card last focused here (else the first) is the `.continueWatching` anchor.
+    /// Each card carries `.continueWatching(videoId)`; Up from the first catalog targets the last one focused.
     var focus: FocusState<HomeFocus?>.Binding? = nil
-    @State private var lastFocusedId: String?
+    /// The card last focused here, kept by the layout so Up from the first catalog returns to it.
+    var lastFocusedId: Binding<String?>? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -188,14 +190,15 @@ struct ContinueWatchingRow: View {
                                 .clipped()
                                 .focusBorder()
                                 .background(FocusReporter {
-                                    lastFocusedId = progress.videoId
+                                    if lastFocusedId?.wrappedValue != progress.videoId {
+                                        lastFocusedId?.wrappedValue = progress.videoId
+                                    }
                                     guard let onFocus else { return }
                                     Task { @MainActor in onFocus(await app.continueWatchingPreview(progress)) }
                                 })
                             }
                             .buttonStyle(.card)
-                            .homeFocus(focus, .continueWatching,
-                                       when: progress.videoId == (lastFocusedId ?? items.first?.videoId))
+                            .homeFocus(focus, .continueWatching(progress.videoId))
                             .contextMenu { ContinueWatchingMenu(app: app, progress: progress) }
                             Text(subtitle(progress))
                                 .font(.caption)

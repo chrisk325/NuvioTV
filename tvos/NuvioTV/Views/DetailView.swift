@@ -5,7 +5,9 @@ import NuvioShared
 /// in the vertical scroll often finds nothing on tvOS when the target is off screen, so those rows
 /// send focus to these explicitly.
 enum DetailFocus: Hashable {
-    case play, lastEpisode, people
+    case play, people
+    /// One per episode card (stable: every card always carries its own value).
+    case episode(String)
 }
 
 extension View {
@@ -48,6 +50,8 @@ struct DetailView: View {
     @State private var trailer: PlaybackRequest?
     @State private var isLoadingTrailer = false
     @FocusState private var focus: DetailFocus?
+    /// The episode card last focused; Up from the rows below returns to it.
+    @State private var lastEpisodeId: String?
 
     var body: some View {
         Group {
@@ -142,9 +146,16 @@ struct DetailView: View {
     }
 
     /// Where "up" goes from rows below the cast: the cast row, else episodes, else Play.
+    /// The last focused episode of the shown season, else its first episode.
+    private func episodeAnchor(_ meta: Meta) -> DetailFocus {
+        let episodes = meta.episodesForSeason(season: selectedSeason)
+        let id = episodes.first(where: { $0.id == lastEpisodeId })?.id ?? episodes.first?.id ?? ""
+        return .episode(id)
+    }
+
     private func rowAboveTarget(_ meta: Meta) -> DetailFocus {
         if let people = details?.people, !people.isEmpty { return .people }
-        return hasEpisodes(meta) ? .lastEpisode : .play
+        return hasEpisodes(meta) ? episodeAnchor(meta) : .play
     }
 
     @ViewBuilder
@@ -153,11 +164,11 @@ struct DetailView: View {
             VStack(alignment: .leading, spacing: 40) {
                 hero(meta)
                 if hasEpisodes(meta) {
-                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
+                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus, lastFocusedId: $lastEpisodeId)
                 }
                 if let people = details?.people, !people.isEmpty {
                     PeopleRow(title: "Cast", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus,
-                              onMoveUp: { focus = hasEpisodes(meta) ? .lastEpisode : .play })
+                              onMoveUp: { focus = hasEpisodes(meta) ? episodeAnchor(meta) : .play })
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
@@ -332,8 +343,8 @@ struct EpisodesSection: View {
     let meta: Meta
     @Binding var selectedSeason: Int32
     var focus: FocusState<DetailFocus?>.Binding? = nil
-    /// The episode card last focused (the `.lastEpisode` anchor for Up from the rows below).
-    @State private var lastFocusedId: String?
+    /// The episode card last focused (Up from the rows below returns to it).
+    @Binding var lastFocusedId: String?
 
     var body: some View {
         let seasons = meta.seasons().map { $0.int32Value }
@@ -375,9 +386,11 @@ struct EpisodesSection: View {
                             video: video,
                             progress: app.core.progressFor(videoId: video.id),
                             isWatched: app.isWatched(meta, video),
-                            onFocus: { lastFocusedId = video.id }
+                            onFocus: { if lastFocusedId != video.id { lastFocusedId = video.id } }
                         )
-                        .detailFocus(focus, .lastEpisode, when: video.id == (lastFocusedId ?? episodes.first?.id))
+                        // Same modifier on every card, always: a focus binding that moves between
+                        // cards rebuilt the focused card and threw focus back to episode 1.
+                        .detailFocus(focus, .episode(video.id))
                     }
                 }
                 .padding(.horizontal, 80)
