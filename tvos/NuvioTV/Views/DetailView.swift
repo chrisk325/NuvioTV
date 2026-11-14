@@ -145,6 +145,12 @@ struct DetailView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 40) {
                 hero(meta)
+                    // Up from the Play row lands on this strip and goes on to the tab bar.
+                    .overlay(alignment: .top) {
+                        TabBarFocusGuide()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                    }
                 if hasEpisodes(meta) {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
                 }

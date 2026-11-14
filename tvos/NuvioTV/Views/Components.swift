@@ -360,3 +360,53 @@ extension Meta {
         return parts.joined(separator: "  ·  ")
     }
 }
+
+/// Invisible full-width strip that sends focus to the tab bar (Home / Search / … / Settings).
+/// Pushed pages such as details have nothing focusable above their top buttons, so tvOS can't
+/// find the tab bar on Up; a UIFocusGuide here redirects that move to it.
+struct TabBarFocusGuide: UIViewRepresentable {
+    func makeUIView(context: Context) -> GuideView { GuideView() }
+    func updateUIView(_ uiView: GuideView, context: Context) { uiView.refresh() }
+
+    final class GuideView: UIView {
+        private let guide = UIFocusGuide()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            addLayoutGuide(guide)
+            NSLayoutConstraint.activate([
+                guide.leadingAnchor.constraint(equalTo: leadingAnchor),
+                guide.trailingAnchor.constraint(equalTo: trailingAnchor),
+                guide.topAnchor.constraint(equalTo: topAnchor),
+                guide.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            refresh()
+        }
+
+        func refresh() {
+            if let tabBar = Self.tabBarController(from: window?.rootViewController)?.tabBar, !tabBar.isHidden {
+                guide.preferredFocusEnvironments = [tabBar]
+                guide.isEnabled = true
+            } else {
+                guide.preferredFocusEnvironments = []
+                guide.isEnabled = false
+            }
+        }
+
+        private static func tabBarController(from controller: UIViewController?) -> UITabBarController? {
+            guard let controller else { return nil }
+            if let tabs = controller as? UITabBarController { return tabs }
+            for child in controller.children {
+                if let tabs = tabBarController(from: child) { return tabs }
+            }
+            return nil
+        }
+    }
+}
