@@ -10,6 +10,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.ScrubbingModeParameters
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import com.nuvio.tv.core.player.TopUpLoadControl
 import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.ui.screens.settings.MemoryBudget
 
@@ -301,22 +302,23 @@ object NuvioExoPlayerPerformanceHelper {
                 "ExoPerformance",
                 "buildLoadControl: targetBufferSizeMb=$targetBufferSizeMb, chunkOverheadMb=$chunkOverheadMb, effectiveTargetBufferMb=$effectiveTargetBufferMb, targetBytes=$targetBufferBytes, backBufferMs=${effectiveBackBufferMs()} (set=$backBufferMs)"
             )
-            DefaultLoadControl.Builder()
-                .setAllocator(allocator)
-                .setTargetBufferBytes(targetBufferBytes)
-                .setBufferDurationsMs(
-                    minBufferMs,
-                    maxBufferMs,
-                    bufferForPlaybackMs,
-                    bufferForPlaybackAfterRebufferMs
-                )
+            // Tops the buffer back up between Min and Max Buffer instead of letting it drain to
+            // Min Buffer after the first fill.
+            TopUpLoadControl(
+                allocator = allocator,
+                minBufferMs = minBufferMs,
+                maxBufferMs = maxBufferMs,
+                bufferForPlaybackMs = bufferForPlaybackMs,
+                bufferForPlaybackAfterRebufferMs = bufferForPlaybackAfterRebufferMs,
+                fixedTargetBufferBytes = targetBufferBytes,
                 // The byte target has to gate everything the allocator holds, or the back buffer
                 // is charged on top of it and the configured size is not a limit at all.
-                .setPrioritizeTimeOverSizeThresholds(false)
+                prioritizeTimeOverSizeThresholds = false,
                 // Forward buffer protects playback and the back buffer only protects a seek back,
                 // so the back buffer is the side that gives way when both cannot fit the target.
-                .setBackBuffer(effectiveBackBufferMs(), true)
-                .build()
+                backBufferDurationMs = effectiveBackBufferMs(),
+                retainBackBufferFromKeyframe = true
+            )
         } else {
             DefaultLoadControl.Builder()
                 .setTargetBufferBytes(100 * 1024 * 1024)
