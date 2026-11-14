@@ -94,4 +94,45 @@ class LetterboxDetectorTest {
 
     private fun frame(color: (x: Int, y: Int) -> Int): IntArray =
         IntArray(width * height) { index -> color(index % width, index / width) }
+
+    @Test
+    fun `vote agrees on the bar shown by most frames`() {
+        val vote = LetterboxVote(requiredVotes = 3, maxSamples = 20)
+
+        assertNull(vote.onSample(0.15f))
+        assertNull(vote.onSample(null))
+        assertNull(vote.onSample(0.06f))
+        assertNull(vote.onSample(0.14f))
+
+        assertEquals(0.14f, vote.onSample(0.145f)!!, 0.0001f)
+    }
+
+    @Test
+    fun `vote waits while other bars are as common`() {
+        val vote = LetterboxVote(requiredVotes = 2, maxSamples = 20)
+
+        assertNull(vote.onSample(0.14f))
+        assertNull(vote.onSample(0.05f))
+        assertNull(vote.onSample(0.19f))
+        assertNull(vote.onSample(0.14f))
+        assertEquals(0.14f, vote.onSample(0.14f)!!, 0.0001f)
+    }
+
+    @Test
+    fun `vote decides no bars for a full frame`() {
+        val vote = LetterboxVote(requiredVotes = 2, maxSamples = 20)
+
+        assertNull(vote.onSample(0f))
+        assertEquals(0f, vote.onSample(0f)!!, 0f)
+    }
+
+    @Test
+    fun `vote is exhausted after its sample budget`() {
+        val vote = LetterboxVote(requiredVotes = 2, maxSamples = 2)
+
+        vote.onSample(null)
+        vote.onSample(null)
+
+        assertEquals(true, vote.isExhausted)
+    }
 }

@@ -28,6 +28,7 @@ enum class AspectMode(@StringRes val labelResId: Int) {
 private const val SLIGHT_ZOOM_SCALE = 1.15f
 private const val CINEMA_ZOOM_SCALE = 1.33f
 private const val FORCE_STRETCH_PICTURE_ASPECT = 2.39f
+private const val MIN_CONTENT_FRAME_FRACTION = 0.1f
 
 /**
  * How the ExoPlayer video frame is laid out for an aspect mode: the frame's resize mode, and how
@@ -70,13 +71,16 @@ internal fun exoSurfaceLayout(
     }
 }
 
-/** Sizes [PlayerView]'s content frame to [zoom] times the player, centred; 1 fills the player. */
+/**
+ * Sizes [PlayerView]'s content frame to [zoom] x [verticalZoom] times the player, centred; 1 x 1
+ * fills the player. A side may be below 1 when the other overflows (a letterboxed picture).
+ */
 internal fun applyExoContentFrameZoom(playerView: PlayerView, zoom: Float, verticalZoom: Float = zoom) {
     val contentFrame = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
     val params = contentFrame.layoutParams ?: return
-    val zoomed = (zoom > 1f || verticalZoom > 1f) && playerView.width > 0 && playerView.height > 0
-    val width = if (zoomed) (playerView.width * zoom.coerceAtLeast(1f)).roundToInt() else ViewGroup.LayoutParams.MATCH_PARENT
-    val height = if (zoomed) (playerView.height * verticalZoom.coerceAtLeast(1f)).roundToInt() else ViewGroup.LayoutParams.MATCH_PARENT
+    val sized = (zoom > 1f || verticalZoom > 1f) && playerView.width > 0 && playerView.height > 0
+    val width = if (sized) (playerView.width * zoom.coerceAtLeast(MIN_CONTENT_FRAME_FRACTION)).roundToInt() else ViewGroup.LayoutParams.MATCH_PARENT
+    val height = if (sized) (playerView.height * verticalZoom.coerceAtLeast(MIN_CONTENT_FRAME_FRACTION)).roundToInt() else ViewGroup.LayoutParams.MATCH_PARENT
     val gravityChanged = params is FrameLayout.LayoutParams && params.gravity != Gravity.CENTER
     if (params.width == width && params.height == height && !gravityChanged) return
     params.width = width
