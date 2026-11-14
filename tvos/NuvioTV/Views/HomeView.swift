@@ -194,7 +194,15 @@ struct ContinueWatchingRow: View {
                                         lastFocusedId?.wrappedValue = progress.videoId
                                     }
                                     guard let onFocus else { return }
-                                    Task { @MainActor in onFocus(await app.continueWatchingPreview(progress)) }
+                                    // Hero follows at once with the card's own title / artwork, then
+                                    // gets the full preview (logo, description, ratings) when loaded.
+                                    onFocus(app.core.previewFor(progress: progress))
+                                    Task { @MainActor in
+                                        let full = await app.continueWatchingPreview(progress)
+                                        if lastFocusedId?.wrappedValue == nil || lastFocusedId?.wrappedValue == progress.videoId {
+                                            onFocus(full)
+                                        }
+                                    }
                                 })
                             }
                             .buttonStyle(.card)

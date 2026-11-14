@@ -301,13 +301,23 @@ struct ModernHomeView: View {
                         .frame(height: 470, alignment: .topLeading)
                         .animation(.easeInOut(duration: 0.3), value: hero.id)
                 }
+                ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
                     // nothing above on Up (first catalog → Continue Watching / hero).
                     VStack(alignment: .leading, spacing: 24) {
+                        Color.clear.frame(height: 0).id(Self.topAnchor)
                         if showsContinueWatching {
-                            ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus,
-                                            lastFocusedId: $lastContinueWatchingId)
+                            ContinueWatchingRow(
+                                items: app.continueWatching,
+                                onFocus: { item in
+                                    setFocus(item)
+                                    // Back on the top row: rows return to the top, right under the hero.
+                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(Self.topAnchor, anchor: .top) }
+                                },
+                                focus: $homeFocus,
+                                lastFocusedId: $lastContinueWatchingId
+                            )
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                         ForEach(slots, id: \.key) { slot in
@@ -316,6 +326,7 @@ struct ModernHomeView: View {
                         }
                     }
                     .padding(.bottom, 60)
+                }
                 }
             }
         }
@@ -336,6 +347,8 @@ struct ModernHomeView: View {
             homeFocus = .continueWatching(id)
         }
     }
+
+    private static let topAnchor = "modern.top"
 
     /// Debounced like Android (MODERN_HERO_FOCUS_DEBOUNCE_MS = 450) so fast scrolling doesn't flicker.
     private func setFocus(_ item: MetaPreview) {
