@@ -2,7 +2,6 @@ package com.nuvio.tv.core.player
 
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.upstream.Allocator
@@ -29,13 +28,13 @@ class BitrateAwareLoadControl(
     /** Memory ceiling in bytes. */
     private val budgetBytes: Long,
     allocator: DefaultAllocator = DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE, 64)
-) : DefaultLoadControl(
+) : TopUpLoadControl(
     allocator,
     minBufferMs,
     maxBufferMs,
     bufferForPlaybackMs,
     bufferForPlaybackAfterRebufferMs,
-    /* targetBufferBytes= */ C.LENGTH_UNSET,
+    /* fixedTargetBufferBytes= */ C.LENGTH_UNSET,
     prioritizeTimeOverSizeThresholds,
     backBufferDurationMs,
     retainBackBufferFromKeyframe
@@ -66,13 +65,20 @@ class BitrateAwareLoadControl(
         return if (override >= 0L) override else super.getBackBufferDurationUs(playerId)
     }
 
+    // The top-up between Min and Max Buffer has to stop at the same budget the player uses.
+    override fun topUpTargetBytes(): Int = currentBudgetBytes()
+
+    private fun currentBudgetBytes(): Int {
+        val effectiveBudget = if (budgetBytesOverride >= 0L) budgetBytesOverride else budgetBytes
+        return effectiveBudget.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
     override fun calculateTargetBufferBytes(
         trackSelectionArray: Array<out ExoTrackSelection?>
     ): Int {
         // Target = the memory budget. Time (Max Buffer Duration) is the real limit; this is
         // just the memory cap. Sizing from advertised bitrate starved variable-bitrate peaks,
         // so let high-bitrate fill up to the budget and low-bitrate stop at the time limit.
-        val effectiveBudget = if (budgetBytesOverride >= 0L) budgetBytesOverride else budgetBytes
-        return effectiveBudget.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        return currentBudgetBytes()
     }
 }
