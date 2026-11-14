@@ -12,11 +12,14 @@ struct RemoteImage: View {
 
     var body: some View {
         ZStack {
-            Rectangle().fill(Color.white.opacity(0.08))
             if let image, loadedUrl == url {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+            } else if contentMode == .fill {
+                // Placeholder only while artwork loads, and never behind logos (.fit), whose
+                // transparent areas would otherwise show it as a grey box.
+                Rectangle().fill(Color.white.opacity(0.08))
             }
         }
         .task(id: url) {
