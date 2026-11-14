@@ -9,6 +9,9 @@ struct PeopleRow: View {
     var linksToTmdb = true
     /// Details page: the first avatar is the `.people` focus anchor.
     var focus: FocusState<DetailFocus?>.Binding? = nil
+    /// Runs when Up is pressed on an avatar (set on each focused card: a handler on the row
+    /// itself never receives the press).
+    var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -22,11 +25,13 @@ struct PeopleRow: View {
                                     .buttonStyle(.card)
                                     .clipShape(Circle())
                                     .detailFocus(focus, .people, when: index == 0)
+                                    .onMoveUp(onMoveUp)
                             } else {
                                 Button {} label: { avatar(person) }
                                     .buttonStyle(.card)
                                     .clipShape(Circle())
                                     .detailFocus(focus, .people, when: index == 0)
+                                    .onMoveUp(onMoveUp)
                             }
                             Text(person.name).font(.caption).lineLimit(1).frame(width: 190)
                             if let role = person.role {

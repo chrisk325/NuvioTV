@@ -194,6 +194,7 @@ struct PosterCard: View {
     let item: MetaPreview
     var width: CGFloat = 220
     var onFocus: ((MetaPreview) -> Void)? = nil
+    var onMoveUp: (() -> Void)? = nil
 
     private var height: CGFloat {
         let ratio = CGFloat(item.posterShape.aspectRatio())
@@ -218,6 +219,7 @@ struct PosterCard: View {
                 .background(FocusReporter { onFocus?(item) })
             }
             .buttonStyle(.card)
+            .onMoveUp(onMoveUp)
             .contextMenu { ItemContextMenu(app: app, item: item) }
 
             Text(item.name)
@@ -241,6 +243,7 @@ struct LandscapeCard: View {
     let item: MetaPreview
     var width: CGFloat = 420
     var onFocus: ((MetaPreview) -> Void)? = nil
+    var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
         NavigationLink(value: Route.detail(item)) {
@@ -261,6 +264,7 @@ struct LandscapeCard: View {
             .background(FocusReporter { onFocus?(item) })
         }
         .buttonStyle(.card)
+        .onMoveUp(onMoveUp)
         .contextMenu { ItemContextMenu(app: app, item: item) }
     }
 }
@@ -273,6 +277,8 @@ struct MetaRowView: View {
     var landscape = false
     var onFocus: ((MetaPreview) -> Void)? = nil
     var onReachEnd: (() -> Void)? = nil
+    /// Up on any card in the row (details page rows jump to an anchor above).
+    var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -291,9 +297,9 @@ struct MetaRowView: View {
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                         Group {
                             if landscape {
-                                LandscapeCard(item: item, onFocus: onFocus)
+                                LandscapeCard(item: item, onFocus: onFocus, onMoveUp: onMoveUp)
                             } else {
-                                PosterCard(item: item, onFocus: onFocus)
+                                PosterCard(item: item, onFocus: onFocus, onMoveUp: onMoveUp)
                             }
                         }
                         .onAppear {

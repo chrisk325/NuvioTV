@@ -19,7 +19,8 @@ extension View {
         }
     }
 
-    /// Runs [action] when the user presses up while focus is inside this view.
+    /// Runs [action] when the user presses Up on this view. Put it on the focusable control
+    /// itself; a container never receives the press.
     @ViewBuilder
     func onMoveUp(_ action: (() -> Void)?) -> some View {
         if let action {
@@ -148,8 +149,8 @@ struct DetailView: View {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
                 }
                 if let people = details?.people, !people.isEmpty {
-                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus)
-                        .onMoveUp { focus = hasEpisodes(meta) ? .lastEpisode : .play }
+                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus,
+                              onMoveUp: { focus = hasEpisodes(meta) ? .lastEpisode : .play })
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
@@ -175,13 +176,13 @@ struct DetailView: View {
                     .padding(.horizontal, 80)
                 }
                 if let details, !details.collectionParts.isEmpty {
-                    MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts)
-                        .onMoveUp { focus = rowAboveTarget(meta) }
+                    MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts,
+                                onMoveUp: { focus = rowAboveTarget(meta) })
                 }
                 if let details, !details.recommendations.isEmpty {
-                    MetaRowView(title: "More like this", items: details.recommendations)
-                        // With a collection row above, let the focus engine move between the two rows.
-                        .onMoveUp(details.collectionParts.isEmpty ? (({ focus = rowAboveTarget(meta) }) as () -> Void) : nil)
+                    // With a collection row above, let the focus engine move between the two rows.
+                    MetaRowView(title: "More like this", items: details.recommendations,
+                                onMoveUp: details.collectionParts.isEmpty ? (({ focus = rowAboveTarget(meta) }) as () -> Void) : nil)
                 }
             }
             .padding(.bottom, 80)
