@@ -71,8 +71,18 @@ class ServerConfigurationStore @Inject constructor(
         fallbackBackendUrl = BuildConfig.SUPABASE_FALLBACK_URL.trim().trimEnd('/').takeIf { it.isNotBlank() },
         tvLoginWebBaseUrl = BuildConfig.TV_LOGIN_WEB_BASE_URL,
         deviceLoginWebBaseUrl = BuildConfig.DEVICE_LOGIN_WEB_BASE_URL,
-        avatarPublicBaseUrl = BuildConfig.AVATAR_PUBLIC_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+        avatarPublicBaseUrl = officialAvatarPublicBaseUrl()
     )
+
+    // Match the mobile app: avatars live in the backend's public "avatars" bucket. The build
+    // property is only an override, so a missing or malformed value no longer leaves profiles
+    // with bare storage paths that fail to load and fall back to a solid color.
+    private fun officialAvatarPublicBaseUrl(): String? {
+        val configured = BuildConfig.AVATAR_PUBLIC_BASE_URL.trim().trimEnd('/')
+        if (configured.startsWith("https://") || configured.startsWith("http://")) return configured
+        val backendUrl = BuildConfig.SUPABASE_URL.trim().trimEnd('/')
+        return if (backendUrl.isNotBlank()) "$backendUrl/storage/v1/object/public/avatars" else null
+    }
 
     private companion object {
         const val PREFERENCES_NAME = "server_configuration"
