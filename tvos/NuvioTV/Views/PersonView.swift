@@ -100,6 +100,8 @@ struct PersonView: View {
                 LoadingView()
             }
         }
+        // Full screen like details: no tab bar.
+        .toolbar(.hidden, for: .tabBar)
         .task {
             guard person == nil else { return }
             person = try? await app.core.tmdbPerson(personId: personId)

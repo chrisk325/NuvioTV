@@ -73,6 +73,8 @@ struct StreamsView: View {
         .onAppear(perform: start)
         // Menu always goes back to the details page.
         .onExitCommand { dismiss() }
+        // Full screen like details: no tab bar.
+        .toolbar(.hidden, for: .tabBar)
         .onDisappear {
             subscription?.cancel()
             subscription = nil
