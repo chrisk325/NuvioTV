@@ -140,7 +140,9 @@ struct ClassicHomeView: View {
         ZStack {
             FocusBackdrop(url: focused?.backdropUrl)
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 30) {
+                // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
+                // nothing above on Up (first catalog → Continue Watching / hero).
+                VStack(alignment: .leading, spacing: 30) {
                     if app.settings.showHero {
                         HeroCarousel(items: feed.heroItems(slots, core: app.core))
                     }
@@ -183,7 +185,9 @@ struct GridHomeView: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 50) {
+            // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
+            // nothing above on Up (first catalog → Continue Watching / hero).
+            VStack(alignment: .leading, spacing: 50) {
                 if app.settings.showHero {
                     HeroCarousel(items: feed.heroItems(slots, core: app.core), height: 520)
                 }
@@ -272,7 +276,9 @@ struct ModernHomeView: View {
                         .animation(.easeInOut(duration: 0.3), value: hero.id)
                 }
                 ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
+                    // nothing above on Up (first catalog → Continue Watching / hero).
+                    VStack(alignment: .leading, spacing: 24) {
                         if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
                             ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus)
                         }
