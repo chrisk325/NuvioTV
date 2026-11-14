@@ -86,8 +86,39 @@ struct FocusReporter: View {
     }
 }
 
+/// Long-press (press and hold) menu for catalog / library cards.
+struct ItemContextMenu: View {
+    let app: AppModel
+    let item: MetaPreview
+
+    var body: some View {
+        let inLibrary = app.isInLibrary(item.id)
+        Button {
+            app.core.toggleLibraryPreview(preview: item)
+        } label: {
+            Label(inLibrary ? "Remove from Library" : "Add to Library", systemImage: inLibrary ? "bookmark.slash" : "bookmark")
+        }
+        if item.apiType == "movie" {
+            let watched = app.core.isPreviewWatched(preview: item)
+            Button {
+                app.core.setPreviewWatched(preview: item, isWatched: !watched)
+            } label: {
+                Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "eye")
+            }
+        }
+        if app.continueWatching.contains(where: { $0.contentId == item.id }) {
+            Button(role: .destructive) {
+                app.core.removeProgress(contentId: item.id)
+            } label: {
+                Label("Remove from Continue Watching", systemImage: "xmark.circle")
+            }
+        }
+    }
+}
+
 /// Poster card used in every row and grid. Navigates to the detail screen.
 struct PosterCard: View {
+    @EnvironmentObject private var app: AppModel
     let item: MetaPreview
     var width: CGFloat = 220
     var onFocus: ((MetaPreview) -> Void)? = nil
@@ -115,6 +146,7 @@ struct PosterCard: View {
                 .background(FocusReporter { onFocus?(item) })
             }
             .buttonStyle(.card)
+            .contextMenu { ItemContextMenu(app: app, item: item) }
 
             Text(item.name)
                 .font(.caption)
@@ -127,6 +159,7 @@ struct PosterCard: View {
 
 /// 16:9 backdrop card with the title on it (Modern layout rows).
 struct LandscapeCard: View {
+    @EnvironmentObject private var app: AppModel
     let item: MetaPreview
     var width: CGFloat = 420
     var onFocus: ((MetaPreview) -> Void)? = nil
@@ -150,6 +183,7 @@ struct LandscapeCard: View {
             .background(FocusReporter { onFocus?(item) })
         }
         .buttonStyle(.card)
+        .contextMenu { ItemContextMenu(app: app, item: item) }
     }
 }
 

@@ -123,6 +123,32 @@ struct CatalogRowView: View {
     }
 }
 
+/// Long-press menu for Continue Watching cards.
+struct ContinueWatchingMenu: View {
+    let app: AppModel
+    let progress: WatchProgress
+
+    var body: some View {
+        let preview = app.core.previewFor(progress: progress)
+        let inLibrary = app.isInLibrary(progress.contentId)
+        Button {
+            app.core.markProgressWatched(progress: progress)
+        } label: {
+            Label("Mark as watched", systemImage: "eye")
+        }
+        Button {
+            app.core.toggleLibraryPreview(preview: preview)
+        } label: {
+            Label(inLibrary ? "Remove from Library" : "Add to Library", systemImage: inLibrary ? "bookmark.slash" : "bookmark")
+        }
+        Button(role: .destructive) {
+            app.core.removeProgress(contentId: progress.contentId)
+        } label: {
+            Label("Remove from Continue Watching", systemImage: "xmark.circle")
+        }
+    }
+}
+
 struct ContinueWatchingRow: View {
     @EnvironmentObject private var app: AppModel
     let items: [WatchProgress]
@@ -156,6 +182,7 @@ struct ContinueWatchingRow: View {
                                 })
                             }
                             .buttonStyle(.card)
+                            .contextMenu { ContinueWatchingMenu(app: app, progress: progress) }
                             Text(subtitle(progress))
                                 .font(.caption)
                                 .lineLimit(1)

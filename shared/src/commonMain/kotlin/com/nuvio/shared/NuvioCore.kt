@@ -521,7 +521,7 @@ class NuvioCore(
     fun isInLibrary(id: String): Boolean = library.contains(id)
 
     /** Returns true when the title is now saved (mirrored to the Trakt watchlist when connected). */
-    fun toggleLibrary(meta: Meta): Boolean = library.toggle(
+    fun toggleLibrary(meta: Meta): Boolean = toggleLibraryItem(
         SavedItem(
             id = meta.id,
             type = meta.apiType,
@@ -530,16 +530,86 @@ class NuvioCore(
             background = meta.backdropUrl,
             posterShape = meta.posterShape.name.lowercase(),
             savedAtMs = currentTimeMillis()
-        )
-    ).also { saved ->
-        val imdb = meta.imdbId ?: meta.id.takeIf { it.startsWith("tt") }
-        if (trakt.isConnected && imdb != null) {
-            scope.launch { runCatching { trakt.setShowInWatchlist(imdb, meta.isSeriesLike, saved) } }
+        ),
+        imdb = meta.imdbId ?: meta.id.takeIf { it.startsWith("tt") },
+        isShow = meta.isSeriesLike
+    )
+
+    /** Library toggle from a card's long-press menu (no full meta needed). */
+    fun toggleLibraryPreview(preview: MetaPreview): Boolean = toggleLibraryItem(
+        SavedItem(
+            id = preview.id,
+            type = preview.apiType,
+            name = preview.name,
+            poster = preview.poster,
+            background = preview.backdropUrl,
+            posterShape = preview.posterShape.name.lowercase(),
+            savedAtMs = currentTimeMillis()
+        ),
+        imdb = preview.imdbId ?: preview.id.takeIf { it.startsWith("tt") },
+        isShow = com.nuvio.shared.model.isSeriesLikeType(preview.apiType)
+    )
+
+    private fun toggleLibraryItem(item: SavedItem, imdb: String?, isShow: Boolean): Boolean =
+        library.toggle(item).also { saved ->
+            if (trakt.isConnected && imdb != null) {
+                scope.launch { runCatching { trakt.setShowInWatchlist(imdb, isShow, saved) } }
+            }
+            if (cloud.isSignedIn) scope.launch {
+                runCatching {
+                    if (saved) cloud.pushLibrary(library.items.value.filter { it.id == item.id })
+                    else cloud.deleteLibrary(item.id, item.type)
+                }
+            }
         }
-        if (cloud.isSignedIn) scope.launch {
-            runCatching {
-                if (saved) cloud.pushLibrary(library.items.value.filter { it.id == meta.id })
-                else cloud.deleteLibrary(meta.id, meta.apiType)
+
+    /** Movie-level watched state for a card (episodes are marked from the details page). */
+    fun isPreviewWatched(preview: MetaPreview): Boolean =
+        watched.isWatched("movie:${preview.imdbId ?: preview.id}")
+
+    fun setPreviewWatched(preview: MetaPreview, isWatched: Boolean) {
+        watched.mark("movie:${preview.imdbId ?: preview.id}", isWatched)
+        if (!isWatched) return
+        val media = TrackedMedia(
+            isEpisode = false,
+            imdbId = (preview.imdbId ?: preview.id).takeIf { it.startsWith("tt") }?.substringBefore(':'),
+            tmdbId = preview.id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.toIntOrNull(),
+            kitsuId = null,
+            title = preview.name,
+            year = preview.releaseInfo?.take(4)?.toIntOrNull(),
+            season = null,
+            episode = null
+        )
+        scope.launch {
+            runCatching { trakt.markWatched(media) }
+            runCatching { simkl.markWatched(media) }
+            if (cloud.isSignedIn) runCatching { cloud.pushWatched(preview.id, preview.apiType, preview.name, null, null) }
+        }
+    }
+
+    /**
+     * Continue Watching "Mark as watched": marks the movie / episode watched everywhere and drops
+     * it from Continue Watching.
+     */
+    fun markProgressWatched(progress: WatchProgress) {
+        val isEpisode = progress.season != null && progress.episode != null
+        watched.mark(if (isEpisode) progress.videoId else "movie:${progress.contentId}", true)
+        watchProgress.remove(progress.contentId)
+        val media = TrackedMedia(
+            isEpisode = isEpisode,
+            imdbId = progress.contentId.takeIf { it.startsWith("tt") }?.substringBefore(':'),
+            tmdbId = null,
+            kitsuId = progress.contentId.takeIf { it.startsWith("kitsu:") }?.split(':')?.getOrNull(1),
+            title = progress.name,
+            year = null,
+            season = progress.season,
+            episode = progress.episode
+        )
+        scope.launch {
+            runCatching { trakt.markWatched(media) }
+            runCatching { simkl.markWatched(media) }
+            if (cloud.isSignedIn) runCatching {
+                cloud.pushWatched(progress.contentId, progress.contentType, progress.name, progress.season, progress.episode)
             }
         }
     }
