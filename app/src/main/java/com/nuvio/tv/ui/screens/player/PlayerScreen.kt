@@ -2401,7 +2401,8 @@ private fun ExoPlayerSurface(
                         tunnelingEnabled = latestTunnelingEnabled,
                         aspectMode = latestAspectMode,
                         keystoneZoomEffect = controller.keystoneZoomEffect,
-                        onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen)
+                        onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen),
+                        letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
                     )
                 }
             }
@@ -2412,7 +2413,8 @@ private fun ExoPlayerSurface(
                         tunnelingEnabled = latestTunnelingEnabled,
                         aspectMode = latestAspectMode,
                         keystoneZoomEffect = controller.keystoneZoomEffect,
-                        onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen)
+                        onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen),
+                        letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
                     )
                 }
             }
@@ -2431,7 +2433,8 @@ private fun ExoPlayerSurface(
                 tunnelingEnabled = latestTunnelingEnabled,
                 aspectMode = latestAspectMode,
                 keystoneZoomEffect = controller.keystoneZoomEffect,
-                onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen)
+                onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen),
+                letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
             )
         }
         onDispose {
@@ -2446,7 +2449,8 @@ private fun ExoPlayerSurface(
                     tunnelingEnabled = latestTunnelingEnabled,
                     aspectMode = latestAspectMode,
                     keystoneZoomEffect = controller.keystoneZoomEffect,
-                    onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen)
+                    onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen),
+                    letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
                 )
             }
         }
@@ -2468,8 +2472,21 @@ private fun ExoPlayerSurface(
             tunnelingEnabled = tunnelingEnabled,
             aspectMode = aspectMode,
             keystoneZoomEffect = controller.keystoneZoomEffect,
-            onNeedsKeystoneZoom = controller.keystoneZoomRequest(keepZoomInsideScreen)
+            onNeedsKeystoneZoom = controller.keystoneZoomRequest(keepZoomInsideScreen),
+            letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
         )
+    }
+
+    LaunchedEffect(player, playerView) {
+        runLetterboxDetection(player, playerView, controller) {
+            playerView.syncExoSurfaceLayout(
+                tunnelingEnabled = latestTunnelingEnabled,
+                aspectMode = latestAspectMode,
+                keystoneZoomEffect = controller.keystoneZoomEffect,
+                onNeedsKeystoneZoom = controller.keystoneZoomRequest(latestKeepZoomInsideScreen),
+                letterboxPictureAspect = controller.letterboxPictureAspectFor(player)
+            )
+        }
     }
 
     LaunchedEffect(playerView, player, useLibass, libassRenderMode) {
@@ -2517,11 +2534,20 @@ private fun PlayerView.syncExoSurfaceLayout(
     tunnelingEnabled: Boolean,
     aspectMode: AspectMode,
     keystoneZoomEffect: KeystoneZoomEffect?,
-    onNeedsKeystoneZoom: (() -> Unit)?
+    onNeedsKeystoneZoom: (() -> Unit)?,
+    letterboxPictureAspect: Float? = null
 ) {
     val videoAspect = readExoVideoAspectRatio(this)
     val viewAspect = readViewAspectRatio(width, height)
-    val videoFraction = aspectModeVideoFraction(aspectMode, videoAspect, viewAspect)
+    // A frame with baked-in bars (UHD Blu-ray) is resized for the picture inside the bars.
+    val pictureAspect = letterboxPictureAspect?.takeIf {
+        videoAspect != null && viewAspect > 0f && aspectModeCropsLetterbox(aspectMode)
+    }
+    val videoFraction = if (pictureAspect != null && videoAspect != null) {
+        letterboxFrameFraction(aspectMode, videoAspect, pictureAspect, viewAspect)
+    } else {
+        aspectModeVideoFraction(aspectMode, videoAspect, viewAspect)
+    }
     val surfaceLayout = if (keystoneZoomEffect != null) {
         keystoneZoomEffect.setVideoFraction(videoFraction)
         ExoSurfaceLayout(AspectRatioFrameLayout.RESIZE_MODE_FILL)
@@ -2529,11 +2555,19 @@ private fun PlayerView.syncExoSurfaceLayout(
         if (onNeedsKeystoneZoom != null && videoAspect != null && videoFraction.overflowsView()) {
             onNeedsKeystoneZoom()
         }
-        exoSurfaceLayout(
-            aspectMode = aspectMode,
-            videoAspect = videoAspect,
-            viewAspect = viewAspect
-        )
+        if (pictureAspect != null) {
+            ExoSurfaceLayout(
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL,
+                zoom = videoFraction.scaleX,
+                verticalZoom = videoFraction.scaleY
+            )
+        } else {
+            exoSurfaceLayout(
+                aspectMode = aspectMode,
+                videoAspect = videoAspect,
+                viewAspect = viewAspect
+            )
+        }
     }
     setTag(
         R.id.player_view_keystone_zoom_fraction_tag,
@@ -2550,7 +2584,13 @@ private fun PlayerView.syncExoSurfaceLayout(
         LibassOverlayGeometryContext(
             requestedAspectMode = aspectMode,
             appliedAspectMode = appliedAspectMode,
-            tunnelingEnabled = tunnelingEnabled
+            tunnelingEnabled = tunnelingEnabled,
+            // Libass keeps the Fit geometry of the full frame, so subtitles in the bars stay on screen.
+            subtitleFraction = if (pictureAspect != null) {
+                aspectModeVideoFraction(AspectMode.ORIGINAL, videoAspect, viewAspect)
+            } else {
+                null
+            }
         )
     )
     syncLibassOverlayGeometry()
@@ -2560,7 +2600,9 @@ private fun PlayerView.syncExoSurfaceLayout(
 private data class LibassOverlayGeometryContext(
     val requestedAspectMode: AspectMode,
     val appliedAspectMode: AspectMode,
-    val tunnelingEnabled: Boolean
+    val tunnelingEnabled: Boolean,
+    /** When set, libass is laid out on this centred fraction of the player instead of the video frame. */
+    val subtitleFraction: AspectScale? = null
 )
 
 private const val LIBASS_OVERLAY_GEOMETRY_TAG = "LibassOverlayGeometry"
@@ -2576,10 +2618,11 @@ private fun PlayerView.syncLibassOverlayGeometry() {
     val overlayWidth = overlay?.width ?: 0
     val overlayHeight = overlay?.height ?: 0
     val keystoneZoomFraction = getTag(R.id.player_view_keystone_zoom_fraction_tag) as? AspectScale
-    val videoBounds = if (keystoneZoomFraction != null) {
-        centeredVideoBounds(width, height, keystoneZoomFraction)
-    } else {
-        contentFrame?.let(::transformedChildBoundsInParent)
+    val subtitleFraction = context?.subtitleFraction
+    val videoBounds = when {
+        subtitleFraction != null -> centeredVideoBounds(width, height, subtitleFraction)
+        keystoneZoomFraction != null -> centeredVideoBounds(width, height, keystoneZoomFraction)
+        else -> contentFrame?.let(::transformedChildBoundsInParent)
     }
     val margins = videoBounds?.let { libassOverlayMargins(overlayWidth, overlayHeight, it) }
 
@@ -2596,7 +2639,7 @@ private fun PlayerView.syncLibassOverlayGeometry() {
     assOverlayView.invalidateAssOverlay()
     logLibassOverlayGeometry(
         "event=apply requested=${context?.requestedAspectMode} applied=${context?.appliedAspectMode} " +
-            "tunneling=${context?.tunnelingEnabled} " +
+            "tunneling=${context?.tunnelingEnabled} subtitleFraction=${context?.subtitleFraction} " +
             "overlay=${overlayWidth}x${overlayHeight} video=${videoSize?.width}x${videoSize?.height} " +
             "par=${videoSize?.pixelWidthHeightRatio} content=${describeRect(videoBounds)} " +
             "margins=top:${margins.top},bottom:${margins.bottom},left:${margins.left},right:${margins.right}"

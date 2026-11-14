@@ -1,8 +1,15 @@
 package com.nuvio.tv.core.player
 
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
+import android.view.SurfaceView
 import android.view.TextureView
+import android.view.View
+import kotlin.coroutines.resume
 import kotlin.math.abs
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 object LetterboxDetector {
 
@@ -96,5 +103,92 @@ class LetterboxTracker {
     private companion object {
         const val STABLE_SAMPLES = 4
         const val STABLE_TOLERANCE = 0.015f
+    }
+}
+
+/**
+ * Decides the baked-in letterbox of a feature from frames sampled during playback.
+ *
+ * Unlike [LetterboxTracker] (trailers), a feature opens on logos, dark scenes and subtitles drawn
+ * into the bars, so one stable streak is not enough: the bar must be the clear majority of the
+ * frames that show a picture, and the smallest agreeing bar is kept so the picture is never
+ * cropped past its edge.
+ */
+class LetterboxVote(
+    private val requiredVotes: Int = REQUIRED_VOTES,
+    private val maxSamples: Int = MAX_SAMPLES
+) {
+    private val bars = ArrayList<Float>()
+    private var samples = 0
+
+    val isExhausted: Boolean get() = samples >= maxSamples
+
+    /**
+     * Adds one sampled frame ([bar] is null for a frame without a usable picture) and returns the
+     * agreed bar once enough frames agree: 0 when the frame has no bars.
+     */
+    fun onSample(bar: Float?): Float? {
+        samples++
+        if (bar == null) return null
+        bars += bar
+        val candidate = bars.maxBy { c -> bars.count { abs(it - c) <= TOLERANCE } }
+        val agreeing = bars.filter { abs(it - candidate) <= TOLERANCE }
+        if (agreeing.size < requiredVotes || agreeing.size * 2 <= bars.size) return null
+        return agreeing.min()
+    }
+
+    private companion object {
+        const val REQUIRED_VOTES = 6
+        const val MAX_SAMPLES = 90
+        const val TOLERANCE = 0.015f
+    }
+}
+
+/**
+ * Samples the frame shown on the player's video surface. A [SurfaceView] is read with
+ * [PixelCopy], which copies the decoded frame regardless of how the view is laid out.
+ * Tunneled and protected surfaces cannot be copied; those samples come back as [Failed].
+ */
+class VideoSurfaceLetterboxSampler {
+
+    sealed interface Sample
+    data class Copied(val bar: Float?) : Sample
+    data object Failed : Sample
+
+    private val bitmap = Bitmap.createBitmap(
+        LetterboxDetector.SAMPLE_WIDTH,
+        LetterboxDetector.SAMPLE_HEIGHT,
+        Bitmap.Config.ARGB_8888
+    )
+    private val pixels = IntArray(LetterboxDetector.SAMPLE_WIDTH * LetterboxDetector.SAMPLE_HEIGHT)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    suspend fun sample(surfaceView: View): Sample = when (surfaceView) {
+        is TextureView -> if (surfaceView.isAvailable) {
+            surfaceView.getBitmap(bitmap)
+            Copied(detect())
+        } else {
+            Failed
+        }
+        is SurfaceView -> copy(surfaceView)
+        else -> Failed
+    }
+
+    private suspend fun copy(surfaceView: SurfaceView): Sample {
+        if (surfaceView.holder.surface?.isValid != true) return Failed
+        return suspendCancellableCoroutine { continuation ->
+            val requested = runCatching {
+                PixelCopy.request(surfaceView, bitmap, { result ->
+                    if (!continuation.isActive) return@request
+                    continuation.resume(if (result == PixelCopy.SUCCESS) Copied(detect()) else Failed)
+                }, mainHandler)
+            }.isSuccess
+            if (!requested && continuation.isActive) continuation.resume(Failed)
+        }
+    }
+
+    private fun detect(): Float? {
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        return LetterboxDetector.detectBar(pixels, bitmap.width, bitmap.height)
     }
 }

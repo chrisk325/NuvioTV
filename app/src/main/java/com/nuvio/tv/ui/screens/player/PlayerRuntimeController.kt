@@ -768,6 +768,10 @@ class PlayerRuntimeController(
     internal var keystoneZoomSwitchInFlight: Boolean = false
     internal var keystoneZoomStreamUrl: String? = null
 
+    // Baked-in letterbox of the current stream (see PlayerLetterboxCrop).
+    internal var letterboxKey: LetterboxKey? = null
+    internal var letterboxPictureAspect: Float? = null
+
     // Dolby Vision Profile 5 -> HDR10 (see DolbyVisionP5Session).
     internal var dolbyVisionP5Session: com.nuvio.tv.core.player.DolbyVisionP5Session? = null
     internal var dv5HdrStreamUrl: String? = null
