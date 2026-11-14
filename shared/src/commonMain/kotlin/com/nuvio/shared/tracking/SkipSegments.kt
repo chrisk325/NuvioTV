@@ -15,12 +15,21 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 
-/** "intro", "recap", "outro". Times in seconds. */
-data class SkipSegment(val type: String, val startSeconds: Double, val endSeconds: Double) {
+/**
+ * "intro", "recap", "outro" (episodes) or "movie-credits" (movies). Times in seconds.
+ * [toPostCredits]: the credits skip stops where a post-credits scene starts.
+ */
+data class SkipSegment(
+    val type: String,
+    val startSeconds: Double,
+    val endSeconds: Double,
+    val toPostCredits: Boolean = false
+) {
     val label: String
         get() = when (type) {
             "recap" -> "Skip recap"
             "outro" -> "Skip credits"
+            "movie-credits" -> if (toPostCredits) "Skip to post-credits scene" else "Skip credits"
             else -> "Skip intro"
         }
 }
@@ -44,12 +53,7 @@ class SkipSegmentsService(private val http: HttpClient, introDbBaseUrl: String) 
             if (media.isEpisode) append("&season=${media.season}&episode=${media.episode}") else append("&is_movie=true")
         }
         val body = fetch(query).asObject() ?: return emptyList()
-        return listOf("recap", "intro", "outro").mapNotNull { type ->
-            val seg = body.obj(if (type == "outro") "outro" else type) ?: return@mapNotNull null
-            val start = seg.str("start_sec")?.toDoubleOrNull() ?: seg.long("start_ms")?.div(1000.0) ?: return@mapNotNull null
-            val end = seg.str("end_sec")?.toDoubleOrNull() ?: seg.long("end_ms")?.div(1000.0) ?: return@mapNotNull null
-            if (end > start) SkipSegment(type, start, end) else null
-        }
+        return introDbIntervals(body, isMovie = !media.isEpisode)
     }
 
     private suspend fun aniSkip(media: TrackedMedia, length: Double): List<SkipSegment> {
@@ -73,4 +77,30 @@ class SkipSegmentsService(private val http: HttpClient, introDbBaseUrl: String) 
         if (!response.status.isSuccess()) return null
         return runCatching { AddonJson.parseToJsonElement(response.bodyAsText()) }.getOrNull()
     }
+}
+
+/**
+ * IntroDB /segments response → skip buttons, as Android IntroDbSegmentsResponse.toSkipIntervals:
+ * episodes get intro / recap / outro; movies only get the end credits, cut short so they never
+ * skip over a post-credits scene (the button then jumps to the scene).
+ */
+internal fun introDbIntervals(body: kotlinx.serialization.json.JsonObject, isMovie: Boolean): List<SkipSegment> {
+    fun segment(key: String): Pair<Double, Double>? {
+        val seg = body.obj(key) ?: return null
+        val start = seg.str("start_sec")?.toDoubleOrNull() ?: seg.long("start_ms")?.div(1000.0) ?: return null
+        val end = seg.str("end_sec")?.toDoubleOrNull() ?: seg.long("end_ms")?.div(1000.0) ?: return null
+        return if (start >= 0 && end > start && start.isFinite() && end.isFinite()) start to end else null
+    }
+    if (!isMovie) {
+        return listOf("intro", "recap", "outro").mapNotNull { type ->
+            segment(type)?.let { (start, end) -> SkipSegment(type, start, end) }
+        }
+    }
+    val credits = segment("outro") ?: return emptyList()
+    val scene = segment("post_credits")
+    if (scene != null && scene.first < credits.second && scene.second > credits.first) {
+        return if (scene.first > credits.first) listOf(SkipSegment("movie-credits", credits.first, scene.first, toPostCredits = true))
+        else emptyList()
+    }
+    return listOf(SkipSegment("movie-credits", credits.first, credits.second, toPostCredits = scene != null && scene.first >= credits.second))
 }

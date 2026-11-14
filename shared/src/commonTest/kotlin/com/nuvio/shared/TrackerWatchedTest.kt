@@ -73,3 +73,27 @@ class TrackerWatchedTest {
         assertFalse("series:tt2560140" in state.completedSeries)
     }
 }
+
+class IntroDbTest {
+    private fun parse(json: String) = com.nuvio.shared.data.AddonJson.parseToJsonElement(json) as kotlinx.serialization.json.JsonObject
+
+    @Test
+    fun episodesGetIntroRecapOutro() {
+        val segments = com.nuvio.shared.tracking.introDbIntervals(parse(
+            """{"intro":{"start_sec":60.5,"end_sec":90},"recap":{"start_ms":0,"end_ms":30000},"outro":{"start_sec":1200,"end_sec":1260}}"""
+        ), isMovie = false)
+        assertEquals(listOf("intro", "recap", "outro"), segments.map { it.type })
+        assertEquals(30.0, segments[1].endSeconds)
+    }
+
+    @Test
+    fun movieCreditsStopAtPostCreditsScene() {
+        val segments = com.nuvio.shared.tracking.introDbIntervals(parse(
+            """{"intro":{"start_sec":0,"end_sec":60},"outro":{"start_sec":6000,"end_sec":6300},"post_credits":{"start_sec":6200,"end_sec":6280}}"""
+        ), isMovie = true)
+        assertEquals(1, segments.size)
+        assertEquals("movie-credits", segments[0].type)
+        assertEquals(6200.0, segments[0].endSeconds)
+        assertEquals("Skip to post-credits scene", segments[0].label)
+    }
+}
