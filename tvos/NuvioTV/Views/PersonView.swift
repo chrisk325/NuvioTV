@@ -68,6 +68,8 @@ struct PersonView: View {
 
     @State private var person: TmdbPersonDetail?
     @State private var failed = false
+    @State private var showBio = false
+    @FocusState private var bioFocused: Bool
 
     var body: some View {
         Group {
@@ -82,14 +84,26 @@ struct PersonView: View {
                                 Text(person.name).font(.largeTitle).bold()
                                 Text([person.knownFor, person.birthday, person.placeOfBirth].compactMap { $0 }.joined(separator: "  ·  "))
                                     .foregroundStyle(.secondary)
-                                if let bio = person.biography {
-                                    Text(bio).font(.callout).lineLimit(12)
+                                if let bio = person.biography, !bio.isEmpty {
+                                    // Focusable, so Up from "Known for" has somewhere to go and the
+                                    // page can scroll back to the top; opens the full biography.
+                                    Button { showBio = true } label: {
+                                        Text(bio)
+                                            .font(.callout)
+                                            .lineLimit(10)
+                                            .multilineTextAlignment(.leading)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(20)
+                                    }
+                                    .buttonStyle(.card)
+                                    .focused($bioFocused)
                                 }
                             }
                         }
                         .padding(.horizontal, 80)
                         if !person.credits.isEmpty {
-                            MetaRowView(title: "Known for", items: person.credits)
+                            MetaRowView(title: "Known for", items: person.credits,
+                                        onMoveUp: (person.biography?.isEmpty == false) ? (({ bioFocused = true }) as () -> Void) : nil)
                         }
                     }
                     .padding(.vertical, 60)
@@ -102,6 +116,18 @@ struct PersonView: View {
         }
         // Full screen like details: no tab bar.
         .toolbar(.hidden, for: .tabBar)
+        .sheet(isPresented: $showBio) {
+            if let person, let bio = person.biography {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text(person.name).font(.title2).bold()
+                        Text(bio).font(.body)
+                    }
+                    .padding(60)
+                    .focusable()
+                }
+            }
+        }
         .task {
             guard person == nil else { return }
             person = try? await app.core.tmdbPerson(personId: personId)

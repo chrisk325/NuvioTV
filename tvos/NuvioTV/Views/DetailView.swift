@@ -20,12 +20,14 @@ extension View {
     }
 
     /// Runs [action] when the user presses Up on this view. Put it on the focusable control
-    /// itself; a container never receives the press.
+    /// itself; a container never receives the press. The action runs a moment after the press:
+    /// a focus change made while tvOS is still handling the same move is discarded.
     @ViewBuilder
     func onMoveUp(_ action: (() -> Void)?) -> some View {
         if let action {
             self.onMoveCommand { direction in
-                if direction == .up { action() }
+                guard direction == .up else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { action() }
             }
         } else {
             self
