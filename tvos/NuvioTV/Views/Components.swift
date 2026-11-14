@@ -126,35 +126,39 @@ extension FullScreenBackdrop where Overlay == EmptyView {
 /// Glossy "glass" focus look drawn over a card while it has focus: a light-catching rim
 /// (brightest at the top-left and bottom-right corners), a soft glare from the top, and a sheen
 /// that sweeps across once when focus arrives. Rides along with the `.card` lift and tilt.
+///
+/// Deliberately stateless (no @State, onChange, GeometryReader or blend modes inside the button
+/// label): everything is derived from `isFocused`, so the button's press handling is untouched.
 struct FocusBorder: View {
     @Environment(\.isFocused) private var isFocused
     var cornerRadius: CGFloat = 12
     var lineWidth: CGFloat = 3
-    @State private var sweep: CGFloat = -1
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let focused = isFocused
         ZStack {
             // Glare: light falling on the top of the glass.
             shape.fill(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.22), Color.white.opacity(0.06), .clear],
+                    colors: [Color.white.opacity(0.2), Color.white.opacity(0.05), .clear],
                     startPoint: .top, endPoint: .center
                 )
             )
-            // Sheen that crosses the card once on focus.
-            GeometryReader { geo in
-                LinearGradient(
-                    colors: [.clear, Color.white.opacity(0.28), .clear],
-                    startPoint: .leading, endPoint: .trailing
-                )
-                .frame(width: geo.size.width * 0.45)
-                .rotationEffect(.degrees(18))
-                .offset(x: sweep * geo.size.width * 1.3)
-                .frame(width: geo.size.width, height: geo.size.height)
+            // Sheen: a diagonal band that slides across once when focus arrives.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.35),
+                    .init(color: Color.white.opacity(0.22), location: 0.5),
+                    .init(color: .clear, location: 0.65)
+                ],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            .visualEffect { content, proxy in
+                content.offset(x: (focused ? 1.2 : -1.2) * proxy.size.width)
             }
+            .animation(focused ? .easeInOut(duration: 0.9) : nil, value: focused)
             .clipShape(shape)
-            .blendMode(.plusLighter)
             // Light-catching rim.
             shape.strokeBorder(
                 LinearGradient(
@@ -169,14 +173,9 @@ struct FocusBorder: View {
             shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
                 .padding(lineWidth)
         }
-        .opacity(isFocused ? 1 : 0)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .opacity(focused ? 1 : 0)
+        .animation(.easeOut(duration: 0.18), value: focused)
         .allowsHitTesting(false)
-        .onChange(of: isFocused) { _, focused in
-            guard focused else { sweep = -1; return }
-            sweep = -1
-            withAnimation(.easeInOut(duration: 0.9)) { sweep = 1 }
-        }
     }
 }
 
