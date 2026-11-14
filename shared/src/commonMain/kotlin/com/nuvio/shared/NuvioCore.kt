@@ -408,9 +408,9 @@ class NuvioCore(
         }
 
     /**
-     * Continue Watching: titles in progress, plus "up next" episodes from trackers (Simkl's
-     * Watching list) for shows that have nothing in progress here, newest first. Up next entries
-     * have no position (durationMs 0).
+     * Continue Watching: titles in progress, plus "up next" episodes from trackers (Trakt watched
+     * progress, Simkl's Watching list) for shows that have nothing in progress here, newest first.
+     * Up next entries have no position (durationMs 0).
      */
     fun continueWatching(): List<WatchProgress> {
         val inProgress = watchProgress.continueWatching()
@@ -428,6 +428,7 @@ class NuvioCore(
     private val progressJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val progressListSerializer =
         kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
+    private val upNextSources = listOf("simkl", "trakt")
     private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
     private var dismissedUpNext: Set<String> =
         store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
@@ -440,13 +441,20 @@ class NuvioCore(
 
     private fun upNextKey(p: WatchProgress) = "${p.contentId}|${p.videoId}"
 
-    private fun loadUpNext(): List<WatchProgress> =
-        store.getString("upnext.simkl")?.let { runCatching { progressJson.decodeFromString(progressListSerializer, it) }.getOrNull() }
+    private fun storedUpNext(source: String): List<WatchProgress> =
+        store.getString("upnext.$source")?.let { runCatching { progressJson.decodeFromString(progressListSerializer, it) }.getOrNull() }
             .orEmpty()
 
-    private fun setUpNext(list: List<WatchProgress>) {
-        store.putString("upnext.simkl", progressJson.encodeToString(progressListSerializer, list))
-        upNext.value = list
+    /** All trackers' up next, one card per show (the most recently watched source wins). */
+    private fun loadUpNext(): List<WatchProgress> =
+        upNextSources.flatMap(::storedUpNext)
+            .groupBy { it.contentId }
+            .mapNotNull { (_, list) -> list.maxByOrNull { it.updatedAtMs } }
+
+    /** Replaces one tracker's up next list. */
+    private fun setUpNext(source: String, list: List<WatchProgress>) {
+        store.putString("upnext.$source", progressJson.encodeToString(progressListSerializer, list))
+        upNext.value = loadUpNext()
     }
 
     private fun dismissFromContinueWatching(contentId: String) {
@@ -583,6 +591,7 @@ class NuvioCore(
             watched.addAll(state.keys)
             setTrackerCompleted("trakt", state.completedSeries)
             trakt.playbackProgress().forEach(::mergeRemoteProgress)
+            setUpNext("trakt", trakt.upNext())
             traktWatchlistCache = trakt.watchlist()
         }
         if (simkl.isConnected) sync("Simkl") {
@@ -592,10 +601,11 @@ class NuvioCore(
             // Shows and anime: partly watched episodes, and the next episode of each show on the
             // Watching list (movies come through playback too).
             simkl.playbackProgress().forEach(::mergeRemoteProgress)
-            setUpNext(simkl.upNext())
-        } else if (upNext.value.isNotEmpty()) {
-            setUpNext(emptyList())
+            setUpNext("simkl", simkl.upNext())
+        } else if (storedUpNext("simkl").isNotEmpty()) {
+            setUpNext("simkl", emptyList())
         }
+        if (!trakt.isConnected && storedUpNext("trakt").isNotEmpty()) setUpNext("trakt", emptyList())
         if (aniList.isConnected) sync("AniList") {
             val state = aniList.completedItems()
             watched.addAll(state.keys)

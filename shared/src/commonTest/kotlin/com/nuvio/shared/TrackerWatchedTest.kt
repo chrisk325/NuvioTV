@@ -74,6 +74,34 @@ class TrackerWatchedTest {
     }
 }
 
+class TraktUpNextTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun nextEpisodeFromWatchedProgressNewestFirst() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/sync/watched/shows" -> respond(
+                    """[
+                      {"last_watched_at":"2026-11-01T10:00:00Z","show":{"title":"Old","ids":{"trakt":1,"imdb":"tt1"}}},
+                      {"last_watched_at":"2026-11-12T10:00:00Z","show":{"title":"New","ids":{"trakt":2,"imdb":"tt2"}}},
+                      {"last_watched_at":"2026-11-05T10:00:00Z","show":{"title":"Done","ids":{"trakt":3,"imdb":"tt3"}}}
+                    ]""", HttpStatusCode.OK, json
+                )
+                "/shows/1/progress/watched" -> respond("""{"next_episode":{"season":3,"number":1,"title":"Back"}}""", HttpStatusCode.OK, json)
+                "/shows/2/progress/watched" -> respond("""{"next_episode":{"season":1,"number":6}}""", HttpStatusCode.OK, json)
+                "/shows/3/progress/watched" -> respond("""{"next_episode":null}""", HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply { writeToken("trakt.token", StoredToken("tok")) }
+        val upNext = TraktService(http, store, "id", "secret").upNext()
+        assertEquals(listOf("tt2:1:6", "tt1:3:1"), upNext.map { it.videoId })
+        assertEquals("Back", upNext[1].episodeTitle)
+        assertTrue(upNext.all { it.durationMs == 0L })
+    }
+}
+
 class SimklContinueWatchingTest {
     private val json = headersOf("Content-Type", "application/json")
 

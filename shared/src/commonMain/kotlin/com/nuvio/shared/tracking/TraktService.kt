@@ -224,6 +224,38 @@ class TraktService(
         return keys
     }
 
+    /**
+     * Up next: for the [limit] most recently watched shows, the next episode from Trakt's own
+     * watched progress (shows/{id}/progress/watched, specials excluded). Shows with nothing aired
+     * left have no next_episode and are skipped. No position (durationMs 0).
+     */
+    @Throws(Exception::class)
+    suspend fun upNext(limit: Int = 15): List<WatchProgress> {
+        val shows = (get("sync/watched/shows?extended=noseasons") as? JsonArray).orEmpty()
+            .mapNotNull { it.asObject() }
+            .sortedByDescending { parseReleaseEpochMs(it.str("last_watched_at")) ?: 0L }
+            .take(limit)
+        return shows.mapNotNull { entry ->
+            val show = entry.obj("show") ?: return@mapNotNull null
+            val ids = show.obj("ids") ?: return@mapNotNull null
+            val imdb = ids.nonBlank("imdb") ?: return@mapNotNull null
+            val traktId = ids.int("trakt")?.toString() ?: ids.nonBlank("slug") ?: return@mapNotNull null
+            val progress = runCatching {
+                get("shows/$traktId/progress/watched?hidden=false&specials=false&count_specials=false")?.asObject()
+            }.getOrNull() ?: return@mapNotNull null
+            val next = progress.obj("next_episode") ?: return@mapNotNull null
+            val season = next.int("season") ?: return@mapNotNull null
+            val number = next.int("number") ?: return@mapNotNull null
+            WatchProgress(
+                contentId = imdb, contentType = "series", videoId = "$imdb:$season:$number",
+                name = show.str("title") ?: imdb, poster = poster(imdb), background = background(imdb),
+                season = season, episode = number, episodeTitle = next.str("title"),
+                positionMs = 0, durationMs = 0,
+                updatedAtMs = parseReleaseEpochMs(entry.str("last_watched_at")) ?: 0L
+            )
+        }
+    }
+
     /** In-progress items from Trakt (sync/playback) mapped to local progress entries. */
     @Throws(Exception::class)
     suspend fun playbackProgress(): List<WatchProgress> {
