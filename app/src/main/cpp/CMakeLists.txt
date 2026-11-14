@@ -12,6 +12,7 @@ add_library(
     dovi_bridge.cpp
     dovi_p5_lut.cpp
     dovi_p5_jni.cpp
+    dovi_active_area_jni.cpp
 )
 
 find_library(log-lib log)

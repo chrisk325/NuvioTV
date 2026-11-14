@@ -297,6 +297,15 @@ object DoviBridge {
         return written
     }
 
+    /**
+     * Reads the Dolby Vision L5 active area of the RPU in nal[offset, offset + length) into [out]
+     * as {left, right, top, bottom} pixel offsets. False when there is no L5 block or no libdovi.
+     */
+    fun readActiveArea(nal: ByteArray, offset: Int, length: Int, out: IntArray): Boolean {
+        if (!isAvailable() || out.size < 4) return false
+        return runCatching { nativeReadActiveArea(nal, offset, length, out) }.getOrDefault(false)
+    }
+
     private fun loadNativeLibrary(): Boolean {
         if (!isNativeEnabledInBuild) {
             return false
@@ -317,6 +326,9 @@ object DoviBridge {
 
     @JvmStatic
     private external fun nativeGetBridgeVersion(): String
+
+    @JvmStatic
+    private external fun nativeReadActiveArea(data: ByteArray, offset: Int, length: Int, out: IntArray): Boolean
 
     @JvmStatic
     private external fun nativeIsConversionPathReady(): Boolean

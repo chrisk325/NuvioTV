@@ -32,7 +32,31 @@ internal class DolbyVisionMatroskaTransformer(
     private val stripHdr10PlusSei: Boolean = false,
     /** Set when Profile 5 may be mapped to HDR10; then its RPU must reach the session. */
     private val p5Session: DolbyVisionP5Session? = null,
+    /** Reads the L5 letterbox from the RPUs, before any conversion or stripping. */
+    private val activeAreaProbe: DolbyVisionActiveAreaProbe? = null,
 ) : MatroskaExtractor.DolbyVisionSampleTransformer {
+
+    override fun wantsInBandRpu(): Boolean = activeAreaProbe?.wantsRpu == true
+
+    override fun onInBandRpu(nal: ByteArray, offset: Int, length: Int) {
+        activeAreaProbe?.onRpu(nal, offset, length)
+    }
+
+    /** Hands the in-band RPUs of a sample about to be transformed to [activeAreaProbe]. */
+    private fun probeSampleRpus(sample: ByteArray, sampleLength: Int, nalUnitLengthFieldLength: Int) {
+        val probe = activeAreaProbe ?: return
+        if (!probe.wantsRpu || nalUnitLengthFieldLength !in 1..4) return
+        var position = 0
+        while (position + nalUnitLengthFieldLength <= sampleLength) {
+            val nalSize = readLengthField(sample, position, nalUnitLengthFieldLength)
+            val nalStart = position + nalUnitLengthFieldLength
+            if (nalSize <= 0 || nalStart + nalSize > sampleLength) return
+            if (nalSize >= 2 && nalUnitTypeAt(sample, nalStart) == 62) {
+                probe.onRpu(sample, nalStart, nalSize)
+            }
+            position = nalStart + nalSize
+        }
+    }
 
     private var lastTransformedLength = 0
 
@@ -92,6 +116,10 @@ internal class DolbyVisionMatroskaTransformer(
         dolbyVisionConfigBytes: ByteArray?
     ): ByteArray? {
         if (blockAdditionalData == null) return null
+        activeAreaProbe?.takeIf { it.wantsRpu }?.let { probe ->
+            val rpu = asRpuNal(blockAdditionalData)
+            probe.onRpu(rpu, 0, rpu.size)
+        }
         // Kept as is: transformHevcSample moves it into the sample for the mapping.
         if (keepsProfile5Rpu(resolveProfile(null, dolbyVisionConfigBytes))) return null
         if (stripRpuOnly) return ByteArray(0)
@@ -131,6 +159,7 @@ internal class DolbyVisionMatroskaTransformer(
         dolbyVisionConfigBytes: ByteArray?
     ): ByteArray? {
         val sample = sampleLengthDelimitedData ?: return null
+        probeSampleRpus(sample, sampleLength, nalUnitLengthFieldLength)
         val profile = resolveProfile(null, dolbyVisionConfigBytes)
 
         lastTransformedLength = sampleLength

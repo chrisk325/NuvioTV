@@ -49,7 +49,9 @@ internal class DolbyVisionExtractorsFactory(
     private val stripDvRpu: Boolean = false,
     private val stripHdr10PlusSei: Boolean = false,
     /** When set, Profile 5 video feeds this session (detection, and HDR10 mapping if active). */
-    private val p5Session: DolbyVisionP5Session? = null
+    private val p5Session: DolbyVisionP5Session? = null,
+    /** When set, Matroska Dolby Vision RPUs feed it their L5 active area (letterbox). */
+    private val activeAreaProbe: DolbyVisionActiveAreaProbe? = null
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> =
@@ -76,6 +78,7 @@ internal class DolbyVisionExtractorsFactory(
                     stripRpuOnly = stripDvRpu && !config.active,
                     stripHdr10PlusSei = stripHdr10PlusSei,
                     p5Session = p5Session,
+                    activeAreaProbe = activeAreaProbe,
                 )
             )
             return p5Session?.let { DolbyVisionP5Extractor(matroska, it) } ?: matroska
