@@ -236,6 +236,13 @@ struct CatalogGridView: View {
 
     var body: some View {
         ScrollView {
+            // The title is part of the scrolling content: a navigationTitle stays pinned on tvOS
+            // and the grid slid over it.
+            Text(slot.title)
+                .font(.title2.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 60)
+                .padding(.top, 20)
             let genres = app.core.genres(slot: slot)
             if !genres.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -264,7 +271,6 @@ struct CatalogGridView: View {
             .padding(60)
             if isLoading { ProgressView().padding() }
         }
-        .navigationTitle(slot.title)
         .task { if items.isEmpty { await loadMore() } }
     }
 
