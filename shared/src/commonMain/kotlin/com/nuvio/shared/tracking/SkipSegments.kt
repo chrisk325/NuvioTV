@@ -38,29 +38,47 @@ data class SkipSegment(
 class SkipSegmentsService(private val http: HttpClient, introDbBaseUrl: String) {
     private val introDb = introDbBaseUrl.trim().trimEnd('/')
 
+    /**
+     * Skip segments for one movie or episode, like Android SkipIntroRepository: IntroDB by IMDb id
+     * (season / episode for episodes) and AniSkip by MAL id (directly, or from a Kitsu id), merged
+     * per category with IntroDB first, so an IntroDB intro and an AniSkip ending can both show.
+     */
     @Throws(Exception::class)
-    suspend fun segments(media: TrackedMedia, episodeLengthSeconds: Double): List<SkipSegment> {
-        val fromIntroDb = media.imdbId?.let { introDbSegments(it, media) }.orEmpty()
-        if (fromIntroDb.isNotEmpty()) return fromIntroDb
-        if (media.kitsuId != null && media.episode != null) return aniSkip(media, episodeLengthSeconds)
-        return emptyList()
+    suspend fun segments(query: SkipQuery, episodeLengthSeconds: Double): List<SkipSegment> {
+        val fromIntroDb = query.imdbId?.let { imdb ->
+            when {
+                query.isMovie -> introDbSegments(imdb, null, null)
+                query.season != null && query.episode != null -> introDbSegments(imdb, query.season, query.episode)
+                else -> null
+            }
+        }.orEmpty()
+        if (query.isMovie) return fromIntroDb
+        val malId = query.malId ?: query.kitsuId?.let { malIdForKitsu(it) }
+        val fromAniSkip = if (malId != null && query.animeEpisode != null) {
+            aniSkip(malId, query.animeEpisode, episodeLengthSeconds)
+        } else emptyList()
+        return mergeByCategory(fromIntroDb, fromAniSkip)
     }
 
-    private suspend fun introDbSegments(imdbId: String, media: TrackedMedia): List<SkipSegment> {
+    private suspend fun introDbSegments(imdbId: String, season: Int?, episode: Int?): List<SkipSegment> {
         if (introDb.isEmpty()) return emptyList()
+        val isMovie = season == null || episode == null
         val query = buildString {
             append("$introDb/segments?imdb_id=${encodeUrlComponent(imdbId)}")
-            if (media.isEpisode) append("&season=${media.season}&episode=${media.episode}") else append("&is_movie=true")
+            if (isMovie) append("&is_movie=true") else append("&season=$season&episode=$episode")
         }
         val body = fetch(query).asObject() ?: return emptyList()
-        return introDbIntervals(body, isMovie = !media.isEpisode)
+        return introDbIntervals(body, isMovie = isMovie)
     }
 
-    private suspend fun aniSkip(media: TrackedMedia, length: Double): List<SkipSegment> {
-        val mapping = fetch("https://arm.haglund.dev/api/v2/ids?source=kitsu&id=${encodeUrlComponent(media.kitsuId!!)}")
-        val malId = (mapping.asObject() ?: mapping.asArray()?.firstOrNull().asObject())?.int("myanimelist") ?: return emptyList()
+    private suspend fun malIdForKitsu(kitsuId: String): String? {
+        val mapping = fetch("https://arm.haglund.dev/api/v2/ids?source=kitsu&id=${encodeUrlComponent(kitsuId)}")
+        return (mapping.asObject() ?: mapping.asArray()?.firstOrNull().asObject())?.int("myanimelist")?.toString()
+    }
+
+    private suspend fun aniSkip(malId: String, episode: Int, length: Double): List<SkipSegment> {
         val body = fetch(
-            "https://api.aniskip.com/v2/skip-times/$malId/${media.episode}?types[]=op&types[]=ed&types[]=recap&episodeLength=${length.toInt()}"
+            "https://api.aniskip.com/v2/skip-times/$malId/$episode?types[]=op&types[]=ed&types[]=recap&episodeLength=${length.toInt()}"
         ).asObject() ?: return emptyList()
         if (body.bool("found") != true) return emptyList()
         return body.objects("results").mapNotNull { r ->
@@ -103,4 +121,30 @@ internal fun introDbIntervals(body: kotlinx.serialization.json.JsonObject, isMov
         else emptyList()
     }
     return listOf(SkipSegment("movie-credits", credits.first, credits.second, toPostCredits = scene != null && scene.first >= credits.second))
+}
+
+/**
+ * What to look skip times up by. [imdbId] with [season] / [episode] for IntroDB; [malId] or
+ * [kitsuId] with [animeEpisode] (the anime entry's own episode number) for AniSkip.
+ */
+data class SkipQuery(
+    val isMovie: Boolean,
+    val imdbId: String?,
+    val season: Int?,
+    val episode: Int?,
+    val kitsuId: String? = null,
+    val malId: String? = null,
+    val animeEpisode: Int? = null
+)
+
+/** First provider wins per category (intro, recap, outro / credits), as Android mergeByPriority. */
+internal fun mergeByCategory(vararg results: List<SkipSegment>): List<SkipSegment> {
+    val chosen = LinkedHashMap<String, SkipSegment>()
+    results.forEach { list ->
+        list.forEach { segment ->
+            val category = if (segment.type == "movie-credits") "outro" else segment.type
+            if (category !in chosen) chosen[category] = segment
+        }
+    }
+    return chosen.values.toList()
 }

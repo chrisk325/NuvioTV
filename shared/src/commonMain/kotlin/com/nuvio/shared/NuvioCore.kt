@@ -735,7 +735,33 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun skipSegments(meta: Meta, video: Video?, durationSeconds: Double): List<com.nuvio.shared.tracking.SkipSegment> {
         if (!settings.skipIntroEnabled) return emptyList()
-        return skipSegments.segments(TrackedMedia.from(meta, video), durationSeconds)
+        return skipSegments.segments(skipQuery(meta, video), durationSeconds)
+    }
+
+    /**
+     * Ids for the skip lookup, as Android fetchSkipIntervals: "kitsu:<id>:<ep>" and "mal:<id>:<ep>"
+     * video ids give the anime entry and its own episode number; IMDb comes from the meta, the
+     * video id ("tt…:s:e") or, for TMDB-only shows, TMDB's external ids.
+     */
+    private suspend fun skipQuery(meta: Meta, video: Video?): com.nuvio.shared.tracking.SkipQuery {
+        val parts = (video?.id ?: meta.id).split(':')
+        val isMovie = video == null || !meta.isSeriesLike
+        val animeSource = parts.firstOrNull()?.takeIf { it == "kitsu" || it == "mal" }
+        val animeEpisode = if (animeSource != null) parts.getOrNull(2)?.toIntOrNull() ?: video?.episode else video?.episode
+        var imdb = (meta.imdbId ?: parts.firstOrNull { it.startsWith("tt") } ?: meta.id.takeIf { it.startsWith("tt") })
+            ?.substringBefore(':')
+        if (imdb == null && parts.firstOrNull() == "tmdb") {
+            imdb = parts.getOrNull(1)?.toIntOrNull()?.let { runCatching { tmdb.imdbIdFor(it, !isMovie) }.getOrNull() }
+        }
+        return com.nuvio.shared.tracking.SkipQuery(
+            isMovie = isMovie,
+            imdbId = imdb,
+            season = video?.season,
+            episode = video?.episode,
+            kitsuId = if (animeSource == "kitsu") parts.getOrNull(1) else null,
+            malId = if (animeSource == "mal") parts.getOrNull(1) else null,
+            animeEpisode = animeEpisode
+        )
     }
 
     /**

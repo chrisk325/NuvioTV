@@ -96,4 +96,15 @@ class IntroDbTest {
         assertEquals(6200.0, segments[0].endSeconds)
         assertEquals("Skip to post-credits scene", segments[0].label)
     }
+
+    @Test
+    fun introDbAndAniSkipMergePerCategory() {
+        val introDb = listOf(com.nuvio.shared.tracking.SkipSegment("intro", 60.0, 90.0))
+        val aniSkip = listOf(
+            com.nuvio.shared.tracking.SkipSegment("intro", 55.0, 145.0),
+            com.nuvio.shared.tracking.SkipSegment("outro", 1300.0, 1390.0)
+        )
+        val merged = com.nuvio.shared.tracking.mergeByCategory(introDb, aniSkip)
+        assertEquals(listOf("intro" to 60.0, "outro" to 1300.0), merged.map { it.type to it.startSeconds })
+    }
 }
