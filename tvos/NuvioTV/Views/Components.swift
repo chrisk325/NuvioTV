@@ -123,23 +123,65 @@ extension FullScreenBackdrop where Overlay == EmptyView {
     }
 }
 
-/// White border drawn inside a card while it has focus (tvOS card style lifts it with the card).
+/// Glossy "glass" focus look drawn over a card while it has focus: a light-catching rim
+/// (brightest at the top-left and bottom-right corners), a soft glare from the top, and a sheen
+/// that sweeps across once when focus arrives. Rides along with the `.card` lift and tilt.
 struct FocusBorder: View {
     @Environment(\.isFocused) private var isFocused
     var cornerRadius: CGFloat = 12
-    var lineWidth: CGFloat = 4
+    var lineWidth: CGFloat = 3
+    @State private var sweep: CGFloat = -1
 
     var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .strokeBorder(Color.white, lineWidth: lineWidth)
-            .opacity(isFocused ? 1 : 0)
-            .animation(.easeOut(duration: 0.12), value: isFocused)
-            .allowsHitTesting(false)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            // Glare: light falling on the top of the glass.
+            shape.fill(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.22), Color.white.opacity(0.06), .clear],
+                    startPoint: .top, endPoint: .center
+                )
+            )
+            // Sheen that crosses the card once on focus.
+            GeometryReader { geo in
+                LinearGradient(
+                    colors: [.clear, Color.white.opacity(0.28), .clear],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .frame(width: geo.size.width * 0.45)
+                .rotationEffect(.degrees(18))
+                .offset(x: sweep * geo.size.width * 1.3)
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+            .clipShape(shape)
+            .blendMode(.plusLighter)
+            // Light-catching rim.
+            shape.strokeBorder(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.95), Color.white.opacity(0.35), Color.white.opacity(0.12),
+                        Color.white.opacity(0.35), Color.white.opacity(0.85)
+                    ],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ),
+                lineWidth: lineWidth
+            )
+            shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
+                .padding(lineWidth)
+        }
+        .opacity(isFocused ? 1 : 0)
+        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .allowsHitTesting(false)
+        .onChange(of: isFocused) { _, focused in
+            guard focused else { sweep = -1; return }
+            sweep = -1
+            withAnimation(.easeInOut(duration: 0.9)) { sweep = 1 }
+        }
     }
 }
 
 extension View {
-    /// Adds the white focus border; apply inside a `.card` button's label.
+    /// Adds the glossy focus rim; apply inside a `.card` button's label.
     func focusBorder(cornerRadius: CGFloat = 12) -> some View {
         overlay(FocusBorder(cornerRadius: cornerRadius))
     }
