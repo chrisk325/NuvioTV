@@ -124,6 +124,8 @@ struct DetailView: View {
                 details = merged
                 meta = merged.meta
             }
+            // Fully watched check against the episode list (cards and the card menu use it).
+            app.core.refreshSeriesWatched(meta: meta ?? loaded)
             ratings = (try? await app.core.ratings(meta: loaded)) ?? []
         } catch {
             self.error = error.localizedDescription

@@ -63,6 +63,15 @@ private val listJson = Json { ignoreUnknownKeys = true }
  * Locally known watched items: "movie:<id>" and "<videoId>" for episodes. Filled when playback
  * completes and from Trakt/Simkl history sync.
  */
+/**
+ * What a tracker says is watched: movie / episode keys in WatchedRepository format, and the
+ * shows it considers fully watched as "series:<id>" keys (imdb, tmdb:, kitsu:, mal:, anilist:).
+ */
+data class TrackerWatched(
+    val keys: List<String> = emptyList(),
+    val completedSeries: Set<String> = emptySet()
+)
+
 class WatchedRepository(private val store: KeyValueStore) {
     private val _watched = MutableStateFlow(load())
     val watched: StateFlow<Set<String>> = _watched.asStateFlow()

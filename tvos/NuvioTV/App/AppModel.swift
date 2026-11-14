@@ -89,6 +89,8 @@ final class AppModel: ObservableObject {
     func syncTrackers() async {
         trackerSyncError = try? await core.syncTrackers()
         traktWatchlist = core.traktWatchlistCache
+        // Fully watched shows from Trakt / Simkl / AniList: cards re-read their watched badge.
+        objectWillChange.send()
     }
 
     /// Full previews for Continue Watching items (logo, description…), keyed by content id.

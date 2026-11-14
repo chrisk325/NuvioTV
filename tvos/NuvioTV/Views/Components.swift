@@ -224,6 +224,9 @@ struct PosterCard: View {
                 }
                 .frame(width: width, height: height)
                 .clipped()
+                .overlay(alignment: .topTrailing) {
+                    if app.core.isPreviewWatched(preview: item) { WatchedBadge().padding(10) }
+                }
                 .focusBorder()
                 .background(FocusReporter { onFocus?(item) })
             }
@@ -244,6 +247,20 @@ extension MetaPreview {
     /// Artwork for 16:9 cards, in Android ContentCard's order: the add-on's landscape poster,
     /// then its background, then its poster.
     var landscapeArtwork: String? { landscapePoster ?? background ?? poster }
+}
+
+/// Check mark on cards of watched movies and fully watched shows (local, Trakt, Simkl, AniList,
+/// Nuvio account).
+struct WatchedBadge: View {
+    var body: some View {
+        Image(systemName: "checkmark")
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(.black)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color.white))
+            .shadow(color: .black.opacity(0.4), radius: 4)
+            .accessibilityLabel("Watched")
+    }
 }
 
 /// 16:9 card with the title on it (Modern layout rows with landscape posters on).
@@ -269,6 +286,9 @@ struct LandscapeCard: View {
             }
             .frame(width: width, height: width * 9 / 16)
             .clipped()
+            .overlay(alignment: .topTrailing) {
+                if app.core.isPreviewWatched(preview: item) { WatchedBadge().padding(12) }
+            }
             .focusBorder()
             .background(FocusReporter { onFocus?(item) })
         }

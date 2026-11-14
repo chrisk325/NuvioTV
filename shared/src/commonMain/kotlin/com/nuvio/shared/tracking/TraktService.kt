@@ -172,6 +172,40 @@ class TraktService(
         postJson(if (remove) "sync/history/remove" else "sync/history", payload.toString())
     }
 
+    /**
+     * Watched movies and episodes plus fully watched shows: a show counts as fully watched when
+     * its watched regular-season episodes reach Trakt's aired_episodes (sync/watched/shows?extended=full).
+     */
+    @Throws(Exception::class)
+    suspend fun watchedState(): TrackerWatched {
+        val keys = mutableListOf<String>()
+        val completed = mutableSetOf<String>()
+        (get("sync/watched/movies") as? JsonArray)?.forEach { entry ->
+            entry.asObject()?.obj("movie")?.obj("ids")?.nonBlank("imdb")?.let { keys += "movie:$it" }
+        }
+        (get("sync/watched/shows?extended=full") as? JsonArray)?.forEach { entry ->
+            val o = entry.asObject() ?: return@forEach
+            val show = o.obj("show") ?: return@forEach
+            val ids = show.obj("ids")
+            val imdb = ids?.nonBlank("imdb")
+            var watchedRegular = 0
+            o.objects("seasons").forEach { season ->
+                val s = season.int("number") ?: return@forEach
+                season.objects("episodes").forEach { ep ->
+                    val e = ep.int("number") ?: return@forEach
+                    if (imdb != null) keys += "$imdb:$s:$e"
+                    if (s > 0) watchedRegular++
+                }
+            }
+            val aired = show.int("aired_episodes") ?: 0
+            if (aired > 0 && watchedRegular >= aired) {
+                imdb?.let { completed += "series:$it" }
+                ids?.int("tmdb")?.let { completed += "series:tmdb:$it" }
+            }
+        }
+        return TrackerWatched(keys, completed)
+    }
+
     /** Watched keys in WatchedRepository format: "movie:tt…" and "tt…:s:e". */
     @Throws(Exception::class)
     suspend fun watchedKeys(): List<String> {

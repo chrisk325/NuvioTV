@@ -21,6 +21,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -210,6 +211,45 @@ class SimklService(
         }
     }
 
+    /**
+     * Simkl "completed" lists: finished movies become watched movie keys, finished shows and
+     * anime become "series:" keys. Anime entries are per season on Simkl, so they only use the
+     * per-season ids (kitsu / mal / anilist), never the show-wide imdb id.
+     */
+    @Throws(Exception::class)
+    suspend fun completedItems(): TrackerWatched {
+        val token = accessToken() ?: return TrackerWatched()
+        val keys = mutableListOf<String>()
+        val completed = mutableSetOf<String>()
+        for (type in listOf("movies", "shows", "anime")) {
+            val response = http.get(url("/sync/all-items/$type/completed")) {
+                baseHeaders()
+                header("Authorization", "Bearer $token")
+            }
+            if (!response.status.isSuccess()) continue
+            val root = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asObject() }.getOrNull() ?: continue
+            root.objects(type).forEach { entry ->
+                val item = entry.obj(if (type == "movies") "movie" else "show") ?: return@forEach
+                val ids = item.obj("ids") ?: return@forEach
+                val prefix = if (type == "movies") "movie" else "series"
+                val idKeys = buildList {
+                    if (type != "anime") {
+                        ids.nonBlank("imdb")?.let { add(it) }
+                        ids.idString("tmdb")?.let { add("tmdb:$it") }
+                    }
+                    ids.idString("kitsu")?.let { add("kitsu:$it") }
+                    ids.idString("mal")?.let { add("mal:$it") }
+                    ids.idString("anilist")?.let { add("anilist:$it") }
+                }
+                if (prefix == "movie") keys += idKeys.map { "movie:$it" } else completed += idKeys.map { "series:$it" }
+            }
+        }
+        return TrackerWatched(keys, completed)
+    }
+
+    private fun JsonObject.idString(key: String): String? =
+        nonBlank(key) ?: int(key)?.toString()
+
     private fun ids(media: TrackedMedia): JsonObject? {
         if (media.imdbId == null && media.tmdbId == null && media.kitsuId == null) return null
         return buildJsonObject {
@@ -272,6 +312,54 @@ class AniListService(
             "mutation(\$id:Int,\$p:Int,\$s:MediaListStatus){SaveMediaListEntry(mediaId:\$id,progress:\$p,status:\$s){id}}",
             buildJsonObject { put("id", aniListId); put("p", progress); put("s", status) }
         )
+    }
+
+    /**
+     * Anime marked COMPLETED on AniList: movies as watched keys, everything else as "series:"
+     * keys, by AniList, MAL and (via arm.haglund.dev) Kitsu id, since AniList entries are per season.
+     */
+    @Throws(Exception::class)
+    suspend fun completedItems(): TrackerWatched {
+        val token = store.readToken(KEY)?.accessToken ?: return TrackerWatched()
+        val userId = graphql(token, "query { Viewer { id } }")?.obj("data")?.obj("Viewer")?.int("id")
+            ?: return TrackerWatched()
+        val data = graphql(
+            token,
+            "query(\$u:Int){MediaListCollection(userId:\$u,type:ANIME,status:COMPLETED){lists{entries{media{id idMal format}}}}}",
+            buildJsonObject { put("u", userId) }
+        )?.obj("data")?.obj("MediaListCollection") ?: return TrackerWatched()
+        val media = data.objects("lists").flatMap { it.objects("entries") }.mapNotNull { it.obj("media") }
+        val kitsuByAniList = kitsuIds(media.mapNotNull { it.int("id") })
+        val keys = mutableListOf<String>()
+        val completed = mutableSetOf<String>()
+        media.forEach { m ->
+            val id = m.int("id") ?: return@forEach
+            val ids = listOfNotNull("anilist:$id", m.int("idMal")?.let { "mal:$it" }, kitsuByAniList[id]?.let { "kitsu:$it" })
+            if (m.str("format") == "MOVIE") keys += ids.map { "movie:$it" } else completed += ids.map { "series:$it" }
+        }
+        return TrackerWatched(keys, completed)
+    }
+
+    /** AniList id → Kitsu id, in batches of 100 (arm.haglund.dev bulk lookup). */
+    private suspend fun kitsuIds(aniListIds: List<Int>): Map<Int, String> {
+        val result = mutableMapOf<Int, String>()
+        aniListIds.distinct().chunked(100).forEach { chunk ->
+            val body = buildJsonArray { chunk.forEach { add(buildJsonObject { put("anilist", it) }) } }
+            val response = runCatching {
+                http.post("https://arm.haglund.dev/api/v2/ids") {
+                    header("Accept", "application/json")
+                    setBody(TextContent(body.toString(), ContentType.Application.Json))
+                }
+            }.getOrNull() ?: return@forEach
+            if (!response.status.isSuccess()) return@forEach
+            val rows = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asArray() }.getOrNull() ?: return@forEach
+            rows.forEachIndexed { index, row ->
+                val obj = row.asObject() ?: return@forEachIndexed
+                val kitsu = obj.int("kitsu") ?: return@forEachIndexed
+                result[obj.int("anilist") ?: chunk.getOrNull(index) ?: return@forEachIndexed] = kitsu.toString()
+            }
+        }
+        return result
     }
 
     private suspend fun resolveAniListId(media: TrackedMedia): Int? {

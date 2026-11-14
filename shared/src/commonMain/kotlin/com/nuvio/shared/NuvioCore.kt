@@ -37,6 +37,7 @@ import com.nuvio.shared.model.Subtitle
 import com.nuvio.shared.repository.WatchProgressRepository
 import com.nuvio.shared.storage.KeyValueStore
 import com.nuvio.shared.util.currentTimeMillis
+import com.nuvio.shared.util.isReleaseInFuture
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -454,6 +455,7 @@ class NuvioCore(
     /** Manual watched toggle (also pushed to Trakt / Simkl / AniList when marking watched). */
     fun setWatched(meta: Meta, video: Video?, isWatched: Boolean) {
         watched.mark(watchedKey(meta, video), isWatched)
+        if (video != null) refreshSeriesWatched(meta)
         if (isWatched) {
             val media = TrackedMedia.from(meta, video)
             scope.launch {
@@ -487,6 +489,7 @@ class NuvioCore(
             if (scrobble == ScrobbleAction.STOP && progressPercent >= 80.0) {
                 if (cloud.isSignedIn) runCatching { cloud.pushWatched(meta.id, meta.apiType, meta.name, video?.season, video?.episode) }
                 watched.mark(watchedKey(meta, video), true)
+                if (video != null) refreshSeriesWatched(meta)
                 runCatching { aniList.updateProgress(media, completedTitle = false) }
             }
         }
@@ -495,9 +498,20 @@ class NuvioCore(
     /** Pulls Trakt history, playback progress and watchlist into local state. Returns an error text or null. */
     @Throws(Exception::class)
     suspend fun syncTrackers(): String? {
-        if (!trakt.isConnected) return null
-        return try {
-            watched.addAll(trakt.watchedKeys())
+        var error: String? = null
+        suspend fun sync(name: String, block: suspend () -> Unit) {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (error == null) error = e.message ?: "$name sync failed"
+            }
+        }
+        if (trakt.isConnected) sync("Trakt") {
+            val state = trakt.watchedState()
+            watched.addAll(state.keys)
+            setTrackerCompleted("trakt", state.completedSeries)
             trakt.playbackProgress().forEach { remote ->
                 val local = watchProgress.progressFor(remote.videoId)
                 if (local == null || local.updatedAtMs < remote.updatedAtMs) {
@@ -505,11 +519,70 @@ class NuvioCore(
                 }
             }
             traktWatchlistCache = trakt.watchlist()
-            null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            e.message ?: "Trakt sync failed"
+        }
+        if (simkl.isConnected) sync("Simkl") {
+            val state = simkl.completedItems()
+            watched.addAll(state.keys)
+            setTrackerCompleted("simkl", state.completedSeries)
+        }
+        if (aniList.isConnected) sync("AniList") {
+            val state = aniList.completedItems()
+            watched.addAll(state.keys)
+            setTrackerCompleted("anilist", state.completedSeries)
+        }
+        return error
+    }
+
+    // --- Fully watched shows ------------------------------------------------------------------
+    // Two sources, kept apart so neither erases the other: what each tracker reports as finished
+    // (replaced on every successful sync of that tracker), and "series:" keys in the local watched
+    // set, set when every aired episode is watched here (or the show is marked from a card).
+
+    private val trackerNames = listOf("trakt", "simkl", "anilist")
+    private var trackerCompleted: Set<String> = loadTrackerCompleted()
+
+    private fun loadTrackerCompleted(): Set<String> =
+        trackerNames.flatMap { name -> store.getString("trackers.completed.$name")?.split('\n').orEmpty() }
+            .filter { it.isNotBlank() }.toSet()
+
+    private fun setTrackerCompleted(tracker: String, keys: Set<String>) {
+        store.putString("trackers.completed.$tracker", keys.joinToString("\n"))
+        trackerCompleted = loadTrackerCompleted()
+    }
+
+    private fun forgetTrackerCompleted(keys: Set<String>) {
+        trackerNames.forEach { name ->
+            val stored = store.getString("trackers.completed.$name")?.split('\n').orEmpty().toSet()
+            if (stored.any { it in keys }) store.putString("trackers.completed.$name", (stored - keys).joinToString("\n"))
+        }
+        trackerCompleted = loadTrackerCompleted()
+    }
+
+    private fun seriesKeys(id: String, imdbId: String?): Set<String> =
+        setOfNotNull(seriesKey(id), imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") }?.let(::seriesKey))
+
+    /** True when a tracker reports the show finished or every aired episode is watched here. */
+    fun isSeriesFullyWatched(id: String, imdbId: String?): Boolean =
+        seriesKeys(id, imdbId).any { it in trackerCompleted || watched.isWatched(it) }
+
+    /**
+     * Re-checks a show against its episode list: marks it fully watched when every aired
+     * regular-season episode is watched, clears the local mark otherwise (e.g. a new episode
+     * aired). Called when details load and after an episode is marked or finished.
+     */
+    fun refreshSeriesWatched(meta: Meta) {
+        if (!meta.isSeriesLike) return
+        val now = currentTimeMillis()
+        val aired = meta.videos.filter {
+            (it.season ?: 0) > 0 && it.episode != null && !isReleaseInFuture(it.released, now)
+        }
+        if (aired.isEmpty()) return
+        val keys = seriesKeys(meta.id, meta.imdbId)
+        val all = aired.all { watched.isWatched(watchedKey(meta, it)) }
+        if (all) {
+            if (keys.any { !watched.isWatched(it) }) watched.addAll(keys)
+        } else if (keys.any { watched.isWatched(it) }) {
+            watched.removeAll(keys)
         }
     }
 
@@ -566,8 +639,8 @@ class NuvioCore(
 
     /** Watched state for a card: the movie, or for a show whether it was marked fully watched. */
     fun isPreviewWatched(preview: MetaPreview): Boolean =
-        if (isSeriesLikeType(preview.apiType)) watched.isWatched(seriesKey(preview.id))
-        else watched.isWatched("movie:${preview.imdbId ?: preview.id}")
+        if (isSeriesLikeType(preview.apiType)) isSeriesFullyWatched(preview.id, preview.imdbId)
+        else watched.isWatched("movie:${preview.imdbId ?: preview.id}") || watched.isWatched("movie:${preview.id}")
 
     private fun seriesKey(id: String) = "series:$id"
 
@@ -581,8 +654,14 @@ class NuvioCore(
         val meta = meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl)
         val episodes = meta.videos.filter { (it.season ?: 0) > 0 && it.episode != null }
         if (episodes.isEmpty() && isWatched) error("No episodes found for ${preview.name}")
-        val keys = episodes.map { watchedKey(meta, it) }
-        if (isWatched) watched.addAll(keys + seriesKey(preview.id)) else watched.removeAll(keys + seriesKey(preview.id))
+        val episodeKeys = episodes.map { watchedKey(meta, it) }
+        val showKeys = seriesKeys(preview.id, preview.imdbId) + seriesKeys(meta.id, meta.imdbId)
+        if (isWatched) {
+            watched.addAll(episodeKeys + showKeys)
+        } else {
+            forgetTrackerCompleted(showKeys)
+            watched.removeAll(episodeKeys + showKeys)
+        }
         val numbers = episodes.map { it.season!! to it.episode!! }
         val show = TrackedMedia.from(meta, null)
         scope.launch {
