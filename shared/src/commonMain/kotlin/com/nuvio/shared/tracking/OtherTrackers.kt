@@ -282,44 +282,79 @@ class AniListService(
     private companion object { const val KEY = "anilist.token" }
 }
 
-/** One rating from MDBList (IMDb, Trakt, Letterboxd, Tomatoes, Metacritic, TMDB…). */
-data class ExternalRating(val source: String, val label: String, val value: String)
+/**
+ * One rating from MDBList. [icon] names the logo in the tvOS asset catalog (the Android
+ * drawables), including Rotten Tomatoes fresh / certified / rotten and Popcornmeter states.
+ */
+data class ExternalRating(val source: String, val label: String, val value: String, val icon: String)
 
-/** MDBList ratings by IMDb id (API key from Settings). */
+/** MDBList ratings by IMDb id (API key from Settings). Port of MDBListRatingDtos + MDBListRatingsRow. */
 class MdbListService(private val http: HttpClient) {
     @Throws(Exception::class)
     suspend fun ratings(apiKey: String, imdbId: String, isShow: Boolean): List<ExternalRating> {
         if (apiKey.isBlank() || !imdbId.startsWith("tt")) return emptyList()
         val type = if (isShow) "show" else "movie"
-        val response = http.get("https://api.mdblist.com/imdb/$type/$imdbId?apikey=${encodeUrlComponent(apiKey)}")
+        val response = http.get(
+            "https://api.mdblist.com/imdb/$type/$imdbId?apikey=${encodeUrlComponent(apiKey)}&append_to_response=keyword"
+        )
         if (!response.status.isSuccess()) return emptyList()
         val body = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return emptyList()
-        return body.objects("ratings").mapNotNull { r ->
-            val source = r.nonBlank("source") ?: return@mapNotNull null
-            val raw = r.str("value")?.takeIf { it != "null" } ?: return@mapNotNull null
-            val number = raw.toDoubleOrNull() ?: return@mapNotNull null
-            if (number <= 0) return@mapNotNull null
-            val label = LABELS[source] ?: source.replaceFirstChar { it.uppercase() }
-            val text = when {
-                source in PERCENT_SOURCES -> "${number.toInt()}%"
-                number > 10 -> "${number.toInt()}"
-                else -> formatOne(number)
+        val keywords = body.objects("keywords").mapNotNull { it.str("name")?.lowercase() }.toSet()
+        val values = LinkedHashMap<String, Double>()
+        body.objects("ratings").forEach { r ->
+            val source = when (val raw = r.str("source")?.lowercase()) {
+                "popcorn", "audience", "tomatoesaudience" -> "audience"
+                "myanimelist", "mal" -> "mal"
+                "imdb", "trakt", "tmdb", "letterboxd", "tomatoes", "metacritic" -> raw
+                else -> return@forEach
             }
-            ExternalRating(source, label, text)
+            val maximum = when (source) {
+                "imdb", "mal" -> 10.0
+                "letterboxd" -> 5.0
+                else -> 100.0
+            }
+            val raw = r.str("value")?.toDoubleOrNull()?.takeIf { it >= 0 } ?: return@forEach
+            val score = r.str("score")?.toDoubleOrNull()
+            val value = if (source == "letterboxd" && score != null) score / 20.0 else raw
+            if (value !in 0.0..maximum || value == 0.0) return@forEach
+            if (source !in values) values[source] = value
+        }
+        return ORDER.mapNotNull { source ->
+            val value = values[source] ?: return@mapNotNull null
+            ExternalRating(source, LABELS.getValue(source), format(source, value), icon(source, value, keywords))
         }
     }
 
-    private fun formatOne(value: Double): String {
-        val tenths = kotlin.math.round(value * 10).toInt()
-        return "${tenths / 10}.${tenths % 10}"
+    private fun icon(source: String, value: Double, keywords: Set<String>): String = when (source) {
+        "tomatoes" -> when {
+            "certified-fresh" in keywords && value >= 70 -> "rating_tomatoes_certified"
+            value >= 60 -> "rating_tomatoes"
+            else -> "rating_tomatoes_rotten"
+        }
+        "audience" -> when {
+            "certified-hot" in keywords && value >= 80 -> "rating_audience_verified_hot"
+            value >= 60 -> "rating_audience"
+            else -> "rating_audience_stale"
+        }
+        else -> "rating_$source"
+    }
+
+    private fun format(source: String, value: Double): String {
+        val oneDecimal = kotlin.math.round(value * 10).toInt().let { "${it / 10}.${it % 10}" }
+        return when (source) {
+            "imdb", "letterboxd", "mal" -> oneDecimal
+            "tmdb" -> if (value > 10) "${kotlin.math.round(value).toInt()}%" else oneDecimal
+            "tomatoes", "audience" -> "${kotlin.math.round(value).toInt()}%"
+            else -> if (value % 1.0 == 0.0) value.toInt().toString() else oneDecimal
+        }
     }
 
     private companion object {
-        val PERCENT_SOURCES = setOf("tomatoes", "popcorn", "metacritic")
+        /** MDBListSettings.DEFAULT_RATING_ORDER */
+        val ORDER = listOf("imdb", "trakt", "tmdb", "tomatoes", "audience", "letterboxd", "metacritic", "mal")
         val LABELS = mapOf(
-            "imdb" to "IMDb", "trakt" to "Trakt", "tmdb" to "TMDB", "letterboxd" to "Letterboxd",
-            "tomatoes" to "Rotten Tomatoes", "popcorn" to "Audience", "metacritic" to "Metacritic",
-            "metacriticuser" to "Metacritic user", "rogerebert" to "Roger Ebert", "myanimelist" to "MAL"
+            "imdb" to "IMDb", "trakt" to "Trakt", "tmdb" to "TMDB", "tomatoes" to "Rotten Tomatoes",
+            "audience" to "Popcornmeter", "letterboxd" to "Letterboxd", "metacritic" to "Metacritic", "mal" to "MyAnimeList"
         )
     }
 }

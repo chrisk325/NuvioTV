@@ -197,15 +197,7 @@ struct DetailView: View {
             }
             Text(infoLine(meta)).font(.callout).foregroundStyle(.secondary)
             if !ratings.isEmpty {
-                HStack(spacing: 16) {
-                    ForEach(ratings, id: \.source) { rating in
-                        Text("\(rating.label) \(rating.value)")
-                            .font(.caption)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.12), in: Capsule())
-                    }
-                }
+                RatingsRow(ratings: ratings)
             }
             if let tagline = details?.tagline {
                 Text(tagline).font(.callout).italic().foregroundStyle(.secondary)
@@ -283,6 +275,29 @@ struct DetailView: View {
         }
         guard let first = episodes.first ?? meta.videos.first else { return nil }
         return EpisodeAction(target: StreamTarget(meta: meta, video: first), label: "Play \(first.episodeLabel ?? "")")
+    }
+}
+
+/// MDBList ratings as logos with scores (Android MDBListRatingsRow).
+struct RatingsRow: View {
+    let ratings: [ExternalRating]
+    var iconHeight: CGFloat = 32
+
+    var body: some View {
+        HStack(spacing: 28) {
+            ForEach(ratings, id: \.source) { rating in
+                HStack(spacing: 10) {
+                    Image(rating.icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(height: iconHeight)
+                        .accessibilityLabel(rating.label)
+                    Text(rating.value)
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                }
+            }
+        }
     }
 }
 
