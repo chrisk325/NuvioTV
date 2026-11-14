@@ -98,6 +98,8 @@ struct CatalogRowView: View {
     let slot: CatalogSlot
     var landscape = false
     var onFocus: ((MetaPreview) -> Void)? = nil
+    /// Up on a card of this row (the first catalog jumps to Continue Watching).
+    var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
         let state = feed.state(slot)
@@ -109,7 +111,8 @@ struct CatalogRowView: View {
                     seeAll: .catalog(slot),
                     landscape: landscape,
                     onFocus: onFocus,
-                    onReachEnd: { Task { await feed.loadMore(slot, core: app.core) } }
+                    onReachEnd: { Task { await feed.loadMore(slot, core: app.core) } },
+                    onMoveUp: onMoveUp
                 )
             } else if !state.loaded {
                 VStack(alignment: .leading) {
@@ -149,10 +152,18 @@ struct ContinueWatchingMenu: View {
     }
 }
 
+/// Focus anchors on Home: rows below send focus here explicitly on Up.
+enum HomeFocus: Hashable {
+    case continueWatching
+}
+
 struct ContinueWatchingRow: View {
     @EnvironmentObject private var app: AppModel
     let items: [WatchProgress]
     var onFocus: ((MetaPreview) -> Void)? = nil
+    /// The card last focused here (else the first) is the `.continueWatching` anchor.
+    var focus: FocusState<HomeFocus?>.Binding? = nil
+    @State private var lastFocusedId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -177,11 +188,14 @@ struct ContinueWatchingRow: View {
                                 .clipped()
                                 .focusBorder()
                                 .background(FocusReporter {
+                                    lastFocusedId = progress.videoId
                                     guard let onFocus else { return }
                                     Task { @MainActor in onFocus(await app.continueWatchingPreview(progress)) }
                                 })
                             }
                             .buttonStyle(.card)
+                            .homeFocus(focus, .continueWatching,
+                                       when: progress.videoId == (lastFocusedId ?? items.first?.videoId))
                             .contextMenu { ContinueWatchingMenu(app: app, progress: progress) }
                             Text(subtitle(progress))
                                 .font(.caption)
@@ -279,6 +293,18 @@ struct CatalogGridView: View {
         } catch {
             self.error = error.localizedDescription
             hasMore = false
+        }
+    }
+}
+
+extension View {
+    /// Binds `.focused` to a Home anchor only when a binding is given and the condition holds.
+    @ViewBuilder
+    func homeFocus(_ binding: FocusState<HomeFocus?>.Binding?, _ value: HomeFocus, when condition: Bool = true) -> some View {
+        if let binding, condition {
+            self.focused(binding, equals: value)
+        } else {
+            self
         }
     }
 }

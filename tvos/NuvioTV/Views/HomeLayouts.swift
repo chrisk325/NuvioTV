@@ -135,6 +135,7 @@ struct ClassicHomeView: View {
     @EnvironmentObject private var feed: HomeFeed
     let slots: [CatalogSlot]
     @State private var focused: MetaPreview?
+    @FocusState private var homeFocus: HomeFocus?
 
     var body: some View {
         ZStack {
@@ -146,12 +147,13 @@ struct ClassicHomeView: View {
                     if app.settings.showHero {
                         HeroCarousel(items: feed.heroItems(slots, core: app.core))
                     }
-                    if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
-                        ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus)
+                    if showsContinueWatching {
+                        ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus)
                     }
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                     ForEach(slots, id: \.key) { slot in
-                        CatalogRowView(slot: slot, onFocus: setFocus)
+                        CatalogRowView(slot: slot, onFocus: setFocus,
+                                       onMoveUp: upToContinueWatching(from: slot))
                     }
                 }
                 .padding(.vertical, 40)
@@ -160,6 +162,22 @@ struct ClassicHomeView: View {
     }
 
     private func setFocus(_ item: MetaPreview) { focused = item }
+
+    private var showsContinueWatching: Bool {
+        app.settings.showContinueWatching && !app.continueWatching.isEmpty
+    }
+
+    /// First catalog right under Continue Watching: Up goes there explicitly.
+    private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
+        guard showsContinueWatching, app.serverLibraries.isEmpty,
+              slot.key == firstLoadedSlotKey else { return nil }
+        return { homeFocus = .continueWatching }
+    }
+
+    /// Empty or loading catalogs have no cards, so the first focusable row is the first with items.
+    private var firstLoadedSlotKey: String? {
+        slots.first { !feed.state($0).items.isEmpty }?.key
+    }
 }
 
 /// Dimmed, blurred artwork of the focused title behind the rows.
@@ -255,6 +273,7 @@ struct ModernHomeView: View {
     @State private var focused: MetaPreview?
     @State private var pending: MetaPreview?
     @State private var debounce: Task<Void, Never>?
+    @FocusState private var homeFocus: HomeFocus?
 
     var body: some View {
         let hero = focused ?? feed.heroItems(slots, core: app.core).first
@@ -279,18 +298,31 @@ struct ModernHomeView: View {
                     // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
                     // nothing above on Up (first catalog → Continue Watching / hero).
                     VStack(alignment: .leading, spacing: 24) {
-                        if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
-                            ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus)
+                        if showsContinueWatching {
+                            ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus)
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                         ForEach(slots, id: \.key) { slot in
-                            CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus)
+                            CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus,
+                                           onMoveUp: upToContinueWatching(from: slot))
                         }
                     }
                     .padding(.bottom, 60)
                 }
             }
         }
+    }
+
+    private var showsContinueWatching: Bool {
+        app.settings.showContinueWatching && !app.continueWatching.isEmpty
+    }
+
+    /// First catalog right under Continue Watching: Up goes there explicitly.
+    private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
+        guard showsContinueWatching, app.serverLibraries.isEmpty,
+              slot.key == slots.first(where: { !feed.state($0).items.isEmpty })?.key
+        else { return nil }
+        return { homeFocus = .continueWatching }
     }
 
     /// Debounced like Android (MODERN_HERO_FOCUS_DEBOUNCE_MS = 450) so fast scrolling doesn't flicker.
