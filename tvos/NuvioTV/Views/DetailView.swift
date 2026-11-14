@@ -1,6 +1,37 @@
 import SwiftUI
 import NuvioShared
 
+/// Focus anchors on the details page. Moving up out of a horizontal row (cast, collection) nested
+/// in the vertical scroll often finds nothing on tvOS when the target is off screen, so those rows
+/// send focus to these explicitly.
+enum DetailFocus: Hashable {
+    case play, lastEpisode, people
+}
+
+extension View {
+    /// Binds `.focused` only when a binding is given and the condition holds.
+    @ViewBuilder
+    func detailFocus(_ binding: FocusState<DetailFocus?>.Binding?, _ value: DetailFocus, when condition: Bool = true) -> some View {
+        if let binding, condition {
+            self.focused(binding, equals: value)
+        } else {
+            self
+        }
+    }
+
+    /// Runs [action] when the user presses up while focus is inside this view.
+    @ViewBuilder
+    func onMoveUp(_ action: (() -> Void)?) -> some View {
+        if let action {
+            self.onMoveCommand { direction in
+                if direction == .up { action() }
+            }
+        } else {
+            self
+        }
+    }
+}
+
 struct DetailView: View {
     @EnvironmentObject private var app: AppModel
     let preview: MetaPreview
@@ -12,6 +43,7 @@ struct DetailView: View {
     @State private var ratings: [ExternalRating] = []
     @State private var trailer: PlaybackRequest?
     @State private var isLoadingTrailer = false
+    @FocusState private var focus: DetailFocus?
 
     var body: some View {
         Group {
@@ -86,16 +118,27 @@ struct DetailView: View {
         }
     }
 
+    private func hasEpisodes(_ meta: Meta) -> Bool {
+        meta.isSeriesLike && !meta.videos.isEmpty
+    }
+
+    /// Where "up" goes from rows below the cast: the cast row, else episodes, else Play.
+    private func rowAboveTarget(_ meta: Meta) -> DetailFocus {
+        if let people = details?.people, !people.isEmpty { return .people }
+        return hasEpisodes(meta) ? .lastEpisode : .play
+    }
+
     @ViewBuilder
     private func content(_ meta: Meta) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 40) {
                 hero(meta)
-                if meta.isSeriesLike && !meta.videos.isEmpty {
-                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason)
+                if hasEpisodes(meta) {
+                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
                 }
                 if let people = details?.people, !people.isEmpty {
-                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured)
+                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus)
+                        .onMoveUp { focus = hasEpisodes(meta) ? .lastEpisode : .play }
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
@@ -122,9 +165,12 @@ struct DetailView: View {
                 }
                 if let details, !details.collectionParts.isEmpty {
                     MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts)
+                        .onMoveUp { focus = rowAboveTarget(meta) }
                 }
                 if let details, !details.recommendations.isEmpty {
                     MetaRowView(title: "More like this", items: details.recommendations)
+                        // With a collection row above, let the focus engine move between the two rows.
+                        .onMoveUp(details.collectionParts.isEmpty ? (({ focus = rowAboveTarget(meta) }) as () -> Void) : nil)
                 }
             }
             .padding(.bottom, 80)
@@ -197,6 +243,7 @@ struct DetailView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .focusSection()
         }
         .padding(.horizontal, 80)
@@ -210,6 +257,7 @@ struct DetailView: View {
                 NavigationLink(value: Route.streams(action.target)) {
                     Label(action.label, systemImage: "play.fill")
                 }
+                .focused($focus, equals: .play)
             }
         } else {
             let target = StreamTarget(meta: meta, video: nil)
@@ -217,6 +265,7 @@ struct DetailView: View {
             NavigationLink(value: Route.streams(target)) {
                 Label(progress?.isResumable == true ? "Resume" : "Play", systemImage: "play.fill")
             }
+            .focused($focus, equals: .play)
         }
     }
 
@@ -246,6 +295,7 @@ struct EpisodesSection: View {
     @EnvironmentObject private var app: AppModel
     let meta: Meta
     @Binding var selectedSeason: Int32
+    var focus: FocusState<DetailFocus?>.Binding? = nil
 
     var body: some View {
         let seasons = meta.seasons().map { $0.int32Value }
@@ -266,14 +316,16 @@ struct EpisodesSection: View {
                 .focusSection()
             }
 
+            let episodes = meta.episodesForSeason(season: selectedSeason)
             LazyVStack(alignment: .leading, spacing: 24) {
-                ForEach(meta.episodesForSeason(season: selectedSeason), id: \.id) { video in
+                ForEach(episodes, id: \.id) { video in
                     EpisodeRow(
                         meta: meta,
                         video: video,
                         progress: app.core.progressFor(videoId: video.id),
                         isWatched: app.isWatched(meta, video)
                     )
+                    .detailFocus(focus, .lastEpisode, when: video.id == episodes.last?.id)
                     .contextMenu {
                         let watched = app.isWatched(meta, video)
                         Button(watched ? "Mark unwatched" : "Mark watched") {
@@ -283,6 +335,7 @@ struct EpisodesSection: View {
                 }
             }
             .padding(.horizontal, 80)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .focusSection()
         }
     }

@@ -7,22 +7,26 @@ struct PeopleRow: View {
     let people: [TmdbPerson]
     /// Add-on cast without a TMDB id (or builds without a TMDB key) can't open a person page.
     var linksToTmdb = true
+    /// Details page: the first avatar is the `.people` focus anchor.
+    var focus: FocusState<DetailFocus?>.Binding? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.headline).padding(.horizontal, 80)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 36) {
-                    ForEach(people, id: \.id) { person in
+                    ForEach(Array(people.enumerated()), id: \.offset) { index, person in
                         VStack(spacing: 10) {
                             if linksToTmdb && person.id > 0 {
                                 NavigationLink(value: Route.person(person.id)) { avatar(person) }
                                     .buttonStyle(.card)
                                     .clipShape(Circle())
+                                    .detailFocus(focus, .people, when: index == 0)
                             } else {
                                 Button {} label: { avatar(person) }
                                     .buttonStyle(.card)
                                     .clipShape(Circle())
+                                    .detailFocus(focus, .people, when: index == 0)
                             }
                             Text(person.name).font(.caption).lineLimit(1).frame(width: 190)
                             if let role = person.role {
@@ -35,6 +39,7 @@ struct PeopleRow: View {
                 .padding(.vertical, 24)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focusSection()
     }
 
