@@ -72,12 +72,14 @@ struct HeroInfo: View {
     let item: MetaPreview
     var maxWidth: CGFloat = 900
     var descriptionLines = 3
+    var logoMaxHeight: CGFloat = 170
+    var spacing: CGFloat = 18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: spacing) {
             if let logo = item.logo {
                 RemoteImage(url: logo, contentMode: .fit)
-                    .frame(maxWidth: 520, maxHeight: 170, alignment: .leading)
+                    .frame(maxWidth: 520, maxHeight: logoMaxHeight, alignment: .leading)
             } else {
                 Text(item.name).font(.system(size: 56, weight: .bold)).lineLimit(2)
             }
@@ -297,9 +299,10 @@ struct ModernHomeView: View {
                 if let hero {
                     // Focusable hero: opens the title; left / right flick through the featured titles.
                     NavigationLink(value: Route.detail(hero)) {
-                        HeroInfo(item: hero, maxWidth: 820, descriptionLines: 3)
+                        // Compact so the poster rows get more of the screen.
+                        HeroInfo(item: hero, maxWidth: 820, descriptionLines: 2, logoMaxHeight: 120, spacing: 12)
                             .padding(.horizontal, 30)
-                            .padding(.vertical, 24)
+                            .padding(.vertical, 16)
                             .frame(maxWidth: 900, alignment: .leading)
                             .animation(.easeInOut(duration: 0.3), value: hero.id)
                     }
@@ -313,9 +316,8 @@ struct ModernHomeView: View {
                         }
                     }
                     .padding(.horizontal, 50)
-                    .padding(.top, 46)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 470, alignment: .topLeading)
+                    .frame(height: 360, alignment: .topLeading)
                     .focusSection()
                 }
                 ScrollViewReader { proxy in
