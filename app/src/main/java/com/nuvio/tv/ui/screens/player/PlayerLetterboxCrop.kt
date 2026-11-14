@@ -22,6 +22,10 @@ import kotlinx.coroutines.delay
 internal const val LETTERBOX_SAMPLE_INTERVAL_MS = 1_000L
 private const val LETTERBOX_MAX_COPY_FAILURES = 8
 private const val LETTERBOX_TAG = "LetterboxCrop"
+// Frames that copy fine but show no picture: some TV chips hand back black for HDR video.
+private const val LETTERBOX_MAX_BLANK_FRAMES = 12
+// Gives Dolby Vision L5 time to arrive before keyframes are fetched.
+private const val LETTERBOX_KEYFRAME_DELAY_SAMPLES = 10
 
 /** The stream and decoded frame size a letterbox decision belongs to. */
 internal data class LetterboxKey(val streamUrl: String, val frameWidth: Int, val frameHeight: Int)
@@ -97,6 +101,8 @@ internal suspend fun runLetterboxDetection(
     player: Player,
     playerView: PlayerView,
     controller: PlayerRuntimeController,
+    /** Whether the current aspect mode would crop a letterbox; keyframes are fetched only then. */
+    wantsLetterbox: () -> Boolean = { true },
     onDetected: () -> Unit
 ) {
     val sampler = VideoSurfaceLetterboxSampler()
@@ -104,6 +110,9 @@ internal suspend fun runLetterboxDetection(
     var voteKey: LetterboxKey? = null
     var copyFailures = 0
     var framesFoundNoBars = false
+    var blankFrames = 0
+    var waitedSamples = 0
+    var keyframesTried = false
     while (true) {
         delay(LETTERBOX_SAMPLE_INTERVAL_MS)
         val size = player.videoSize
@@ -115,7 +124,11 @@ internal suspend fun runLetterboxDetection(
             voteKey = key
             copyFailures = 0
             framesFoundNoBars = false
+            blankFrames = 0
+            waitedSamples = 0
+            keyframesTried = false
         }
+        waitedSamples++
         // Dolby Vision says where the picture is; no frame needs to be read back.
         val activeArea = controller.dolbyVisionActiveAreaProbe?.activeArea
         val activeAreaAspect = activeArea?.let {
@@ -128,7 +141,26 @@ internal suspend fun runLetterboxDetection(
             onDetected()
             continue
         }
-        if (framesFoundNoBars || vote.isExhausted || copyFailures >= LETTERBOX_MAX_COPY_FAILURES) continue
+        if (framesFoundNoBars) continue
+        val framesUnusable = vote.isExhausted ||
+            copyFailures >= LETTERBOX_MAX_COPY_FAILURES ||
+            blankFrames >= LETTERBOX_MAX_BLANK_FRAMES
+        if (framesUnusable) {
+            if (keyframesTried || waitedSamples < LETTERBOX_KEYFRAME_DELAY_SAMPLES || !wantsLetterbox()) continue
+            if (controller.isTorrentStream || controller._uiState.value.isLive) continue
+            keyframesTried = true
+            val url = controller.currentStreamUrl
+            val agreed = detectLetterboxFromKeyframes(url, controller.currentHeaders, player.duration)
+            val frameAspect = size.width * size.pixelWidthHeightRatio / size.height
+            val pictureAspect = agreed?.let { letterboxPictureAspect(frameAspect, it) }
+            Log.i(LETTERBOX_TAG, "source=keyframes bar=$agreed frame=${size.width}x${size.height} picture=$pictureAspect")
+            if (pictureAspect != null && controller.currentStreamUrl == url && controller.letterboxKey != key) {
+                controller.letterboxKey = key
+                controller.letterboxPictureAspect = pictureAspect
+                onDetected()
+            }
+            continue
+        }
         if (!player.isPlaying) continue
         // A GPU zoom already scales the frame inside the surface, so its bars are not the source's.
         if (controller.keystoneZoomEffect?.isIdentity == false) continue
@@ -143,6 +175,7 @@ internal suspend fun runLetterboxDetection(
             is VideoSurfaceLetterboxSampler.Copied -> sample.bar
         }
         copyFailures = 0
+        blankFrames = if (bar == null) blankFrames + 1 else 0
         val agreedBar = vote.onSample(bar) ?: continue
         val frameAspect = size.width * size.pixelWidthHeightRatio / size.height
         val pictureAspect = letterboxPictureAspect(frameAspect, agreedBar)

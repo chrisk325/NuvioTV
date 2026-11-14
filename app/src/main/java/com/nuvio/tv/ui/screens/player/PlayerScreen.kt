@@ -2478,7 +2478,12 @@ private fun ExoPlayerSurface(
     }
 
     LaunchedEffect(player, playerView) {
-        runLetterboxDetection(player, playerView, controller) {
+        runLetterboxDetection(
+            player = player,
+            playerView = playerView,
+            controller = controller,
+            wantsLetterbox = { aspectModeCropsLetterbox(latestAspectMode) }
+        ) {
             playerView.syncExoSurfaceLayout(
                 tunnelingEnabled = latestTunnelingEnabled,
                 aspectMode = latestAspectMode,

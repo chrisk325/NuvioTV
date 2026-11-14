@@ -92,4 +92,15 @@ class LetterboxCropTest {
         assertNull(activeAreaPictureAspect(ActiveArea(0, 0, 500, 500), 3840, 2160, 1f))
         assertNull(activeAreaPictureAspect(ActiveArea(240, 240, 0, 0), 3840, 2160, 1f))
     }
+
+    @Test
+    fun keyframePositions_spreadOverTheFilm_pastLogosAndBeforeCredits() {
+        val twoHours = 2 * 60 * 60 * 1000L
+        val positions = keyframeLetterboxPositions(twoHours)
+        assertEquals(12, positions.size)
+        assertEquals((twoHours * 0.08).toLong(), positions.first())
+        assertEquals((twoHours * 0.88).toLong(), positions.last())
+        assertEquals(positions.sorted(), positions)
+        assertTrue(keyframeLetterboxPositions(-1L).isEmpty())
+    }
 }
