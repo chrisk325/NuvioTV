@@ -23,19 +23,17 @@ struct PeopleRow: View {
                             if linksToTmdb && person.id > 0 {
                                 NavigationLink(value: Route.person(person.id)) { avatar(person) }
                                     .buttonStyle(.card)
-                                    .clipShape(Circle())
                                     .detailFocus(focus, .people, when: index == 0)
                                     .onMoveUp(onMoveUp)
                             } else {
                                 Button {} label: { avatar(person) }
                                     .buttonStyle(.card)
-                                    .clipShape(Circle())
                                     .detailFocus(focus, .people, when: index == 0)
                                     .onMoveUp(onMoveUp)
                             }
-                            Text(person.name).font(.caption).lineLimit(1).frame(width: 190)
+                            Text(person.name).font(.caption).lineLimit(1).frame(width: 200)
                             if let role = person.role {
-                                Text(role).font(.caption2).foregroundStyle(.secondary).lineLimit(1).frame(width: 190)
+                                Text(role).font(.caption2).foregroundStyle(.secondary).lineLimit(1).frame(width: 200)
                             }
                         }
                     }
@@ -48,17 +46,19 @@ struct PeopleRow: View {
         .focusSection()
     }
 
+    /// Portrait photo card (rounded rectangle), like the episode cards above it.
     private func avatar(_ person: TmdbPerson) -> some View {
         ZStack {
-            Circle().fill(Color.white.opacity(0.1))
+            Rectangle().fill(Color.white.opacity(0.1))
             if person.photo != nil {
                 RemoteImage(url: person.photo)
             } else {
                 Text(String(person.name.prefix(1))).font(.title)
             }
         }
-        .frame(width: 170, height: 170)
-        .clipShape(Circle())
+        .frame(width: 200, height: 280)
+        .clipped()
+        .focusBorder()
     }
 }
 

@@ -156,7 +156,7 @@ struct DetailView: View {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
                 }
                 if let people = details?.people, !people.isEmpty {
-                    PeopleRow(title: "Cast & crew", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus,
+                    PeopleRow(title: "Cast", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus,
                               onMoveUp: { focus = hasEpisodes(meta) ? .lastEpisode : .play })
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -325,107 +325,198 @@ private struct EpisodeAction {
     let label: String
 }
 
+/// Episodes on the details page: centred logo, season tabs, then a horizontal row of large
+/// episode cards (watched circle, "Episode N", title, synopsis, runtime · air date).
 struct EpisodesSection: View {
     @EnvironmentObject private var app: AppModel
     let meta: Meta
     @Binding var selectedSeason: Int32
     var focus: FocusState<DetailFocus?>.Binding? = nil
+    /// The episode card last focused (the `.lastEpisode` anchor for Up from the rows below).
+    @State private var lastFocusedId: String?
 
     var body: some View {
         let seasons = meta.seasons().map { $0.int32Value }
-        VStack(alignment: .leading, spacing: 24) {
+        let episodes = meta.episodesForSeason(season: selectedSeason)
+        VStack(alignment: .leading, spacing: 28) {
+            if let logo = meta.logo {
+                RemoteImage(url: logo, contentMode: .fit)
+                    .frame(maxWidth: 520, maxHeight: 110)
+                    .frame(maxWidth: .infinity)
+            }
+
             if seasons.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 20) {
+                    HStack(spacing: 16) {
                         ForEach(seasons, id: \.self) { season in
                             Button(season == 0 ? "Specials" : "Season \(season)") {
                                 selectedSeason = season
                             }
-                            .tint(season == selectedSeason ? .accentColor : nil)
+                            .buttonStyle(SeasonTabStyle(isSelected: season == selectedSeason))
                         }
                     }
                     .padding(.horizontal, 80)
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 16)
                 }
                 .focusSection()
             }
 
-            let episodes = meta.episodesForSeason(season: selectedSeason)
-            LazyVStack(alignment: .leading, spacing: 24) {
-                ForEach(episodes, id: \.id) { video in
-                    EpisodeRow(
-                        meta: meta,
-                        video: video,
-                        progress: app.core.progressFor(videoId: video.id),
-                        isWatched: app.isWatched(meta, video)
-                    )
-                    .detailFocus(focus, .lastEpisode, when: video.id == episodes.last?.id)
-                    .contextMenu {
-                        let watched = app.isWatched(meta, video)
-                        Button(watched ? "Mark unwatched" : "Mark watched") {
-                            app.core.setWatched(meta: meta, video: video, isWatched: !watched)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 40) {
+                    ForEach(episodes, id: \.id) { video in
+                        EpisodeCard(
+                            meta: meta,
+                            video: video,
+                            progress: app.core.progressFor(videoId: video.id),
+                            isWatched: app.isWatched(meta, video),
+                            onFocus: { lastFocusedId = video.id }
+                        )
+                        .detailFocus(focus, .lastEpisode, when: video.id == (lastFocusedId ?? episodes.first?.id))
                     }
                 }
+                .padding(.horizontal, 80)
+                .padding(.vertical, 30)
             }
-            .padding(.horizontal, 80)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .focusSection()
+        }
+        .onChange(of: selectedSeason) { _, _ in lastFocusedId = nil }
+    }
+}
+
+/// Season tab: plain text, a soft tile when selected, white when focused.
+struct SeasonTabStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        Tab(configuration: configuration, isSelected: isSelected)
+    }
+
+    private struct Tab: View {
+        let configuration: ButtonStyle.Configuration
+        let isSelected: Bool
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .font(.headline.weight(isSelected || isFocused ? .bold : .medium))
+                .foregroundStyle(isFocused ? Color.black : Color.white.opacity(isSelected ? 1 : 0.8))
+                .padding(.horizontal, 28)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isFocused ? Color.white : (isSelected ? Color.white.opacity(0.16) : Color.clear))
+                )
+                .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.06 : 1))
+                .animation(.easeOut(duration: 0.12), value: isFocused)
         }
     }
 }
 
-struct EpisodeRow: View {
+/// Large 16:9 episode card with its details underneath.
+struct EpisodeCard: View {
+    @EnvironmentObject private var app: AppModel
     let meta: Meta
     let video: Video
     let progress: WatchProgress?
     var isWatched = false
+    var onFocus: (() -> Void)? = nil
+
+    private let width: CGFloat = 560
 
     var body: some View {
-        NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
-            HStack(alignment: .top, spacing: 30) {
-                ZStack(alignment: .bottomLeading) {
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
+                ZStack(alignment: .topLeading) {
                     RemoteImage(url: video.thumbnail ?? meta.backdropUrl)
-                    if let progress {
-                        GeometryReader { geo in
-                            VStack {
-                                Spacer()
-                                Rectangle()
-                                    .fill(Color.accentColor)
-                                    .frame(width: geo.size.width * progress.fraction, height: 6)
+                    // Watched state: empty ring, or a filled check.
+                    Group {
+                        if isWatched {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 34))
+                                .foregroundStyle(.white, Color.accentColor)
+                        } else {
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.85), lineWidth: 3)
+                                .frame(width: 34, height: 34)
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.5), radius: 4)
+                    .padding(16)
+                    if let progress, progress.fraction > 0, !isWatched {
+                        VStack {
+                            Spacer()
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Rectangle().fill(Color.white.opacity(0.25))
+                                    Rectangle().fill(Color.accentColor).frame(width: geo.size.width * progress.fraction)
+                                }
                             }
+                            .frame(height: 6)
                         }
                     }
                 }
-                .frame(width: 320, height: 180)
+                .frame(width: width, height: width * 9 / 16)
                 .clipped()
-                .cornerRadius(12)
+                .focusBorder()
+                .background(FocusReporter { onFocus?() })
+            }
+            .buttonStyle(.card)
+            .contextMenu {
+                Button(isWatched ? "Mark unwatched" : "Mark watched") {
+                    app.core.setWatched(meta: meta, video: video, isWatched: !isWatched)
+                }
+            }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        Text("\(video.episode?.int32Value ?? 0). \(video.title)")
-                            .font(.headline)
-                            .lineLimit(1)
-                        if isWatched {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        }
-                    }
-                    HStack(spacing: 16) {
-                        if let released = video.released { Text(String(released.prefix(10))) }
-                        if video.runtimeMinutes > 0 { Text("\(video.runtimeMinutes) min") }
-                        if !video.isReleased { Text("Upcoming") }
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Episode \(video.episode?.int32Value ?? 0)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    if let overview = video.overview {
-                        Text(overview).font(.callout).lineLimit(3).foregroundStyle(.secondary)
-                    }
+                Text(video.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                if let overview = video.overview, !overview.isEmpty {
+                    Text(overview)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
-                Spacer(minLength: 0)
+                let info = EpisodeFormat.info(runtimeMinutes: Int(video.runtimeMinutes), released: video.released, isReleased: video.isReleased)
+                if !info.isEmpty {
+                    Text(info)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(20)
-            .focusBorder()
+            .frame(width: width, alignment: .leading)
         }
-        .buttonStyle(.card)
+    }
+}
+
+enum EpisodeFormat {
+    private static let input: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static let output: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM yyyy")
+        return f
+    }()
+
+    /// "1h 6m · 1 Sep 2022"; "Upcoming" when not yet released.
+    static func info(runtimeMinutes: Int, released: String?, isReleased: Bool) -> String {
+        var parts: [String] = []
+        if runtimeMinutes > 0 {
+            parts.append(runtimeMinutes >= 60 ? "\(runtimeMinutes / 60)h \(runtimeMinutes % 60)m" : "\(runtimeMinutes)m")
+        }
+        if let released, let date = input.date(from: String(released.prefix(10))) {
+            parts.append(output.string(from: date))
+        }
+        if !isReleased { parts.append("Upcoming") }
+        return parts.joined(separator: " · ")
     }
 }
