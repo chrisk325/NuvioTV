@@ -82,6 +82,7 @@ struct HeroInfo: View {
                 Text(item.name).font(.system(size: 56, weight: .bold)).lineLimit(2)
             }
             Text(infoLine).font(.callout).foregroundStyle(.secondary)
+            HeroRatings(item: item)
             if let description = item.description_, !description.isEmpty {
                 Text(description).font(.callout).lineLimit(descriptionLines)
             }
@@ -97,6 +98,31 @@ struct HeroInfo: View {
         if let runtime = item.runtime { parts.append(runtime) }
         if !item.genres.isEmpty { parts.append(item.genres.prefix(3).joined(separator: ", ")) }
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// MDBList rating logos for a hero item; loads (cached) when the item changes.
+struct HeroRatings: View {
+    @EnvironmentObject private var app: AppModel
+    let item: MetaPreview
+    @State private var ratings: [ExternalRating] = []
+    @State private var loadedFor: String?
+
+    var body: some View {
+        Group {
+            if !ratings.isEmpty && loadedFor == item.id {
+                RatingsRow(ratings: ratings, iconHeight: 28)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: loadedFor)
+        .task(id: item.id) {
+            let id = item.id
+            let result = (try? await app.core.heroRatings(preview: item)) ?? []
+            guard !Task.isCancelled, id == item.id else { return }
+            ratings = result
+            loadedFor = id
+        }
     }
 }
 

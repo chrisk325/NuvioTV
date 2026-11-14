@@ -334,11 +334,30 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun tmdbPerson(personId: Int): TmdbPersonDetail? = tmdb.person(personId, settings.tmdbLanguage)
 
+    private val ratingsCache = LinkedHashMap<String, List<ExternalRating>>()
+
+    private suspend fun cachedRatings(imdb: String, isShow: Boolean): List<ExternalRating> {
+        val key = "$imdb|$isShow"
+        ratingsCache[key]?.let { return it }
+        val result = mdbList.ratings(settings.mdbListApiKey, imdb, isShow)
+        ratingsCache[key] = result
+        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        return result
+    }
+
     @Throws(Exception::class)
     suspend fun ratings(meta: Meta): List<ExternalRating> {
         if (!settings.showMdbListRatings) return emptyList()
         val imdb = meta.imdbId ?: meta.id.takeIf { it.startsWith("tt") }?.substringBefore(':') ?: return emptyList()
-        return mdbList.ratings(settings.mdbListApiKey, imdb, meta.isSeriesLike)
+        return cachedRatings(imdb, meta.isSeriesLike)
+    }
+
+    /** Ratings for a Home hero item (cached; empty when disabled or no IMDb id). */
+    @Throws(Exception::class)
+    suspend fun heroRatings(preview: MetaPreview): List<ExternalRating> {
+        if (!settings.showMdbListRatings || !settings.showMdbListOnHero) return emptyList()
+        val imdb = preview.imdbId ?: preview.id.takeIf { it.startsWith("tt") }?.substringBefore(':') ?: return emptyList()
+        return cachedRatings(imdb, com.nuvio.shared.model.isSeriesLikeType(preview.apiType))
     }
 
     /** Streams from every add-on, progressively; torrent streams get debrid cache badges once all arrive. */

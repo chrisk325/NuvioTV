@@ -241,6 +241,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("mdblist.enabled", true)
         set(value) = put("mdblist.enabled", value)
 
+    /** Android mdbListShowOnHero: rating logos on the Home hero. */
+    var showMdbListOnHero: Boolean
+        get() = bool("mdblist.hero", true)
+        set(value) = put("mdblist.hero", value)
+
     var mdbListApiKey: String
         get() = str("mdblist.apiKey", "")
         set(value) = put("mdblist.apiKey", value.trim())

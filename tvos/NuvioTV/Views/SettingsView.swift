@@ -389,6 +389,7 @@ private struct MetadataSettingsPane: View {
 
             Section {
                 Toggle("MDBList ratings", isOn: s.bind({ $0.showMdbListRatings }, { $0.showMdbListRatings = $1 }))
+                Toggle("Ratings on the Home hero", isOn: s.bind({ $0.showMdbListOnHero }, { $0.showMdbListOnHero = $1 }))
                 TextField("MDBList API key", text: s.bind({ $0.mdbListApiKey }, { $0.mdbListApiKey = $1 }))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
