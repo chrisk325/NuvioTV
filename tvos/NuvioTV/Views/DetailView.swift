@@ -349,8 +349,14 @@ struct EpisodesSection: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(seasons, id: \.self) { season in
-                            Button(season == 0 ? "Specials" : "Season \(season)") {
+                            // Moving onto a tab switches the season (as in the Apple TV app); clicking does too.
+                            Button {
                                 selectedSeason = season
+                            } label: {
+                                Text(season == 0 ? "Specials" : "Season \(season)")
+                                    .background(FocusReporter {
+                                        if selectedSeason != season { selectedSeason = season }
+                                    })
                             }
                             .buttonStyle(SeasonTabStyle(isSelected: season == selectedSeason))
                         }
