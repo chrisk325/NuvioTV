@@ -183,6 +183,20 @@ public class MatroskaExtractor implements Extractor {
       return null;
     }
 
+    /**
+     * Whether {@link #onInBandRpu} should receive the in-band Dolby Vision RPU NAL units of HEVC
+     * samples that are not transformed. Checked per NAL unit, so it can turn itself off.
+     */
+    default boolean wantsInBandRpu() {
+      return false;
+    }
+
+    /**
+     * Receives an in-band Dolby Vision RPU NAL unit (UNSPEC62, with its two-byte header) of a
+     * sample that is passed through unchanged. Read-only: the NAL unit is written as it is.
+     */
+    default void onInBandRpu(byte[] nal, int offset, int length) {}
+
     /** Valid byte count of the buffer returned by the last {@link #transformHevcSample} call. */
     default int lastTransformedSampleLength() {
       return 0;
@@ -424,6 +438,8 @@ public class MatroskaExtractor implements Extractor {
    * https://www.matroska.org/technical/codec_specs.html.
    */
   private static final int BLOCK_ADD_ID_TYPE_DVVC = 0x64767643;
+  private static final int NAL_UNIT_TYPE_UNSPEC62 = 62;
+  private static final int MAX_OBSERVED_RPU_BYTES = 64 * 1024;
 
   private static final int LACING_NONE = 0;
   private static final int LACING_XIPH = 1;
@@ -586,6 +602,9 @@ public class MatroskaExtractor implements Extractor {
 
   // Reused per-sample read buffer for Dolby Vision conversion; grows to the largest sample.
   private byte[] dolbyVisionSampleBuffer = new byte[0];
+  // In-band Dolby Vision RPU handed to the transformer while it wants one (see observeInBandRpu).
+  private byte[] observedRpu = new byte[0];
+  private final ParsableByteArray observedRpuData = new ParsableByteArray();
 
   /** Reused zlib inflater for {@code ContentCompAlgo=0} tracks. */
   private final MatroskaZlibSampleDecompressor zlibSampleDecompressor =
@@ -2358,6 +2377,14 @@ public class MatroskaExtractor implements Extractor {
           nalStartCode.setPosition(0);
           output.sampleData(nalStartCode, 4);
           sampleBytesWritten += 4;
+          if (track.isHevc
+              && sampleCurrentNalBytesRemaining >= 2
+              && sampleCurrentNalBytesRemaining <= MAX_OBSERVED_RPU_BYTES
+              && sampleCurrentNalBytesRemaining <= size - sampleBytesRead
+              && dolbyVisionSampleTransformer != null
+              && dolbyVisionSampleTransformer.wantsInBandRpu()) {
+            observeInBandRpu(input, output);
+          }
         } else {
           // Write the payload of the NAL unit.
           int bytesWritten = writeToOutput(input, output, sampleCurrentNalBytesRemaining);
@@ -2671,6 +2698,45 @@ public class MatroskaExtractor implements Extractor {
    * Writes {@code length} bytes of sample data into {@code target} at {@code offset}, consisting of
    * pending {@link #sampleStrippedBytes} and any remaining data read from {@code input}.
    */
+  /**
+   * Called at the start of an HEVC NAL unit's payload. Reads its two-byte header and, for a Dolby
+   * Vision RPU, the whole NAL unit, hands the RPU to the transformer and writes the bytes on
+   * unchanged. Other NAL units continue in the regular loop after their header.
+   */
+  private void observeInBandRpu(ExtractorInput input, TrackOutput output) throws IOException {
+    if (observedRpu.length < 2) {
+      observedRpu = new byte[1024];
+    }
+    writeToTarget(input, observedRpu, /* offset= */ 0, /* length= */ 2);
+    sampleBytesRead += 2;
+    int nalUnitType = (observedRpu[0] >> 1) & 0x3F;
+    int nalSize = sampleCurrentNalBytesRemaining;
+    if (nalUnitType != NAL_UNIT_TYPE_UNSPEC62) {
+      observedRpuData.reset(observedRpu, /* limit= */ 2);
+      output.sampleData(observedRpuData, 2);
+      sampleBytesWritten += 2;
+      sampleCurrentNalBytesRemaining -= 2;
+      return;
+    }
+    if (observedRpu.length < nalSize) {
+      byte[] grown = new byte[max(nalSize, observedRpu.length * 2)];
+      grown[0] = observedRpu[0];
+      grown[1] = observedRpu[1];
+      observedRpu = grown;
+    }
+    writeToTarget(input, observedRpu, /* offset= */ 2, nalSize - 2);
+    sampleBytesRead += nalSize - 2;
+    try {
+      dolbyVisionSampleTransformer.onInBandRpu(observedRpu, /* offset= */ 0, nalSize);
+    } catch (RuntimeException e) {
+      Log.w(TAG, "DolbyVisionSampleTransformer.onInBandRpu failed: " + e.getMessage());
+    }
+    observedRpuData.reset(observedRpu, nalSize);
+    output.sampleData(observedRpuData, nalSize);
+    sampleBytesWritten += nalSize;
+    sampleCurrentNalBytesRemaining = 0;
+  }
+
   private void writeToTarget(ExtractorInput input, byte[] target, int offset, int length)
       throws IOException {
     int pendingStrippedBytes = min(length, sampleStrippedBytes.bytesLeft());

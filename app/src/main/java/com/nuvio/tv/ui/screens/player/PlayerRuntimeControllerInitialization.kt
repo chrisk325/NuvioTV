@@ -1094,7 +1094,9 @@ internal fun PlayerRuntimeController.initializePlayer(
                         ),
                         stripDvRpu = stripDvRpuEnabled,
                         stripHdr10PlusSei = stripHdr10PlusSei,
-                        p5Session = dv5HdrSession
+                        p5Session = dv5HdrSession,
+                        activeAreaProbe = com.nuvio.tv.core.player.DolbyVisionActiveAreaProbe()
+                            .also { dolbyVisionActiveAreaProbe = it }
                     ).let { autoSyncExtractorsFactory(it, url, headers) } // AutoSync hook
             }
 

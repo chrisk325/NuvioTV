@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
+import com.nuvio.tv.core.player.DolbyVisionActiveAreaProbe.ActiveArea
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -77,5 +78,29 @@ class LetterboxCropTest {
         val subtitle = aspectModeVideoFraction(AspectMode.ORIGINAL, uhdFrame, tv)
         assertEquals(1f, subtitle.scaleX, 0.001f)
         assertEquals(1f, subtitle.scaleY, 0.001f)
+    }
+
+    @Test
+    fun dolbyVisionActiveArea_givesThePictureAspect() {
+        val area = ActiveArea(left = 0, right = 0, top = 276, bottom = 276)
+        assertEquals(3840f / (2160f - 552f), activeAreaPictureAspect(area, 3840, 2160, 1f)!!, 0.001f)
+    }
+
+    @Test
+    fun dolbyVisionActiveArea_withoutBarsOrWithImplausibleBars_isIgnored() {
+        assertNull(activeAreaPictureAspect(ActiveArea(0, 0, 0, 0), 3840, 2160, 1f))
+        assertNull(activeAreaPictureAspect(ActiveArea(0, 0, 500, 500), 3840, 2160, 1f))
+        assertNull(activeAreaPictureAspect(ActiveArea(240, 240, 0, 0), 3840, 2160, 1f))
+    }
+
+    @Test
+    fun keyframePositions_spreadOverTheFilm_pastLogosAndBeforeCredits() {
+        val twoHours = 2 * 60 * 60 * 1000L
+        val positions = keyframeLetterboxPositions(twoHours)
+        assertEquals(12, positions.size)
+        assertEquals((twoHours * 0.08).toLong(), positions.first())
+        assertEquals((twoHours * 0.88).toLong(), positions.last())
+        assertEquals(positions.sorted(), positions)
+        assertTrue(keyframeLetterboxPositions(-1L).isEmpty())
     }
 }
