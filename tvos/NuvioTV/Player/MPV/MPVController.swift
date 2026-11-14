@@ -61,6 +61,33 @@ struct MPVTrack: Identifiable, Hashable {
     }
 }
 
+/// Player resize modes (Android player's aspect ratio button).
+enum PlayerAspectMode: String, CaseIterable, Identifiable {
+    case fit, zoom, stretch, ratio16x9, ratio4x3
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fit: return "Fit"
+        case .zoom: return "Zoom"
+        case .stretch: return "Stretch"
+        case .ratio16x9: return "16:9"
+        case .ratio4x3: return "4:3"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .fit: return "Whole picture, with black bars"
+        case .zoom: return "Fill the screen, cropping the edges"
+        case .stretch: return "Fill the screen, distorting the picture"
+        case .ratio16x9: return "Force a 16:9 picture"
+        case .ratio4x3: return "Force a 4:3 picture"
+        }
+    }
+}
+
 /// Everything mpv needs to open a stream.
 struct MPVLoadOptions {
     var url: URL
@@ -283,6 +310,17 @@ final class MPVController {
     func setAudioDelay(_ seconds: Double) { set(property: "audio-delay", String(format: "%.3f", seconds)) }
     func setSubtitleScale(_ scale: Double) { set(property: "sub-scale", String(format: "%.2f", scale)) }
     func setSubtitlePosition(_ pos: Int) { set(property: "sub-pos", String(pos)) }
+
+    /// Fit, zoom (crop to fill), stretch or a forced aspect ratio. Each mode resets the others.
+    func setAspect(_ mode: PlayerAspectMode) {
+        set(property: "keepaspect", mode == .stretch ? "no" : "yes")
+        set(property: "panscan", mode == .zoom ? "1.0" : "0.0")
+        switch mode {
+        case .ratio16x9: set(property: "video-aspect-override", "16:9")
+        case .ratio4x3: set(property: "video-aspect-override", "4:3")
+        default: set(property: "video-aspect-override", "no")
+        }
+    }
 
     func setVideoEnabled(_ enabled: Bool) { set(property: "vid", enabled ? "auto" : "no") }
 

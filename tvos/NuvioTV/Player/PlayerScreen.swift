@@ -16,11 +16,11 @@ struct PlayerContainer: View {
 }
 
 private enum PlayerFocus: Hashable {
-    case catcher, scrubber, playPause, audio, subtitles, adjust, speed, next, panel, skip
+    case catcher, scrubber, playPause, audio, subtitles, adjust, speed, aspect, next, panel, skip
 }
 
 private enum PlayerPanel: Identifiable {
-    case audio, subtitles, adjust, speed
+    case audio, subtitles, adjust, speed, aspect
     var id: Self { self }
 }
 
@@ -174,6 +174,7 @@ struct PlayerScreen: View {
                     controlButton("Subtitles", "captions.bubble", .subtitles) { open(.subtitles) }
                     controlButton("Sync & size", "slider.horizontal.3", .adjust) { open(.adjust) }
                     controlButton(speedLabel, "speedometer", .speed) { open(.speed) }
+                    controlButton(model.aspectMode == .fit ? "Resize" : model.aspectMode.title, "aspectratio", .aspect) { open(.aspect) }
                     if model.nextVideo != nil {
                         controlButton("Next episode", "forward.end", .next) { model.playNext() }
                     }
@@ -230,6 +231,14 @@ struct PlayerScreen: View {
             ) { model.selectSubtitle($0) }
         case .adjust:
             adjustPanel
+        case .aspect:
+            optionPanel(title: "Picture size", options: PlayerAspectMode.allCases.map { mode in
+                PanelOption(id: "aspect-\(mode.rawValue)", title: mode.title, detail: mode.detail,
+                            isSelected: model.aspectMode == mode) {
+                    model.setAspect(mode)
+                    self.panel = nil
+                }
+            })
         case .speed:
             optionPanel(title: "Playback speed", options: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map { value in
                 PanelOption(

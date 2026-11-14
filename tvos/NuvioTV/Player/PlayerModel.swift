@@ -140,6 +140,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             title: request.title
         ))
         controller.play()
+        if aspectMode != .fit { controller.setAspect(aspectMode) }
         Task { await loadSubtitles(for: request) }
     }
 
@@ -219,6 +220,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     func selectSubtitle(_ track: MPVTrack?) { controller.selectSubtitle(track?.id) }
 
     func setSpeed(_ value: Double) { controller.setSpeed(value) }
+
+    /// Kept for the whole session, so the next episode keeps the same picture mode.
+    @Published private(set) var aspectMode: PlayerAspectMode = .fit
+
+    func setAspect(_ mode: PlayerAspectMode) {
+        aspectMode = mode
+        controller.setAspect(mode)
+    }
 
     /// Persist the current delay/size as the new defaults.
     func rememberSubtitleTweaks() {
