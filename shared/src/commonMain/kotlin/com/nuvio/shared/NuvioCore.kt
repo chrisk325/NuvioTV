@@ -102,7 +102,7 @@ class NuvioCore(
     val debrid = com.nuvio.shared.debrid.DebridService(httpClient, store, config.premiumizeClientId)
     val watched = WatchedRepository(store)
     val trakt = TraktService(httpClient, store, config.traktClientId, config.traktClientSecret)
-    val simkl = SimklService(httpClient, store, config.simklClientId)
+    val simkl = SimklService(httpClient, store, config.simklClientId, config.simklAppName.ifBlank { "nuvio" })
     val aniList = AniListService(httpClient, store, config.aniListClientId)
     val mdbList = MdbListService(httpClient)
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)

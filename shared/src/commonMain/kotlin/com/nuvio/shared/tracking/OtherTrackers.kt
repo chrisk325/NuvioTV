@@ -4,6 +4,7 @@ import com.nuvio.shared.data.AddonJson
 import com.nuvio.shared.data.asArray
 import com.nuvio.shared.data.asObject
 import com.nuvio.shared.data.int
+import com.nuvio.shared.data.long
 import com.nuvio.shared.data.nonBlank
 import com.nuvio.shared.data.obj
 import com.nuvio.shared.data.objects
@@ -25,59 +26,138 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
-/** Simkl: PIN sign-in, scrobble and history (simkl-api-key = client id). */
+/**
+ * Simkl over AUTH V2 (RFC 8628 device flow), as the Android SimklAuthRepository / SimklApiClient:
+ * POST /oauth2/device, poll POST /oauth2/token, refresh tokens; every request carries the
+ * client_id / app-name / app-version query parameters.
+ */
 class SimklService(
     private val http: HttpClient,
     private val store: KeyValueStore,
-    private val clientId: String
+    private val clientId: String,
+    private val appName: String = "nuvio",
+    private val appVersion: String = "0.1.0"
 ) {
     val isConfigured: Boolean get() = clientId.isNotBlank()
     val isConnected: Boolean get() = store.readToken(KEY) != null
     val username: String? get() = store.readToken(KEY)?.username
 
-    @Throws(Exception::class)
-    suspend fun startSignIn(): DeviceSignIn {
-        val response = http.get("$API/oauth/pin?client_id=${encodeUrlComponent(clientId)}") { header("simkl-api-key", clientId) }
-        val body = AddonJson.parseToJsonElement(response.bodyAsText()).asObject()
-            ?: throw TrackerException("Simkl sign-in failed")
-        val code = body.nonBlank("user_code") ?: throw TrackerException("Simkl returned no code")
-        return DeviceSignIn("simkl", code, body.nonBlank("verification_url") ?: "https://simkl.com/pin", code, body.int("interval") ?: 5)
+    private fun url(path: String): String =
+        "$API$path?client_id=${encodeUrlComponent(clientId)}&app-name=${encodeUrlComponent(appName)}" +
+            "&app-version=${encodeUrlComponent(appVersion)}"
+
+    private fun io.ktor.client.request.HttpRequestBuilder.baseHeaders() {
+        header("User-Agent", "NuvioTV/$appVersion")
+        header("Accept", "application/json")
     }
 
+    private fun form(vararg fields: Pair<String, String>) = TextContent(
+        fields.joinToString("&") { (k, v) -> "${encodeUrlComponent(k)}=${encodeUrlComponent(v)}" },
+        ContentType.Application.FormUrlEncoded
+    )
+
+    @Throws(Exception::class)
+    suspend fun startSignIn(): DeviceSignIn {
+        if (!isConfigured) throw TrackerException("This build has no Simkl client id")
+        val response = http.post(url("/oauth2/device")) {
+            baseHeaders()
+            setBody(form("client_id" to clientId, "scope" to "media:read media:write"))
+        }
+        val body = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asObject() }.getOrNull()
+        if (!response.status.isSuccess() || body == null) {
+            throw TrackerException(body?.str("error_description") ?: body?.str("error") ?: "Simkl sign-in failed (HTTP ${response.status.value})")
+        }
+        val deviceCode = body.nonBlank("device_code") ?: throw TrackerException("Simkl returned no device code")
+        val userCode = body.nonBlank("user_code") ?: throw TrackerException("Simkl returned no code")
+        return DeviceSignIn(
+            providerId = "simkl",
+            userCode = userCode,
+            verificationUrl = body.nonBlank("verification_uri_complete") ?: body.nonBlank("verification_uri") ?: "https://simkl.com/pin",
+            deviceCode = deviceCode,
+            intervalSeconds = body.int("interval") ?: 5
+        )
+    }
+
+    /** True once approved (tokens stored); false while pending or asked to slow down. */
     @Throws(Exception::class)
     suspend fun pollSignIn(signIn: DeviceSignIn): Boolean {
-        val response = http.get("$API/oauth/pin/${encodeUrlComponent(signIn.userCode)}?client_id=${encodeUrlComponent(clientId)}") {
-            header("simkl-api-key", clientId)
+        val response = http.post(url("/oauth2/token")) {
+            baseHeaders()
+            setBody(form(
+                "grant_type" to "urn:ietf:params:oauth:grant-type:device_code",
+                "client_id" to clientId,
+                "device_code" to signIn.deviceCode
+            ))
         }
-        if (!response.status.isSuccess()) return false
-        val body = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return false
-        val token = body.nonBlank("access_token") ?: return false
-        store.writeToken(KEY, StoredToken(token))
-        runCatching {
-            val settings = AddonJson.parseToJsonElement(
-                http.post("$API/users/settings") { headers(token) }.bodyAsText()
-            ).asObject()
-            val name = settings?.obj("user")?.nonBlank("name") ?: settings?.obj("account")?.nonBlank("id")
-            if (name != null) store.writeToken(KEY, StoredToken(token, username = name))
+        val body = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asObject() }.getOrNull()
+        if (!response.status.isSuccess()) {
+            when (body?.str("error")) {
+                "authorization_pending", "slow_down", null -> return false
+                "expired_token" -> throw TrackerException("The code expired; start again")
+                "access_denied" -> throw TrackerException("Sign-in was declined")
+                "invalid_grant" -> throw TrackerException("The code is no longer valid; start again")
+                "invalid_client", "unauthorized_client" -> throw TrackerException("Simkl rejected this app's client id")
+                else -> return if (response.status.value == 429 || response.status.value >= 500) false
+                    else throw TrackerException(body.str("error_description") ?: "Simkl sign-in failed")
+            }
         }
+        storeTokens(body ?: return false, previous = null)
+        runCatching { fetchUsername() }
         return true
     }
 
     fun signOut() = store.writeToken(KEY, null)
 
+    private fun storeTokens(body: JsonObject, previous: StoredToken?) {
+        val access = body.nonBlank("access_token") ?: return
+        val expiresIn = body.long("expires_in") ?: (7 * 24 * 3600L)
+        store.writeToken(KEY, StoredToken(
+            accessToken = access,
+            refreshToken = body.nonBlank("refresh_token") ?: previous?.refreshToken,
+            expiresAtMs = com.nuvio.shared.util.currentTimeMillis() + expiresIn * 1000,
+            username = previous?.username
+        ))
+    }
+
+    private suspend fun accessToken(): String? {
+        val token = store.readToken(KEY) ?: return null
+        val refresh = token.refreshToken
+        if (!token.isExpired || refresh == null) return token.accessToken
+        val response = http.post(url("/oauth2/token")) {
+            baseHeaders()
+            setBody(form("grant_type" to "refresh_token", "client_id" to clientId, "refresh_token" to refresh))
+        }
+        val body = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asObject() }.getOrNull()
+        when {
+            response.status.isSuccess() && body != null -> storeTokens(body, token)
+            response.status.value == 400 || response.status.value == 401 -> { signOut(); return null }
+        }
+        return store.readToken(KEY)?.accessToken
+    }
+
+    private suspend fun fetchUsername() {
+        val token = accessToken() ?: return
+        val settings = AddonJson.parseToJsonElement(
+            http.post(url("/users/settings")) { baseHeaders(); header("Authorization", "Bearer $token") }.bodyAsText()
+        ).asObject()
+        val name = settings?.obj("user")?.nonBlank("name") ?: settings?.obj("account")?.str("id")
+        store.readToken(KEY)?.let { if (name != null) store.writeToken(KEY, it.copy(username = name)) }
+    }
+
     suspend fun scrobble(media: TrackedMedia, action: ScrobbleAction, progressPercent: Double) {
-        val token = store.readToken(KEY)?.accessToken ?: return
+        val token = accessToken() ?: return
         val payload = body(media)?.let { JsonObject(it + ("progress" to kotlinx.serialization.json.JsonPrimitive(progressPercent))) } ?: return
         runCatching {
-            http.post("$API/scrobble/${action.path}") {
-                headers(token)
+            http.post(url("/scrobble/${action.path}")) {
+                baseHeaders()
+                header("Authorization", "Bearer $token")
                 setBody(TextContent(payload.toString(), ContentType.Application.Json))
             }
         }
     }
 
     suspend fun markWatched(media: TrackedMedia) {
-        val token = store.readToken(KEY)?.accessToken ?: return
+        val token = accessToken() ?: return
         val ids = ids(media) ?: return
         val payload = if (media.isEpisode) buildJsonObject {
             putJsonArray("shows") {
@@ -93,8 +173,9 @@ class SimklService(
             }
         } else buildJsonObject { putJsonArray("movies") { add(buildJsonObject { put("ids", ids) }) } }
         runCatching {
-            http.post("$API/sync/history") {
-                headers(token)
+            http.post(url("/sync/history")) {
+                baseHeaders()
+                header("Authorization", "Bearer $token")
                 setBody(TextContent(payload.toString(), ContentType.Application.Json))
             }
         }
@@ -117,14 +198,10 @@ class SimklService(
         ) else mapOf("movie" to buildJsonObject { put("ids", ids); put("title", media.title) })
     }
 
-    private fun io.ktor.client.request.HttpRequestBuilder.headers(token: String) {
-        header("simkl-api-key", clientId)
-        header("Authorization", "Bearer $token")
-    }
-
     private companion object {
         const val API = "https://api.simkl.com"
-        const val KEY = "simkl.token"
+        // V2 tokens; an old V1 PIN token lives under "simkl.token" and is ignored.
+        const val KEY = "simkl.token.v2"
     }
 }
 
