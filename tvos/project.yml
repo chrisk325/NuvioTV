@@ -60,6 +60,8 @@ targets:
         # Kotlin/Native only builds arm64 simulator slices (Apple silicon).
         "EXCLUDED_ARCHS[sdk=appletvsimulator*]": x86_64
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # Layered tvOS icon + top shelf images (Assets.xcassets brand assets).
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
     dependencies:
       - framework: ../shared/build/XCFrameworks/release/NuvioShared.xcframework
         embed: true
