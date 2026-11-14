@@ -70,6 +70,9 @@ struct DetailView: View {
             }
         }
         .onExitCommand { dismiss() }
+        // Full-screen details: the tab bar (Home / Search / … / Settings) is hidden here and
+        // comes back on Menu.
+        .toolbar(.hidden, for: .tabBar)
         .task(id: preview.id) { await load() }
         .fullScreenCover(item: $trailer) { request in
             PlayerContainer(request: request).environmentObject(app)
@@ -147,12 +150,6 @@ struct DetailView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 40) {
                 hero(meta)
-                    // Up from the Play row lands on this strip and goes on to the tab bar.
-                    .overlay(alignment: .top) {
-                        TabBarFocusGuide()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 40)
-                    }
                 if hasEpisodes(meta) {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus)
                 }
