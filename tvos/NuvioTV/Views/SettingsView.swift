@@ -333,10 +333,11 @@ private struct HomeSettingsPane: View {
                     Text("Grid").tag(AppSettings.companion.LAYOUT_GRID)
                 }
                 Toggle("Hero carousel (Classic / Grid)", isOn: s.bind({ $0.showHero }, { $0.showHero = $1; app.objectWillChange.send() }))
+                Toggle("Landscape posters (Modern)", isOn: s.bind({ $0.modernLandscapePosters }, { $0.modernLandscapePosters = $1; app.objectWillChange.send() }))
             } header: {
                 Text("Layout")
             } footer: {
-                Text("Modern: artwork follows focus with landscape rows. Classic: hero carousel and poster rows. Grid: every catalog as a poster grid.")
+                Text("Modern: artwork follows focus over the add-on's posters (or landscape art when Landscape posters is on). Classic: hero carousel and poster rows. Grid: every catalog as a poster grid.")
             }
 
             Section("Rows") {

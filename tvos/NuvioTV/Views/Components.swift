@@ -1,19 +1,88 @@
 import SwiftUI
+import UIKit
 import NuvioShared
 
+/// Artwork loaded through [ImageLoader]. Unlike AsyncImage it keeps a memory cache, so cards
+/// recycled by lazy rows don't come back blank, and retries a load cancelled mid-flight.
 struct RemoteImage: View {
     let url: String?
     var contentMode: ContentMode = .fill
+    @State private var image: UIImage?
+    @State private var loadedUrl: String?
 
     var body: some View {
-        AsyncImage(url: url.flatMap(URL.init(string:))) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().aspectRatio(contentMode: contentMode)
-            default:
-                Rectangle().fill(Color.white.opacity(0.08))
+        ZStack {
+            Rectangle().fill(Color.white.opacity(0.08))
+            if let image, loadedUrl == url {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
             }
         }
+        .task(id: url) {
+            guard let url else { image = nil; loadedUrl = nil; return }
+            if let cached = ImageLoader.shared.cached(url) {
+                image = cached; loadedUrl = url
+                return
+            }
+            if let loaded = await ImageLoader.shared.load(url), !Task.isCancelled {
+                image = loaded; loadedUrl = url
+            }
+        }
+    }
+}
+
+/// Shared poster/backdrop loader: in-memory + on-disk cache, a browser-like User-Agent (some
+/// add-on image hosts reject the default one) and tolerant URL parsing.
+final class ImageLoader: @unchecked Sendable {
+    static let shared = ImageLoader()
+
+    private let memory = NSCache<NSString, UIImage>()
+    private let session: URLSession
+
+    private init() {
+        memory.totalCostLimit = 200 * 1024 * 1024
+        let config = URLSessionConfiguration.default
+        config.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 300 * 1024 * 1024)
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.timeoutIntervalForRequest = 30
+        config.httpAdditionalHeaders = [
+            "User-Agent": "Mozilla/5.0 (AppleTV; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5",
+        ]
+        session = URLSession(configuration: config)
+    }
+
+    func cached(_ url: String) -> UIImage? { memory.object(forKey: url as NSString) }
+
+    func load(_ raw: String) async -> UIImage? {
+        guard let url = Self.parse(raw) else { return nil }
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await session.data(from: url)
+                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+                guard let decoded = UIImage(data: data) else { return nil }
+                let image = await decoded.byPreparingForDisplay() ?? decoded
+                memory.setObject(image, forKey: raw as NSString, cost: data.count)
+                return image
+            } catch {
+                // A recycled card cancels its task; only retry genuine network hiccups.
+                if Task.isCancelled || attempt == 1 { return nil }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+        return nil
+    }
+
+    /// Accepts protocol-relative ("//host/x.jpg") and unencoded URLs (spaces, "|", unicode).
+    static func parse(_ raw: String) -> URL? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if s.hasPrefix("//") { s = "https:" + s }
+        if let url = URL(string: s), url.scheme != nil, url.host != nil { return url }
+        if let encoded = s.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "#%"))),
+           let url = URL(string: encoded), url.scheme != nil { return url }
+        return nil
     }
 }
 
@@ -157,7 +226,13 @@ struct PosterCard: View {
     }
 }
 
-/// 16:9 backdrop card with the title on it (Modern layout rows).
+extension MetaPreview {
+    /// Artwork for 16:9 cards, in Android ContentCard's order: the add-on's landscape poster,
+    /// then its background, then its poster.
+    var landscapeArtwork: String? { landscapePoster ?? background ?? poster }
+}
+
+/// 16:9 card with the title on it (Modern layout rows with landscape posters on).
 struct LandscapeCard: View {
     @EnvironmentObject private var app: AppModel
     let item: MetaPreview
@@ -167,7 +242,7 @@ struct LandscapeCard: View {
     var body: some View {
         NavigationLink(value: Route.detail(item)) {
             ZStack(alignment: .bottomLeading) {
-                RemoteImage(url: item.backdropUrl ?? item.poster)
+                RemoteImage(url: item.landscapeArtwork)
                 LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
                 if let logo = item.logo {
                     RemoteImage(url: logo, contentMode: .fit)

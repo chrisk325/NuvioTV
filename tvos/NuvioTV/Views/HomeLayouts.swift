@@ -242,7 +242,8 @@ private struct GridSection: View {
 
 // MARK: - Modern
 
-/// Large hero that follows focus, with landscape rows below (Android ModernHomeContent).
+/// Large hero that follows focus, with poster rows below (landscape cards when enabled in
+/// settings, like Android ModernHomeContent's modernLandscapePostersEnabled).
 struct ModernHomeView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var feed: HomeFeed
@@ -277,7 +278,7 @@ struct ModernHomeView: View {
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                         ForEach(slots, id: \.key) { slot in
-                            CatalogRowView(slot: slot, landscape: true, onFocus: setFocus)
+                            CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus)
                         }
                     }
                     .padding(.bottom, 60)
