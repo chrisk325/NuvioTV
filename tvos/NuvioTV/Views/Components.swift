@@ -311,13 +311,19 @@ struct MetaRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
+            // "See all" sits right after the catalog name, not at the far edge.
+            HStack(alignment: .center, spacing: 24) {
                 Text(title).font(.headline)
-                Spacer()
                 if let seeAll {
-                    NavigationLink("See all", value: seeAll)
-                        .font(.caption)
+                    NavigationLink(value: seeAll) {
+                        HStack(spacing: 6) {
+                            Text("See all")
+                            Image(systemName: "chevron.right")
+                        }
+                    }
+                    .buttonStyle(SeeAllButtonStyle())
                 }
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 60)
 
@@ -341,6 +347,29 @@ struct MetaRowView: View {
             }
         }
         .focusSection()
+    }
+}
+
+/// Small pill for "See all" next to a row title: white when focused.
+struct SeeAllButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Pill(configuration: configuration)
+    }
+
+    private struct Pill: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isFocused ? Color.black : Color.white.opacity(0.85))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(isFocused ? Color.white : Color.white.opacity(0.14)))
+                .scaleEffect(configuration.isPressed ? 0.95 : (isFocused ? 1.08 : 1))
+                .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
     }
 }
 
