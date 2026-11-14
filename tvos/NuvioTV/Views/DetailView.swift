@@ -34,6 +34,7 @@ extension View {
 
 struct DetailView: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
     let preview: MetaPreview
 
     @State private var meta: Meta?
@@ -50,14 +51,24 @@ struct DetailView: View {
             if let meta {
                 content(meta)
             } else if let error {
-                MessageView(title: "Couldn't load details", message: error)
+                // A focusable button keeps focus out of the tab bar, so Menu goes back.
+                VStack(spacing: 30) {
+                    MessageView(title: "Couldn't load details", message: error)
+                        .frame(maxHeight: 500)
+                    Button("Back") { dismiss() }
+                }
             } else {
                 ZStack {
                     FullScreenBackdrop(url: preview.backdropUrl, opacity: 0.3)
-                    LoadingView()
+                    VStack(spacing: 30) {
+                        LoadingView()
+                            .frame(maxHeight: 300)
+                        Button("Cancel") { dismiss() }
+                    }
                 }
             }
         }
+        .onExitCommand { dismiss() }
         .task(id: preview.id) { await load() }
         .fullScreenCover(item: $trailer) { request in
             PlayerContainer(request: request).environmentObject(app)

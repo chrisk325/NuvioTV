@@ -1,9 +1,13 @@
 import SwiftUI
 import NuvioShared
 
+private enum StreamsFocus: Hashable { case stateAction }
+
 struct StreamsView: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
     let target: StreamTarget
+    @FocusState private var focus: StreamsFocus?
 
     @State private var update: StreamsUpdate?
     @State private var subscription: CoreSubscription?
@@ -30,15 +34,36 @@ struct StreamsView: View {
                     if let update, !update.groups.isEmpty {
                         list(update)
                     } else if let update, update.isComplete {
-                        MessageView(
-                            title: "No streams found",
-                            message: update.failedAddons.isEmpty
-                                ? "None of your add-ons returned streams for this title."
-                                : "Failed: \(update.failedAddons.joined(separator: ", "))",
-                            systemImage: "play.slash"
-                        )
+                        // Always keep something focusable here: with nothing focused, focus falls
+                        // back to the tab bar and Menu exits the app instead of going back.
+                        VStack(spacing: 30) {
+                            MessageView(
+                                title: "No streams found",
+                                message: update.failedAddons.isEmpty
+                                    ? "None of your add-ons returned streams for this title."
+                                    : "Failed: \(update.failedAddons.joined(separator: ", "))",
+                                systemImage: "play.slash"
+                            )
+                            .frame(maxHeight: 420)
+                            HStack(spacing: 30) {
+                                Button {
+                                    retry()
+                                } label: {
+                                    Label("Try again", systemImage: "arrow.clockwise")
+                                }
+                                .focused($focus, equals: .stateAction)
+                                Button("Back") { dismiss() }
+                            }
+                        }
+                        .onAppear { focus = .stateAction }
                     } else {
-                        LoadingView(label: "Finding streams…")
+                        VStack(spacing: 30) {
+                            LoadingView(label: "Finding streams…")
+                                .frame(maxHeight: 300)
+                            Button("Cancel") { dismiss() }
+                                .focused($focus, equals: .stateAction)
+                        }
+                        .onAppear { focus = .stateAction }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -46,6 +71,8 @@ struct StreamsView: View {
             .padding(.horizontal, 80)
         }
         .onAppear(perform: start)
+        // Menu always goes back to the details page.
+        .onExitCommand { dismiss() }
         .onDisappear {
             subscription?.cancel()
             subscription = nil
@@ -79,6 +106,14 @@ struct StreamsView: View {
         } message: { stream in
             Text(unplayableReason(stream))
         }
+    }
+
+    private func retry() {
+        subscription?.cancel()
+        subscription = nil
+        update = nil
+        autoPlayed = false
+        start()
     }
 
     private func start() {
