@@ -312,6 +312,40 @@ class NuvioCloud(
         })
     }
 
+    /** Many episodes of one show (season, episode) as watched, in one call. */
+    @Throws(Exception::class)
+    suspend fun pushWatchedEpisodes(contentId: String, contentType: String, title: String, episodes: List<Pair<Int, Int>>) {
+        if (episodes.isEmpty()) return
+        val now = currentTimeMillis()
+        rpc("sync_push_watched_items", buildJsonObject {
+            put("p_items", buildJsonArray {
+                episodes.forEach { (season, episode) ->
+                    add(buildJsonObject {
+                        put("content_id", contentId); put("content_type", contentType); put("title", title)
+                        put("season", season); put("episode", episode); put("watched_at", now)
+                    })
+                }
+            })
+            put("p_profile_id", profileId)
+            put("p_origin_client_id", clientId)
+        })
+    }
+
+    /** Removes watched entries: (season, episode) pairs, or the item itself when [episodes] is empty. */
+    @Throws(Exception::class)
+    suspend fun deleteWatched(contentId: String, episodes: List<Pair<Int, Int>>) {
+        rpc("sync_delete_watched_items", buildJsonObject {
+            put("p_profile_id", profileId)
+            put("p_keys", buildJsonArray {
+                if (episodes.isEmpty()) add(buildJsonObject { put("content_id", contentId) })
+                episodes.forEach { (season, episode) ->
+                    add(buildJsonObject { put("content_id", contentId); put("season", season); put("episode", episode) })
+                }
+            })
+            put("p_origin_client_id", clientId)
+        })
+    }
+
     // --- HTTP -------------------------------------------------------------------------------
 
     private suspend fun HttpRequestBuilder.headers(auth: Boolean = true) {

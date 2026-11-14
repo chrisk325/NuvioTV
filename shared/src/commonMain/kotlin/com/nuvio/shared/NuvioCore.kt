@@ -10,6 +10,7 @@ import com.nuvio.shared.model.SavedItem
 import com.nuvio.shared.model.Stream
 import com.nuvio.shared.model.StreamsUpdate
 import com.nuvio.shared.model.WatchProgress
+import com.nuvio.shared.model.isSeriesLikeType
 import com.nuvio.shared.repository.AddonRepository
 import com.nuvio.shared.repository.CatalogRepository
 import com.nuvio.shared.repository.CatalogSlot
@@ -563,9 +564,36 @@ class NuvioCore(
             }
         }
 
-    /** Movie-level watched state for a card (episodes are marked from the details page). */
+    /** Watched state for a card: the movie, or for a show whether it was marked fully watched. */
     fun isPreviewWatched(preview: MetaPreview): Boolean =
-        watched.isWatched("movie:${preview.imdbId ?: preview.id}")
+        if (isSeriesLikeType(preview.apiType)) watched.isWatched(seriesKey(preview.id))
+        else watched.isWatched("movie:${preview.imdbId ?: preview.id}")
+
+    private fun seriesKey(id: String) = "series:$id"
+
+    /**
+     * Card menu "Mark as watched" for a show (Android PosterOptionsController.toggleSeriesWatched):
+     * loads the episode list and marks / unmarks every aired episode (specials excluded), here and
+     * on Trakt, Simkl and the Nuvio account. Throws when the add-on returns no episodes.
+     */
+    @Throws(Exception::class)
+    suspend fun setSeriesWatched(preview: MetaPreview, isWatched: Boolean) {
+        val meta = meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl)
+        val episodes = meta.videos.filter { (it.season ?: 0) > 0 && it.episode != null }
+        if (episodes.isEmpty() && isWatched) error("No episodes found for ${preview.name}")
+        val keys = episodes.map { watchedKey(meta, it) }
+        if (isWatched) watched.addAll(keys + seriesKey(preview.id)) else watched.removeAll(keys + seriesKey(preview.id))
+        val numbers = episodes.map { it.season!! to it.episode!! }
+        val show = TrackedMedia.from(meta, null)
+        scope.launch {
+            runCatching { trakt.markEpisodesWatched(show, numbers, remove = !isWatched) }
+            runCatching { simkl.markEpisodesWatched(show, numbers, remove = !isWatched) }
+            if (cloud.isSignedIn) runCatching {
+                if (isWatched) cloud.pushWatchedEpisodes(meta.id, meta.apiType, meta.name, numbers)
+                else cloud.deleteWatched(meta.id, numbers)
+            }
+        }
+    }
 
     fun setPreviewWatched(preview: MetaPreview, isWatched: Boolean) {
         watched.mark("movie:${preview.imdbId ?: preview.id}", isWatched)

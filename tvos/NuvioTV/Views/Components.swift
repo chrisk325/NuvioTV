@@ -170,12 +170,21 @@ struct ItemContextMenu: View {
         } label: {
             Label(inLibrary ? "Remove from Library" : "Add to Library", systemImage: inLibrary ? "bookmark.slash" : "bookmark")
         }
+        let watched = app.core.isPreviewWatched(preview: item)
         if item.apiType == "movie" {
-            let watched = app.core.isPreviewWatched(preview: item)
             Button {
                 app.core.setPreviewWatched(preview: item, isWatched: !watched)
             } label: {
                 Label(watched ? "Mark as unwatched" : "Mark as watched", systemImage: watched ? "eye.slash" : "eye")
+            }
+        } else {
+            // Shows: loads the episode list and marks every episode (Android toggleSeriesWatched).
+            Button {
+                Task { @MainActor in
+                    try? await app.core.setSeriesWatched(preview: item, isWatched: !watched)
+                }
+            } label: {
+                Label(watched ? "Mark show as unwatched" : "Mark show as watched", systemImage: watched ? "eye.slash" : "eye")
             }
         }
         if app.continueWatching.contains(where: { $0.contentId == item.id }) {

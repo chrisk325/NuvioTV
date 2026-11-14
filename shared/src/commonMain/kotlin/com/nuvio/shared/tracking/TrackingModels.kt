@@ -86,6 +86,11 @@ class WatchedRepository(private val store: KeyValueStore) {
         save(_watched.value + keys)
     }
 
+    fun removeAll(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        save(_watched.value - keys.toSet())
+    }
+
     private companion object { const val KEY = "watched_v1" }
 }
 

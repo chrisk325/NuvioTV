@@ -181,6 +181,35 @@ class SimklService(
         }
     }
 
+    /** Marks (or with [remove], unmarks) many episodes of one show in a single request. */
+    suspend fun markEpisodesWatched(show: TrackedMedia, episodes: List<Pair<Int, Int>>, remove: Boolean = false) {
+        if (episodes.isEmpty()) return
+        val ids = ids(show) ?: return
+        val payload = buildJsonObject {
+            putJsonArray("shows") {
+                add(buildJsonObject {
+                    put("ids", ids)
+                    putJsonArray("seasons") {
+                        episodes.groupBy({ it.first }, { it.second }).forEach { (season, numbers) ->
+                            add(buildJsonObject {
+                                put("number", season)
+                                putJsonArray("episodes") { numbers.distinct().forEach { add(buildJsonObject { put("number", it) }) } }
+                            })
+                        }
+                    }
+                })
+            }
+        }
+        val token = accessToken() ?: return
+        runCatching {
+            http.post(url(if (remove) "/sync/history/remove" else "/sync/history")) {
+                baseHeaders()
+                header("Authorization", "Bearer $token")
+                setBody(TextContent(payload.toString(), ContentType.Application.Json))
+            }
+        }
+    }
+
     private fun ids(media: TrackedMedia): JsonObject? {
         if (media.imdbId == null && media.tmdbId == null && media.kitsuId == null) return null
         return buildJsonObject {
