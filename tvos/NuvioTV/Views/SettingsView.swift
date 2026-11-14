@@ -195,6 +195,14 @@ private let languageOptions: [(String, String)] = [
     ("uk", "Ukrainian"), ("vi", "Vietnamese"), ("th", "Thai"), ("id", "Indonesian"), ("hr", "Croatian"),
 ]
 
+/// Default audio language: Android AudioLanguageOption (default / device / original) + languages.
+private let audioLanguageOptions: [(String, String)] =
+    [(TrackLanguages.fileDefault, "File default"), (TrackLanguages.device, "Apple TV language"),
+     (TrackLanguages.original, "Original language")] + languageOptions.dropFirst()
+
+private let fallbackAudioLanguageOptions: [(String, String)] =
+    [("", "None")] + languageOptions.dropFirst()
+
 private let colorOptions: [(String, String)] = [
     ("#FFFFFF", "White"), ("#FFFF00", "Yellow"), ("#00FFFF", "Cyan"), ("#00FF00", "Green"),
     ("#FF00FF", "Magenta"), ("#BBBBBB", "Light grey"),
@@ -230,13 +238,17 @@ private struct PlayerSettingsPane: View {
                 Text("Turn on Settings ▸ Video and Audio ▸ Match Content on the Apple TV to switch frame rate and dynamic range per title.")
             }
 
-            Section("Audio") {
-                ChoiceRow(title: "Preferred audio language", options: languageOptions,
+            Section {
+                ChoiceRow(title: "Default audio language", options: audioLanguageOptions,
                           selection: s.bind({ $0.preferredAudioLanguage }, { $0.preferredAudioLanguage = $1 }))
-                ChoiceRow(title: "Fallback audio language", options: languageOptions,
+                ChoiceRow(title: "Fallback audio language", options: fallbackAudioLanguageOptions,
                           selection: s.bind({ $0.secondaryAudioLanguage }, { $0.secondaryAudioLanguage = $1 }))
                 NumberRow(title: "Audio delay", unit: "ms", step: 50, range: -5000...5000,
                           value: s.bind({ Int($0.audioDelayMs) }, { $0.audioDelayMs = Int32($1) }))
+            } header: {
+                Text("Audio")
+            } footer: {
+                Text("The player starts on an audio track in the default language, else the fallback one, else the file's own default. Original language uses the title's original language from TMDB.")
             }
 
             Section("Controls & buffering") {

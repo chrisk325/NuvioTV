@@ -88,8 +88,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             hardwareDecoding: s.hardwareDecoding,
             hdrPassthrough: s.hdrPassthrough,
             cacheSeconds: Int(s.cacheSeconds),
-            audioLanguages: [s.preferredAudioLanguage, s.secondaryAudioLanguage].filter { !$0.isEmpty }.joined(separator: ","),
-            subtitleLanguages: [s.subtitleLanguage, s.secondarySubtitleLanguage].filter { !$0.isEmpty }.joined(separator: ","),
+            audioLanguages: TrackLanguages.mpvList(TrackLanguages.audio(
+                preferred: s.preferredAudioLanguage,
+                secondary: s.secondaryAudioLanguage,
+                originalLanguage: request.meta.language
+            )),
+            subtitleLanguages: TrackLanguages.mpvList(
+                [s.subtitleLanguage, s.secondarySubtitleLanguage].compactMap { TrackLanguages.normalize($0) }
+            ),
             subtitlesEnabled: s.subtitlesEnabled,
             useForcedSubtitles: s.useForcedSubtitles,
             subtitleScale: Double(s.subtitleSize) / 100.0,

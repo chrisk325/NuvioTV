@@ -61,12 +61,20 @@ final class AVPlayerModel: ObservableObject {
         let item = AVPlayerItem(asset: AVURLAsset(url: url, options: options))
         item.externalMetadata = [metadataItem(.commonIdentifierTitle, request.title)]
 
+        let audioLanguages = TrackLanguages.audio(
+            preferred: core.settings.preferredAudioLanguage,
+            secondary: core.settings.secondaryAudioLanguage,
+            originalLanguage: request.meta.language
+        )
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            let failed = item.status == .failed
+            let status = item.status
             let message = item.error?.localizedDescription
-            guard failed else { return }
             Task { @MainActor in
-                self?.errorMessage = message ?? "The stream couldn't be opened."
+                if status == .readyToPlay {
+                    await Self.selectAudio(in: item, languages: audioLanguages)
+                } else if status == .failed {
+                    self?.errorMessage = message ?? "The stream couldn't be opened."
+                }
             }
         }
         endObserver = NotificationCenter.default.addObserver(
@@ -91,6 +99,20 @@ final class AVPlayerModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.saveProgress() }
+        }
+    }
+
+    /// Picks the first audio track in the preferred languages (default audio language setting).
+    private static func selectAudio(in item: AVPlayerItem, languages: [String]) async {
+        guard !languages.isEmpty,
+              let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+        for code in languages {
+            if let option = group.options.first(where: {
+                TrackLanguages.normalize($0.extendedLanguageTag ?? $0.locale?.identifier) == code
+            }) {
+                item.select(option, in: group)
+                return
+            }
         }
     }
 
