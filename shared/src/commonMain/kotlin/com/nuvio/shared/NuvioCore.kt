@@ -249,6 +249,10 @@ class NuvioCore(
     /** Add-on meta; "tmdb:" ids (TMDB recommendations / person credits) fall back to their IMDb id. */
     @Throws(Exception::class)
     suspend fun meta(type: String, id: String, sourceAddonBaseUrl: String?): Meta {
+        // Jellyfin / Emby titles without an IMDb id: only the server knows them.
+        if (mediaServers.isNativeId(id)) {
+            return mediaServers.meta(type, id) ?: throw IllegalStateException("This title is no longer on your media server")
+        }
         try {
             val meta = metaRepository.getMeta(addonRepository.currentAddons, type, id, sourceAddonBaseUrl)
             return fillFromMediaServer(meta, type)
@@ -256,9 +260,9 @@ class NuvioCore(
             throw e
         } catch (e: Exception) {
             // Titles from a Jellyfin / Emby server that no add-on describes: use the server's data.
-            val imdbId = id.substringBefore(':').takeIf { it.startsWith("tt") }
-            if (imdbId != null && mediaServers.servers.isNotEmpty()) {
-                runCatching { mediaServers.meta(type, imdbId) }.getOrNull()?.let { return it }
+            val serverId = id.substringBefore(':').takeIf { it.startsWith("tt") } ?: id.takeIf { it.startsWith("tmdb:") }
+            if (serverId != null && mediaServers.servers.isNotEmpty()) {
+                runCatching { mediaServers.meta(type, serverId) }.getOrNull()?.let { return it }
             }
             val tmdbId = id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(':')?.toIntOrNull()
             val imdb = tmdbId?.let { tmdb.imdbIdFor(it, type != "movie") } ?: throw e

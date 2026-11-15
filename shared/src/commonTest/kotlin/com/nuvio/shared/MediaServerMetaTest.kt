@@ -51,6 +51,62 @@ class MediaServerMetaTest {
     }
 }
 
+class MediaServerLookupTest {
+    private val json = headersOf("Content-Type", "application/json")
+    private fun store() = InMemoryStore().apply {
+        putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"Home","address":"http://jf","userId":"u1","token":"tok"}]""")
+    }
+
+    @Test
+    fun jellyfinIgnoringTheProviderFilterStillFindsTheTitleThroughTheIndex() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            val params = request.url.parameters
+            when {
+                request.url.encodedPath == "/Users/u1/Items" && params["AnyProviderIdEquals"] != null ->
+                    // Filter ignored: unrelated items come back.
+                    respond("""{"Items":[{"Id":"x","Type":"Movie","ProviderIds":{"Imdb":"tt999"}}]}""", HttpStatusCode.OK, json)
+                request.url.encodedPath == "/Users/u1/Items" && params["EnableImageTypes"] == "None" ->
+                    respond(
+                        """{"Items":[{"Id":"x","Type":"Movie","ProviderIds":{"Imdb":"tt999"}},
+                                     {"Id":"m1","Type":"Movie","ProviderIds":{"Imdb":"tt555","Tmdb":"42"}}]}""",
+                        HttpStatusCode.OK, json
+                    )
+                request.url.encodedPath == "/Users/u1/Items/m1" ->
+                    respond("""{"Id":"m1","Name":"Superman","Type":"Movie","Overview":"Plot","ProviderIds":{"Imdb":"tt555"},
+                        "MediaSources":[{"Id":"src","Container":"mkv","Size":2000000000}]}""", HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, store())
+        assertEquals("Superman", service.meta("movie", "tt555")?.name)
+        assertEquals("Superman", service.meta("movie", "tmdb:42")?.name)
+        val streams = service.streams("movie", "tt555")
+        assertTrue(streams.single().streams.single().url!!.contains("/Videos/m1/stream"))
+    }
+
+    @Test
+    fun titlesWithoutImdbIdUseServerNativeIds() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items" -> respond(
+                    """{"Items":[{"Id":"m9","Name":"Home Video","Type":"Movie","ProviderIds":{}}]}""", HttpStatusCode.OK, json
+                )
+                "/Users/u1/Items/m9" -> respond(
+                    """{"Id":"m9","Name":"Home Video","Type":"Movie","MediaSources":[{"Id":"s9","Container":"mp4"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, store())
+        val preview = service.search(service.servers.single(), "home", 10).single()
+        assertEquals("mediaserver:srv:m9", preview.id)
+        val meta = assertNotNull(service.meta("movie", preview.id))
+        assertEquals("Home Video", meta.name)
+        assertTrue(service.streams("movie", meta.defaultVideoId).single().streams.single().url!!.contains("/Videos/m9/stream"))
+    }
+}
+
 class MergeMetaTest {
     @Test
     fun serverFillsOnlyTheGaps() {

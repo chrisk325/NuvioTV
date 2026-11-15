@@ -32,6 +32,8 @@ import io.ktor.http.ContentType as HttpContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -146,79 +148,150 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 "&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
 
-    /**
-     * Details built from the server's own metadata, for titles no add-on describes (e.g. when
-     * Jellyfin is the only source): title, synopsis, artwork, rating, genres, cast and, for
-     * shows, every episode as "tt…:season:episode" so add-on and server streams resolve.
-     * Null when no signed-in server has the title.
-     */
-    @Throws(Exception::class)
-    suspend fun meta(type: String, imdbId: String): Meta? {
-        val isShow = type != "movie"
-        for (server in servers) {
-            val found = runCatching {
+    // --- Finding titles ---------------------------------------------------------------------
+    // Server titles are matched to add-on titles by IMDb (or TMDB) id. Emby filters by
+    // AnyProviderIdEquals; newer Jellyfin ignores that filter, so each server also gets a cached
+    // index of its movies and shows by provider id (rebuilt every 15 minutes).
+
+    private val indexLock = Mutex()
+    private val providerIndex = mutableMapOf<String, Pair<Long, Map<String, String>>>()
+
+    private fun indexKey(isShow: Boolean, provider: String, id: String) =
+        "${if (isShow) "series" else "movie"}|${provider.lowercase()}|${id.lowercase()}"
+
+    private suspend fun index(server: MediaServer): Map<String, String> = indexLock.withLock {
+        providerIndex[server.id]?.let { (at, map) -> if (currentTimeMillis() - at < 15 * 60_000L) return@withLock map }
+        val map = mutableMapOf<String, String>()
+        get(
+            server,
+            "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds" +
+                "&EnableImageTypes=None&EnableUserData=false"
+        )?.objects("Items")?.forEach { item ->
+            val id = item.nonBlank("Id") ?: return@forEach
+            val isShow = item.str("Type") == "Series"
+            item.obj("ProviderIds")?.forEach { (provider, value) ->
+                val text = (value as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() } ?: return@forEach
+                map.putIfAbsentCompat(indexKey(isShow, provider, text), id)
+            }
+        }
+        providerIndex[server.id] = currentTimeMillis() to map
+        map
+    }
+
+    private fun MutableMap<String, String>.putIfAbsentCompat(key: String, value: String) {
+        if (key !in this) this[key] = value
+    }
+
+    /** The server's item id for a title, by IMDb id ("tt…") or TMDB id ("tmdb:123" / "123"). */
+    private suspend fun findItemId(server: MediaServer, imdbId: String?, tmdbId: String?, isShow: Boolean): String? {
+        val itemType = if (isShow) "Series" else "Movie"
+        if (imdbId != null) {
+            runCatching {
                 get(
                     server,
-                    "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=${if (isShow) "Series" else "Movie"}" +
+                    "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=$itemType" +
                         "&AnyProviderIdEquals=${encodeUrlComponent("imdb.$imdbId")}&Fields=ProviderIds&Limit=5"
                 )?.objects("Items")?.firstOrNull { o ->
                     o.obj("ProviderIds")?.let { (it.str("Imdb") ?: it.str("IMDB")).equals(imdbId, ignoreCase = true) } == true
-                }
-            }.getOrNull() ?: continue
-            val itemId = found.str("Id") ?: continue
-            val item = get(server, "/Users/${server.userId}/Items/$itemId") ?: continue
-            val image = { kind: String, size: String -> "${server.address}/Items/$itemId/Images/$kind?$size&api_key=${server.token}" }
-            val people = item.objects("People")
-            val runtimeMinutes = item.long("RunTimeTicks")?.let { (it / 600_000_000L).toInt() }?.takeIf { it > 0 }
-            val videos = if (isShow) episodes(server, itemId, imdbId) else emptyList()
-            return Meta(
-                id = imdbId,
-                type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
-                name = item.str("Name") ?: imdbId,
-                poster = image("Primary", "maxHeight=900"),
-                posterShape = PosterShape.POSTER,
-                background = if ((item["BackdropImageTags"] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true)
-                    image("Backdrop", "maxWidth=1920") else null,
-                logo = if (item.obj("ImageTags")?.str("Logo") != null) image("Logo", "maxWidth=800") else null,
-                description = item.str("Overview"),
-                releaseInfo = item.int("ProductionYear")?.toString(),
-                imdbRating = item.str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
-                genres = (item["Genres"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty(),
-                runtime = runtimeMinutes?.let { "$it min" },
-                director = people.filter { it.str("Type") == "Director" }.mapNotNull { it.str("Name") },
-                writer = people.filter { it.str("Type") == "Writer" }.mapNotNull { it.str("Name") },
-                cast = people.filter { it.str("Type") == "Actor" }.mapNotNull { it.str("Name") },
-                castMembers = people.filter { it.str("Type") == "Actor" }.take(30).mapNotNull { p ->
-                    val name = p.str("Name") ?: return@mapNotNull null
-                    val photo = p.str("Id")?.takeIf { p.str("PrimaryImageTag") != null }
-                        ?.let { "${server.address}/Items/$it/Images/Primary?maxHeight=400&api_key=${server.token}" }
-                    MetaCastMember(name = name, character = p.str("Role"), photo = photo)
-                },
-                videos = videos,
-                productionCompanies = item.objects("Studios").mapNotNull { it.str("Name") },
-                ageRating = item.str("OfficialRating"),
-                country = null,
-                awards = null,
-                language = null,
-                links = emptyList(),
-                imdbId = imdbId,
-                released = item.str("PremiereDate")
-            )
+                }?.str("Id")
+            }.getOrNull()?.let { return it }
+        }
+        val index = runCatching { index(server) }.getOrDefault(emptyMap())
+        imdbId?.let { index[indexKey(isShow, "imdb", it)] }?.let { return it }
+        tmdbId?.let { index[indexKey(isShow, "tmdb", it)] }?.let { return it }
+        return null
+    }
+
+    /** Server-native ids for titles without an IMDb id: "mediaserver:<serverId>:<itemId>". */
+    private fun nativeId(server: MediaServer, itemId: String) = "$NATIVE:${server.id}:$itemId"
+
+    private fun parseNative(id: String): Pair<MediaServer, String>? {
+        val parts = id.split(':')
+        if (parts.size < 3 || parts[0] != NATIVE) return null
+        val server = servers.firstOrNull { it.id == parts[1] } ?: return null
+        return server to parts[2]
+    }
+
+    fun isNativeId(id: String): Boolean = id.startsWith("$NATIVE:")
+
+    // --- Details ----------------------------------------------------------------------------
+
+    /**
+     * Details built from the server's own metadata, for titles no add-on describes (or describes
+     * only barely): title, synopsis, artwork, rating, genres, cast and, for shows, every episode.
+     * [id] is an IMDb id, "tmdb:<id>", or a server-native "mediaserver:…" id. Null when no
+     * signed-in server has the title.
+     */
+    @Throws(Exception::class)
+    suspend fun meta(type: String, id: String): Meta? {
+        val isShow = type != "movie"
+        parseNative(id)?.let { (server, itemId) -> return itemMeta(server, itemId, isShow) }
+        val imdb = id.substringBefore(':').takeIf { it.startsWith("tt") }
+        val tmdb = id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)
+        if (imdb == null && tmdb == null) return null
+        for (server in servers) {
+            val itemId = findItemId(server, imdb, tmdb, isShow) ?: continue
+            itemMeta(server, itemId, isShow, knownImdb = imdb)?.let { return it }
         }
         return null
     }
 
-    private suspend fun episodes(server: MediaServer, seriesId: String, imdbId: String): List<Video> =
+    private suspend fun itemMeta(server: MediaServer, itemId: String, isShowHint: Boolean, knownImdb: String? = null): Meta? {
+        val item = get(server, "/Users/${server.userId}/Items/$itemId") ?: return null
+        val isShow = item.str("Type")?.let { it == "Series" } ?: isShowHint
+        val imdb = item.obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } ?: knownImdb
+        val metaId = imdb ?: nativeId(server, itemId)
+        val image = { kind: String, size: String -> "${server.address}/Items/$itemId/Images/$kind?$size&api_key=${server.token}" }
+        val people = item.objects("People")
+        val runtimeMinutes = item.long("RunTimeTicks")?.let { (it / 600_000_000L).toInt() }?.takeIf { it > 0 }
+        return Meta(
+            id = metaId,
+            type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
+            name = item.str("Name") ?: metaId,
+            poster = image("Primary", "maxHeight=900"),
+            posterShape = PosterShape.POSTER,
+            background = if ((item["BackdropImageTags"] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true)
+                image("Backdrop", "maxWidth=1920") else null,
+            logo = if (item.obj("ImageTags")?.str("Logo") != null) image("Logo", "maxWidth=800") else null,
+            description = item.str("Overview"),
+            releaseInfo = item.int("ProductionYear")?.toString(),
+            imdbRating = item.str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
+            genres = (item["Genres"] as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty(),
+            runtime = runtimeMinutes?.let { "$it min" },
+            director = people.filter { it.str("Type") == "Director" }.mapNotNull { it.str("Name") },
+            writer = people.filter { it.str("Type") == "Writer" }.mapNotNull { it.str("Name") },
+            cast = people.filter { it.str("Type") == "Actor" }.mapNotNull { it.str("Name") },
+            castMembers = people.filter { it.str("Type") == "Actor" }.take(30).mapNotNull { p ->
+                val name = p.str("Name") ?: return@mapNotNull null
+                val photo = p.str("Id")?.takeIf { p.str("PrimaryImageTag") != null }
+                    ?.let { "${server.address}/Items/$it/Images/Primary?maxHeight=400&api_key=${server.token}" }
+                MetaCastMember(name = name, character = p.str("Role"), photo = photo)
+            },
+            videos = if (isShow) episodes(server, itemId, imdb) else emptyList(),
+            productionCompanies = item.objects("Studios").mapNotNull { it.str("Name") },
+            ageRating = item.str("OfficialRating"),
+            country = null,
+            awards = null,
+            language = null,
+            links = emptyList(),
+            imdbId = imdb,
+            released = item.str("PremiereDate")
+        )
+    }
+
+    /** Episodes as "tt…:season:episode" (or server-native ids when the show has no IMDb id). */
+    private suspend fun episodes(server: MediaServer, seriesId: String, imdbId: String?): List<Video> =
         get(server, "/Shows/$seriesId/Episodes?UserId=${server.userId}&Fields=Overview,PremiereDate")
             ?.objects("Items").orEmpty().mapNotNull { ep ->
                 val season = ep.int("ParentIndexNumber") ?: return@mapNotNull null
                 val number = ep.int("IndexNumber") ?: return@mapNotNull null
-                val epId = ep.str("Id")
+                val epId = ep.str("Id") ?: return@mapNotNull null
                 Video(
-                    id = "$imdbId:$season:$number",
+                    id = imdbId?.let { "$it:$season:$number" } ?: nativeId(server, epId),
                     title = ep.str("Name") ?: "Episode $number",
                     released = ep.str("PremiereDate"),
-                    thumbnail = epId?.let { "${server.address}/Items/$it/Images/Primary?maxWidth=640&api_key=${server.token}" },
+                    thumbnail = "${server.address}/Items/$epId/Images/Primary?maxWidth=640&api_key=${server.token}",
                     season = season,
                     episode = number,
                     overview = ep.str("Overview"),
@@ -226,24 +299,23 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 )
             }
 
+    // --- Favourites -------------------------------------------------------------------------
+
     /**
-     * Marks (or unmarks) the title as a favourite on every signed-in server that has it, found by
-     * IMDb id (POST / DELETE /Users/{id}/FavoriteItems/{itemId}). Servers without it are skipped.
-     * Returns how many servers were updated.
+     * Marks (or unmarks) the title as a favourite on every signed-in server that has it
+     * (POST / DELETE /Users/{id}/FavoriteItems/{itemId}). [id] is an IMDb id or a server-native
+     * id. Returns how many servers were updated.
      */
     @Throws(Exception::class)
-    suspend fun setFavorite(imdbId: String, isShow: Boolean, favorite: Boolean): Int {
+    suspend fun setFavorite(id: String, isShow: Boolean, favorite: Boolean): Int {
+        val targets: List<Pair<MediaServer, String>> = parseNative(id)?.let { listOf(it) }
+            ?: servers.mapNotNull { server ->
+                runCatching { findItemId(server, id.substringBefore(':').takeIf { it.startsWith("tt") }, null, isShow) }
+                    .getOrNull()?.let { server to it }
+            }
         var updated = 0
-        for (server in servers) {
+        for ((server, itemId) in targets) {
             try {
-                val itemType = if (isShow) "Series" else "Movie"
-                val itemId = get(
-                    server,
-                    "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=$itemType" +
-                        "&AnyProviderIdEquals=${encodeUrlComponent("imdb.$imdbId")}&Fields=ProviderIds&Limit=5"
-                )?.objects("Items")?.firstOrNull { o ->
-                    o.obj("ProviderIds")?.let { (it.str("Imdb") ?: it.str("IMDB")).equals(imdbId, ignoreCase = true) } == true
-                }?.str("Id") ?: continue
                 val url = "${server.address}/Users/${server.userId}/FavoriteItems/$itemId"
                 val response = if (favorite) http.post(url) { auth(server) } else http.delete(url) { auth(server) }
                 if (response.status.isSuccess()) updated++
@@ -256,14 +328,16 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         return updated
     }
 
+    /** Server rows / favourites / search: IMDb id when the server has one, else a native id. */
     private fun JsonObject.toPreview(server: MediaServer): MetaPreview? {
-        val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } ?: return null
-        val isShow = str("Type") == "Series"
         val itemId = nonBlank("Id") ?: return null
+        val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
+        val isShow = str("Type") == "Series"
+        val id = imdb ?: nativeId(server, itemId)
         return MetaPreview(
-            id = imdb,
+            id = id,
             type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
-            name = str("Name") ?: imdb,
+            name = str("Name") ?: id,
             poster = "${server.address}/Items/$itemId/Images/Primary?maxHeight=600&api_key=${server.token}",
             posterShape = PosterShape.POSTER,
             background = "${server.address}/Items/$itemId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
@@ -276,49 +350,60 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         )
     }
 
+    // --- Streams ----------------------------------------------------------------------------
+
     /**
      * Copies of a title on the user's servers, as streams (direct play; mpv plays every container).
-     * [videoId] is "tt…" for movies or "tt…:season:episode".
+     * [videoId] is "tt…" / "tt…:season:episode", "tmdb:…" or a server-native "mediaserver:…" id
+     * (a movie or an episode item).
      */
     suspend fun streams(type: String, videoId: String): List<AddonStreams> {
+        parseNative(videoId)?.let { (server, itemId) ->
+            return listOfNotNull(runCatching { itemStreams(server, itemId) }.getOrNull())
+        }
         val parts = videoId.split(':')
-        val imdb = parts.firstOrNull()?.takeIf { it.startsWith("tt") } ?: return emptyList()
-        val season = parts.getOrNull(1)?.toIntOrNull()
-        val episode = parts.getOrNull(2)?.toIntOrNull()
+        val imdb = parts.firstOrNull()?.takeIf { it.startsWith("tt") }
+        val tmdb = if (parts.firstOrNull() == "tmdb") parts.getOrNull(1) else null
+        if (imdb == null && tmdb == null) return emptyList()
+        val tail = if (imdb != null) parts.drop(1) else parts.drop(2)
+        val season = tail.getOrNull(0)?.toIntOrNull()
+        val episode = tail.getOrNull(1)?.toIntOrNull()
         return servers.mapNotNull { server ->
             try {
-                val itemType = if (season != null) "Series" else "Movie"
-                val item = get(server, "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=$itemType&AnyProviderIdEquals=${encodeUrlComponent("imdb.$imdb")}&Fields=ProviderIds,MediaSources&Limit=5")
-                    ?.objects("Items")?.firstOrNull { o ->
-                        o.obj("ProviderIds")?.let { (it.str("Imdb") ?: it.str("IMDB")).equals(imdb, ignoreCase = true) } == true
-                    } ?: return@mapNotNull null
-                val target = if (season != null && episode != null) {
-                    get(server, "/Shows/${item.nonBlank("Id")}/Episodes?UserId=${server.userId}&Season=$season&Fields=MediaSources")
-                        ?.objects("Items")?.firstOrNull { it.int("IndexNumber") == episode } ?: return@mapNotNull null
-                } else item
-                val itemId = target.nonBlank("Id") ?: return@mapNotNull null
-                val sources = target.objects("MediaSources").ifEmpty { listOf(JsonObject(mapOf())) }
-                val streams = sources.map { source ->
-                    val sourceId = source.nonBlank("Id") ?: itemId
-                    val size = source.long("Size")
-                    Stream(
-                        name = "${server.name}\n${source.str("Container")?.uppercase().orEmpty()}",
-                        title = source.str("Name") ?: target.str("Name"),
-                        description = listOfNotNull(source.str("Name"), size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null },
-                        url = "${server.address}/Videos/$itemId/stream?static=true&MediaSourceId=$sourceId&api_key=${server.token}",
-                        ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
-                        behaviorHints = StreamBehaviorHints(null, null, null, videoSize = size, filename = source.str("Path")?.substringAfterLast('/')),
-                        addonName = server.name,
-                        addonLogo = null
-                    )
-                }
-                AddonStreams(server.name, null, streams)
+                val itemId = findItemId(server, imdb, tmdb, isShow = season != null) ?: return@mapNotNull null
+                val targetId = if (season != null && episode != null) {
+                    get(server, "/Shows/$itemId/Episodes?UserId=${server.userId}&Season=$season")
+                        ?.objects("Items")?.firstOrNull { it.int("IndexNumber") == episode }?.nonBlank("Id")
+                        ?: return@mapNotNull null
+                } else itemId
+                itemStreams(server, targetId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 null
             }
         }
+    }
+
+    /** Every media source of one movie / episode item as a direct-play stream. */
+    private suspend fun itemStreams(server: MediaServer, itemId: String): AddonStreams? {
+        val target = get(server, "/Users/${server.userId}/Items/$itemId") ?: return null
+        val sources = target.objects("MediaSources").ifEmpty { listOf(JsonObject(mapOf())) }
+        val streams = sources.map { source ->
+            val sourceId = source.nonBlank("Id") ?: itemId
+            val size = source.long("Size")
+            Stream(
+                name = "${server.name}\n${source.str("Container")?.uppercase().orEmpty()}",
+                title = source.str("Name") ?: target.str("Name"),
+                description = listOfNotNull(source.str("Name"), size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null },
+                url = "${server.address}/Videos/$itemId/stream?static=true&MediaSourceId=$sourceId&api_key=${server.token}",
+                ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
+                behaviorHints = StreamBehaviorHints(null, null, null, videoSize = size, filename = source.str("Path")?.substringAfterLast('/')),
+                addonName = server.name,
+                addonLogo = null
+            )
+        }
+        return AddonStreams(server.name, null, streams)
     }
 
     private suspend fun get(server: MediaServer, path: String): JsonObject? {
@@ -334,5 +419,8 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
 
     private fun quote(s: String) = kotlinx.serialization.json.JsonPrimitive(s).toString()
 
-    private companion object { const val KEY = "mediaservers.v1" }
+    private companion object {
+        const val KEY = "mediaservers.v1"
+        const val NATIVE = "mediaserver"
+    }
 }
