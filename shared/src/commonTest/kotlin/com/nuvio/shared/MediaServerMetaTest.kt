@@ -50,3 +50,23 @@ class MediaServerMetaTest {
         assertEquals(45, meta.videos.first().runtimeMinutes)
     }
 }
+
+class MergeMetaTest {
+    @Test
+    fun serverFillsOnlyTheGaps() {
+        fun meta(name: String, description: String?, genres: List<String>, poster: String?) = com.nuvio.shared.model.Meta(
+            id = "tt1", type = com.nuvio.shared.model.ContentType.MOVIE, name = name, poster = poster,
+            posterShape = com.nuvio.shared.model.PosterShape.POSTER, background = null, logo = null,
+            description = description, releaseInfo = null, imdbRating = null, genres = genres, runtime = null,
+            director = emptyList(), cast = emptyList(), videos = emptyList(), country = null, awards = null,
+            language = null, links = emptyList()
+        )
+        val addon = meta("Superman", null, emptyList(), "addon-poster")
+        val server = meta("Superman (server)", "Plot", listOf("Action"), "server-poster")
+        val merged = com.nuvio.shared.mergeMeta(addon, server)
+        assertEquals("Superman", merged.name)
+        assertEquals("addon-poster", merged.poster)
+        assertEquals("Plot", merged.description)
+        assertEquals(listOf("Action"), merged.genres)
+    }
+}

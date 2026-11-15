@@ -250,7 +250,8 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun meta(type: String, id: String, sourceAddonBaseUrl: String?): Meta {
         try {
-            return metaRepository.getMeta(addonRepository.currentAddons, type, id, sourceAddonBaseUrl)
+            val meta = metaRepository.getMeta(addonRepository.currentAddons, type, id, sourceAddonBaseUrl)
+            return fillFromMediaServer(meta, type)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -263,6 +264,21 @@ class NuvioCore(
             val imdb = tmdbId?.let { tmdb.imdbIdFor(it, type != "movie") } ?: throw e
             return metaRepository.getMeta(addonRepository.currentAddons, type, imdb, null)
         }
+    }
+
+    /**
+     * Add-ons often return a bare entry for new titles (a name and a poster). When a Jellyfin /
+     * Emby server has the title, its metadata fills whatever the add-on left out; add-on data wins
+     * where present.
+     */
+    private suspend fun fillFromMediaServer(meta: Meta, type: String): Meta {
+        if (mediaServers.servers.isEmpty()) return meta
+        val sparse = meta.description.isNullOrBlank() || meta.background == null || meta.genres.isEmpty() ||
+            (meta.cast.isEmpty() && meta.castMembers.isEmpty()) || (meta.isSeriesLike && meta.videos.isEmpty())
+        if (!sparse) return meta
+        val imdb = (meta.imdbId ?: meta.id).substringBefore(':').takeIf { it.startsWith("tt") } ?: return meta
+        val server = runCatching { mediaServers.meta(type, imdb) }.getOrNull() ?: return meta
+        return mergeMeta(meta, server)
     }
 
     // --- TMDB / ratings ---------------------------------------------------------------------
@@ -998,3 +1014,24 @@ class NuvioCore(
     internal fun <T> observe(flow: Flow<T>, onChange: (T) -> Unit): CoreSubscription =
         JobCancellable(scope.launch { flow.collect { onChange(it) } })
 }
+
+/** [primary] (add-on) with its gaps filled from [fallback] (media server). */
+internal fun mergeMeta(primary: Meta, fallback: Meta): Meta = primary.copy(
+    poster = primary.poster ?: fallback.poster,
+    background = primary.background ?: fallback.background,
+    logo = primary.logo ?: fallback.logo,
+    description = primary.description?.takeIf { it.isNotBlank() } ?: fallback.description,
+    releaseInfo = primary.releaseInfo ?: fallback.releaseInfo,
+    imdbRating = primary.imdbRating ?: fallback.imdbRating,
+    genres = primary.genres.ifEmpty { fallback.genres },
+    runtime = primary.runtime ?: fallback.runtime,
+    director = primary.director.ifEmpty { fallback.director },
+    writer = primary.writer.ifEmpty { fallback.writer },
+    cast = primary.cast.ifEmpty { fallback.cast },
+    castMembers = primary.castMembers.ifEmpty { fallback.castMembers },
+    videos = primary.videos.ifEmpty { fallback.videos },
+    productionCompanies = primary.productionCompanies.ifEmpty { fallback.productionCompanies },
+    ageRating = primary.ageRating ?: fallback.ageRating,
+    imdbId = primary.imdbId ?: fallback.imdbId,
+    released = primary.released ?: fallback.released
+)
