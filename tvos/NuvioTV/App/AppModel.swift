@@ -192,7 +192,12 @@ final class AppModel: ObservableObject {
     }
 
     func isServerFavorite(_ id: String) -> Bool {
-        serverFavorites.contains { group in group.items.contains { $0.id == id } }
+        serverFavoriteIds.contains(id)
+    }
+
+    /// Ids (and IMDb ids) of every Jellyfin / Emby favourite, to keep the Library free of duplicates.
+    var serverFavoriteIds: Set<String> {
+        Set(serverFavorites.flatMap { group in group.items.flatMap { [$0.id, $0.imdbId].compactMap { $0 } } })
     }
 
     /// Details page Add to / Remove from Library.
