@@ -66,13 +66,21 @@ struct MediaServersView: View {
 struct ServerLibraryRow: View {
     @EnvironmentObject private var app: AppModel
     let library: ServerLibrary
+    var onFocus: ((MetaPreview) -> Void)? = nil
     @State private var items: [MetaPreview] = []
     @State private var loaded = false
 
     var body: some View {
         Group {
             if !items.isEmpty {
-                MetaRowView(title: "\(library.name) · \(library.server.name)", items: items)
+                MetaRowView(title: "\(library.name) · \(library.server.name)", items: items, onFocus: onFocus)
+            } else if !loaded {
+                // Something on screen while loading: an empty row never appears, so its .task
+                // never ran and Home stayed blank with only a media server set up.
+                VStack(alignment: .leading) {
+                    Text("\(library.name) · \(library.server.name)").font(.headline).padding(.horizontal, 60)
+                    ProgressView().padding(60)
+                }
             }
         }
         .task(id: library.key) {

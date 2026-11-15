@@ -153,7 +153,7 @@ struct ClassicHomeView: View {
                         ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus,
                                             lastFocusedId: $lastContinueWatchingId)
                     }
-                    ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
+                    ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                     ForEach(slots, id: \.key) { slot in
                         CatalogRowView(slot: slot, onFocus: setFocus,
                                        onMoveUp: upToContinueWatching(from: slot))
@@ -338,7 +338,7 @@ struct ModernHomeView: View {
                                 onMoveUp: { homeFocus = .hero }
                             )
                         }
-                        ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
+                        ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                         ForEach(slots, id: \.key) { slot in
                             CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus,
                                            onMoveUp: upToContinueWatching(from: slot))

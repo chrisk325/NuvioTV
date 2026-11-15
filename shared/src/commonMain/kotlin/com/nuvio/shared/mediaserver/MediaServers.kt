@@ -10,7 +10,10 @@ import com.nuvio.shared.data.objects
 import com.nuvio.shared.data.str
 import com.nuvio.shared.model.AddonStreams
 import com.nuvio.shared.model.ContentType
+import com.nuvio.shared.model.Meta
+import com.nuvio.shared.model.MetaCastMember
 import com.nuvio.shared.model.MetaPreview
+import com.nuvio.shared.model.Video
 import com.nuvio.shared.model.PosterShape
 import com.nuvio.shared.model.Stream
 import com.nuvio.shared.model.StreamBehaviorHints
@@ -133,6 +136,86 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             "/Users/${server.userId}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series" +
                 "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
+
+    /**
+     * Details built from the server's own metadata, for titles no add-on describes (e.g. when
+     * Jellyfin is the only source): title, synopsis, artwork, rating, genres, cast and, for
+     * shows, every episode as "tt…:season:episode" so add-on and server streams resolve.
+     * Null when no signed-in server has the title.
+     */
+    @Throws(Exception::class)
+    suspend fun meta(type: String, imdbId: String): Meta? {
+        val isShow = type != "movie"
+        for (server in servers) {
+            val found = runCatching {
+                get(
+                    server,
+                    "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=${if (isShow) "Series" else "Movie"}" +
+                        "&AnyProviderIdEquals=${encodeUrlComponent("imdb.$imdbId")}&Fields=ProviderIds&Limit=5"
+                )?.objects("Items")?.firstOrNull { o ->
+                    o.obj("ProviderIds")?.let { (it.str("Imdb") ?: it.str("IMDB")).equals(imdbId, ignoreCase = true) } == true
+                }
+            }.getOrNull() ?: continue
+            val itemId = found.str("Id") ?: continue
+            val item = get(server, "/Users/${server.userId}/Items/$itemId") ?: continue
+            val image = { kind: String, size: String -> "${server.address}/Items/$itemId/Images/$kind?$size&api_key=${server.token}" }
+            val people = item.objects("People")
+            val runtimeMinutes = item.long("RunTimeTicks")?.let { (it / 600_000_000L).toInt() }?.takeIf { it > 0 }
+            val videos = if (isShow) episodes(server, itemId, imdbId) else emptyList()
+            return Meta(
+                id = imdbId,
+                type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
+                name = item.str("Name") ?: imdbId,
+                poster = image("Primary", "maxHeight=900"),
+                posterShape = PosterShape.POSTER,
+                background = if ((item["BackdropImageTags"] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true)
+                    image("Backdrop", "maxWidth=1920") else null,
+                logo = if (item.obj("ImageTags")?.str("Logo") != null) image("Logo", "maxWidth=800") else null,
+                description = item.str("Overview"),
+                releaseInfo = item.int("ProductionYear")?.toString(),
+                imdbRating = item.str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
+                genres = (item["Genres"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty(),
+                runtime = runtimeMinutes?.let { "$it min" },
+                director = people.filter { it.str("Type") == "Director" }.mapNotNull { it.str("Name") },
+                writer = people.filter { it.str("Type") == "Writer" }.mapNotNull { it.str("Name") },
+                cast = people.filter { it.str("Type") == "Actor" }.mapNotNull { it.str("Name") },
+                castMembers = people.filter { it.str("Type") == "Actor" }.take(30).mapNotNull { p ->
+                    val name = p.str("Name") ?: return@mapNotNull null
+                    val photo = p.str("Id")?.takeIf { p.str("PrimaryImageTag") != null }
+                        ?.let { "${server.address}/Items/$it/Images/Primary?maxHeight=400&api_key=${server.token}" }
+                    MetaCastMember(name = name, character = p.str("Role"), photo = photo)
+                },
+                videos = videos,
+                productionCompanies = item.objects("Studios").mapNotNull { it.str("Name") },
+                ageRating = item.str("OfficialRating"),
+                country = null,
+                awards = null,
+                language = null,
+                links = emptyList(),
+                imdbId = imdbId,
+                released = item.str("PremiereDate")
+            )
+        }
+        return null
+    }
+
+    private suspend fun episodes(server: MediaServer, seriesId: String, imdbId: String): List<Video> =
+        get(server, "/Shows/$seriesId/Episodes?UserId=${server.userId}&Fields=Overview,PremiereDate")
+            ?.objects("Items").orEmpty().mapNotNull { ep ->
+                val season = ep.int("ParentIndexNumber") ?: return@mapNotNull null
+                val number = ep.int("IndexNumber") ?: return@mapNotNull null
+                val epId = ep.str("Id")
+                Video(
+                    id = "$imdbId:$season:$number",
+                    title = ep.str("Name") ?: "Episode $number",
+                    released = ep.str("PremiereDate"),
+                    thumbnail = epId?.let { "${server.address}/Items/$it/Images/Primary?maxWidth=640&api_key=${server.token}" },
+                    season = season,
+                    episode = number,
+                    overview = ep.str("Overview"),
+                    runtimeMinutes = ep.long("RunTimeTicks")?.let { (it / 600_000_000L).toInt() } ?: 0
+                )
+            }
 
     /**
      * Marks (or unmarks) the title as a favourite on every signed-in server that has it, found by
