@@ -357,8 +357,9 @@ struct ModernHomeView: View {
                 }
                 }
             }
-            // Hero sits higher, closer to the top bar, so the rows get more of the screen.
-            .padding(.top, -60)
+            // Hero sits higher, closer to the top bar (with a little gap), so the rows get more
+            // of the screen.
+            .padding(.top, -35)
         }
     }
 
