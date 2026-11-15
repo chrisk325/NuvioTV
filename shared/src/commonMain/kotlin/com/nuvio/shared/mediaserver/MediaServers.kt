@@ -19,6 +19,7 @@ import com.nuvio.shared.util.currentTimeMillis
 import com.nuvio.shared.util.encodeUrlComponent
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -132,6 +133,36 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             "/Users/${server.userId}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series" +
                 "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
+
+    /**
+     * Marks (or unmarks) the title as a favourite on every signed-in server that has it, found by
+     * IMDb id (POST / DELETE /Users/{id}/FavoriteItems/{itemId}). Servers without it are skipped.
+     * Returns how many servers were updated.
+     */
+    @Throws(Exception::class)
+    suspend fun setFavorite(imdbId: String, isShow: Boolean, favorite: Boolean): Int {
+        var updated = 0
+        for (server in servers) {
+            try {
+                val itemType = if (isShow) "Series" else "Movie"
+                val itemId = get(
+                    server,
+                    "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=$itemType" +
+                        "&AnyProviderIdEquals=${encodeUrlComponent("imdb.$imdbId")}&Fields=ProviderIds&Limit=5"
+                )?.objects("Items")?.firstOrNull { o ->
+                    o.obj("ProviderIds")?.let { (it.str("Imdb") ?: it.str("IMDB")).equals(imdbId, ignoreCase = true) } == true
+                }?.str("Id") ?: continue
+                val url = "${server.address}/Users/${server.userId}/FavoriteItems/$itemId"
+                val response = if (favorite) http.post(url) { auth(server) } else http.delete(url) { auth(server) }
+                if (response.status.isSuccess()) updated++
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // One unreachable server shouldn't stop the others.
+            }
+        }
+        return updated
+    }
 
     private fun JsonObject.toPreview(server: MediaServer): MetaPreview? {
         val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } ?: return null

@@ -146,7 +146,7 @@ struct ItemContextMenu: View {
     var body: some View {
         let inLibrary = app.isInLibrary(item.id)
         Button {
-            app.core.toggleLibraryPreview(preview: item)
+            app.toggleLibrary(preview: item)
         } label: {
             Label(inLibrary ? "Remove from Library" : "Add to Library", systemImage: inLibrary ? "bookmark.slash" : "bookmark")
         }

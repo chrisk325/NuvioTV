@@ -177,12 +177,45 @@ final class AppModel: ObservableObject {
         try? await core.moveAddon(baseUrl: addon.baseUrl, offset: Int32(offset))
     }
 
+    /// Saved here, or a favourite on a Jellyfin / Emby server.
     func isInLibrary(_ id: String) -> Bool {
-        library.contains { $0.id == id }
+        library.contains { $0.id == id } || isServerFavorite(id)
     }
 
+    func isServerFavorite(_ id: String) -> Bool {
+        serverFavorites.contains { group in group.items.contains { $0.id == id } }
+    }
+
+    /// Details page Add to / Remove from Library.
     @discardableResult
     func toggleLibrary(_ meta: Meta) -> Bool {
-        core.toggleLibrary(meta: meta)
+        let imdb = meta.imdbId ?? (meta.id.hasPrefix("tt") ? meta.id : nil)
+        return setInLibrary(id: meta.id, imdb: imdb, isShow: meta.isSeriesLike) { core.toggleLibrary(meta: meta) }
+    }
+
+    /// Card / Continue Watching menu Add to / Remove from Library.
+    @discardableResult
+    func toggleLibrary(preview: MetaPreview) -> Bool {
+        let imdb = preview.imdbId ?? (preview.id.hasPrefix("tt") ? preview.id : nil)
+        return setInLibrary(id: preview.id, imdb: imdb, isShow: preview.apiType != "movie") {
+            core.toggleLibraryPreview(preview: preview)
+        }
+    }
+
+    /// Flips the title in or out of the Library everywhere: this Apple TV (plus Trakt watchlist and
+    /// the Nuvio account, via the core) and as a favourite on Jellyfin / Emby servers.
+    private func setInLibrary(id: String, imdb: String?, isShow: Bool, toggleLocal: () -> Bool) -> Bool {
+        let wasSaved = isInLibrary(id)
+        let savedLocally = library.contains { $0.id == id }
+        // Only touch the local library when it should change (a server-only favourite isn't saved here).
+        if savedLocally == wasSaved { _ = toggleLocal() }
+        let saved = !wasSaved
+        if let imdb, !core.mediaServers.servers.isEmpty {
+            Task { @MainActor in
+                _ = try? await core.mediaServers.setFavorite(imdbId: imdb, isShow: isShow, favorite: saved)
+                await reloadServerFavorites()
+            }
+        }
+        return saved
     }
 }

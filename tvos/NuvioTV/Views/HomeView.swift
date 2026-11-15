@@ -140,7 +140,7 @@ struct ContinueWatchingMenu: View {
             Label("Mark as watched", systemImage: "eye")
         }
         Button {
-            app.core.toggleLibraryPreview(preview: preview)
+            app.toggleLibrary(preview: preview)
         } label: {
             Label(inLibrary ? "Remove from Library" : "Add to Library", systemImage: inLibrary ? "bookmark.slash" : "bookmark")
         }
