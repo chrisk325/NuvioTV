@@ -7,7 +7,10 @@ struct PlayerContainer: View {
     let request: PlaybackRequest
 
     var body: some View {
-        if app.settings.playerEngine == AppSettings.companion.ENGINE_AVPLAYER {
+        let engine = app.settings.playerEngine
+        if let external = ExternalPlayer(engine: engine), !request.isTrailer {
+            ExternalPlayerScreen(player: external, request: request)
+        } else if engine == AppSettings.companion.ENGINE_AVPLAYER {
             AVPlayerScreen(request: request)
         } else {
             PlayerScreen(request: request)

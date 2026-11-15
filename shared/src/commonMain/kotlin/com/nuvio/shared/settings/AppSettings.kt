@@ -263,6 +263,9 @@ class AppSettings(private val store: KeyValueStore) {
     companion object {
         const val ENGINE_MPV = "mpv"
         const val ENGINE_AVPLAYER = "avplayer"
+        /** External players: the stream URL is handed to the app by its URL scheme. */
+        const val ENGINE_INFUSE = "infuse"
+        const val ENGINE_VLC = "vlc"
         const val LAYOUT_CLASSIC = "classic"
         const val LAYOUT_GRID = "grid"
         const val LAYOUT_MODERN = "modern"

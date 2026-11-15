@@ -34,6 +34,8 @@ targets:
       path: NuvioTV/Info.plist
       properties:
         CFBundleDisplayName: Nuvio
+        # External players the stream can be handed to (Settings > Player > Video engine).
+        LSApplicationQueriesSchemes: [infuse, vlc-x-callback]
         UIUserInterfaceStyle: Dark
         UIRequiredDeviceCapabilities: [arm64]
         # Add-ons and debrid/CDN streams are frequently plain HTTP.

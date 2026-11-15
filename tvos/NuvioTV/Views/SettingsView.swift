@@ -221,13 +221,15 @@ private struct PlayerSettingsPane: View {
             Section {
                 ChoiceRow(title: "Video engine",
                           options: [(AppSettings.companion.ENGINE_MPV, "mpv (MKV, ASS, all codecs)"),
-                                    (AppSettings.companion.ENGINE_AVPLAYER, "Apple player (HLS/MP4)")],
+                                    (AppSettings.companion.ENGINE_AVPLAYER, "Apple player (HLS/MP4)"),
+                                    (AppSettings.companion.ENGINE_INFUSE, "Infuse (external app)"),
+                                    (AppSettings.companion.ENGINE_VLC, "VLC (external app)")],
                           selection: s.bind({ $0.playerEngine }, { $0.playerEngine = $1 }))
                 Toggle("Hardware decoding", isOn: s.bind({ $0.hardwareDecoding }, { $0.hardwareDecoding = $1 }))
             } header: {
                 Text("Playback engine")
             } footer: {
-                Text("mpv plays MKV, every FFmpeg codec and styled ASS/SSA subtitles. Apple's player only handles HLS and MP4.")
+                Text("mpv plays MKV, every FFmpeg codec and styled ASS/SSA subtitles. Apple's player only handles HLS and MP4. Infuse / VLC open the stream in that app (it must be installed); progress, skip intro, add-on subtitles and auto-play next stay in Nuvio's own players.")
             }
 
             Section {
