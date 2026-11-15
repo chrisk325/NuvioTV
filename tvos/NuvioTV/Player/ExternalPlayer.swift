@@ -22,12 +22,24 @@ enum ExternalPlayer {
     }
 
     /// Infuse: infuse://x-callback-url/play?url=…  VLC: vlc-x-callback://x-callback-url/stream?url=…
+    /// with x-success / x-error / x-cancel pointing back at nuviotv://, so the player returns to
+    /// Nuvio when playback finishes or fails.
     func url(for stream: String) -> URL? {
-        guard let encoded = stream.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed) else { return nil }
+        guard let encoded = Self.encode(stream) else { return nil }
+        let callbacks = ["x-success": "nuviotv://x-callback-url/playback-finished",
+                         "x-error": "nuviotv://x-callback-url/playback-error",
+                         "x-cancel": "nuviotv://x-callback-url/playback-cancelled"]
+            .sorted { $0.key < $1.key }
+            .compactMap { key, value in Self.encode(value).map { "&\(key)=\($0)" } }
+            .joined()
         switch self {
-        case .infuse: return URL(string: "infuse://x-callback-url/play?url=\(encoded)")
-        case .vlc: return URL(string: "vlc-x-callback://x-callback-url/stream?url=\(encoded)")
+        case .infuse: return URL(string: "infuse://x-callback-url/play?url=\(encoded)\(callbacks)")
+        case .vlc: return URL(string: "vlc-x-callback://x-callback-url/stream?url=\(encoded)\(callbacks)")
         }
+    }
+
+    private static func encode(_ value: String) -> String? {
+        value.addingPercentEncoding(withAllowedCharacters: queryValueAllowed)
     }
 
     /// Unreserved characters only, so the stream URL's own ?, & and = survive as one parameter.
