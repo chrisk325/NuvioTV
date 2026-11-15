@@ -151,17 +151,31 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun syncCloud(): String? {
         if (!cloud.isSignedIn) return null
-        return try {
+        // Like Android pullRemoteData: the account's add-on list is applied here (it never pushes
+        // the local list just because the account came back empty), and each part syncs on its
+        // own so one failure doesn't stop the rest. Returns the first error, naming the part.
+        var error: String? = null
+        suspend fun part(name: String, block: suspend () -> Unit) {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (error == null) error = "$name: ${e.message ?: "sync failed"}"
+            }
+        }
+        part("Add-ons") {
             val remoteAddons = cloud.pullAddons()
             if (remoteAddons.isNotEmpty()) addonRepository.replaceFromRemote(remoteAddons.map { it.url to it.enabled })
-            else pushAddonsToCloud()
-
+        }
+        part("Library") {
             val remoteLibrary = cloud.pullLibrary()
             val localIds = library.items.value.map { it.id }.toSet()
             remoteLibrary.filter { it.id !in localIds }.forEach { library.toggle(it) }
             val remoteIds = remoteLibrary.map { it.id }.toSet()
             cloud.pushLibrary(library.items.value.filter { it.id !in remoteIds })
-
+        }
+        part("Watch progress") {
             cloud.pullProgress().forEach { remote ->
                 val local = watchProgress.progressFor(remote.videoId)
                 if (local == null || local.updatedAtMs < remote.updatedAtMs) {
@@ -176,13 +190,11 @@ class NuvioCore(
                 }
             }
             cloud.pushProgress(watchProgress.entries.value.take(100))
-            watched.addAll(cloud.pullWatched())
-            null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            e.message ?: "Account sync failed"
         }
+        part("Watched history") {
+            watched.addAll(cloud.pullWatched())
+        }
+        return error
     }
 
     // --- Browsing --------------------------------------------------------------------------

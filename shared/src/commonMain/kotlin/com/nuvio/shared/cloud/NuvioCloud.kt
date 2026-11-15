@@ -166,7 +166,13 @@ class NuvioCloud(
             ?.content?.takeIf { it.isNotBlank() && it != "null" }
             ?: throw CloudException("Couldn't resolve the sync owner")
         val response = http.get("$baseUrl/rest/v1/addons?user_id=eq.$owner&profile_id=eq.$profileId&select=url,enabled,sort_order") { headers() }
-        return parse(response).asArray().orEmpty().mapNotNull { e ->
+        // An error reply must not read as "no add-ons" (that used to trigger a push of the local list).
+        if (!response.status.isSuccess()) {
+            val message = runCatching { AddonJson.parseToJsonElement(response.bodyAsText()).asObject()?.str("message") }.getOrNull()
+            throw CloudException(message ?: "Loading add-ons failed (HTTP ${response.status.value})")
+        }
+        val rows = parse(response) as? JsonArray ?: throw CloudException("Unexpected add-ons reply")
+        return rows.mapNotNull { e ->
             val o = e.asObject() ?: return@mapNotNull null
             CloudAddon(o.nonBlank("url") ?: return@mapNotNull null, o.bool("enabled") ?: true, o.int("sort_order") ?: 0)
         }.sortedBy { it.sortOrder }
