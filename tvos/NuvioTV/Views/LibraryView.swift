@@ -6,7 +6,8 @@ struct LibraryView: View {
     private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
 
     var body: some View {
-        if app.library.isEmpty && app.traktWatchlist.isEmpty {
+        Group {
+        if app.library.isEmpty && app.traktWatchlist.isEmpty && app.serverFavorites.isEmpty {
             VStack(spacing: 30) {
                 MessageView(
                     title: "Your library is empty",
@@ -40,9 +41,22 @@ struct LibraryView: View {
                         }
                         .padding(.horizontal, 60)
                     }
+                    // Favourites on Jellyfin / Emby servers.
+                    ForEach(app.serverFavorites) { group in
+                        Text("Favourites · \(group.serverName)").font(.headline).padding(.horizontal, 60)
+                        LazyVGrid(columns: columns, spacing: 50) {
+                            ForEach(group.items, id: \.id) { item in
+                                PosterCard(item: item)
+                            }
+                        }
+                        .padding(.horizontal, 60)
+                    }
                 }
                 .padding(.vertical, 60)
             }
         }
+        }
+        // Server favourites change on the server, so re-read them whenever the tab opens.
+        .task { await app.reloadServerFavorites() }
     }
 }

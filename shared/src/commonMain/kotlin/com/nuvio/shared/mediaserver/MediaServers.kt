@@ -121,6 +121,18 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear&StartIndex=$start&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
 
+    /**
+     * Movies and shows marked as favourite on the server (Filters=IsFavorite), A–Z. Like the
+     * library rows, items need an IMDb id so details and add-on streams resolve.
+     */
+    @Throws(Exception::class)
+    suspend fun favorites(server: MediaServer, limit: Int = 300): List<MetaPreview> =
+        get(
+            server,
+            "/Users/${server.userId}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series" +
+                "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
+        )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
+
     private fun JsonObject.toPreview(server: MediaServer): MetaPreview? {
         val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } ?: return null
         val isShow = str("Type") == "Series"

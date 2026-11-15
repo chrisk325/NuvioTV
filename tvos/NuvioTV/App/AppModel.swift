@@ -65,6 +65,24 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var cloudSyncError: String?
     @Published private(set) var serverLibraries: [ServerLibrary] = []
+    /// Favourites on each Jellyfin / Emby server (Library tab).
+    @Published private(set) var serverFavorites: [ServerFavorites] = []
+
+    struct ServerFavorites: Identifiable {
+        let id: String
+        let serverName: String
+        let items: [MetaPreview]
+    }
+
+    /// Reloads the Jellyfin / Emby favourites shown in the Library.
+    func reloadServerFavorites() async {
+        var result: [ServerFavorites] = []
+        for server in core.mediaServers.servers {
+            let items = (try? await core.mediaServers.favorites(server: server, limit: 300)) ?? []
+            if !items.isEmpty { result.append(ServerFavorites(id: server.id, serverName: server.name, items: items)) }
+        }
+        serverFavorites = result
+    }
 
     /** Reloads Jellyfin / Emby libraries for Home. */
     func serversChanged() {
@@ -74,6 +92,7 @@ final class AppModel: ObservableObject {
                 all += (try? await core.mediaServers.libraries(server: server)) ?? []
             }
             serverLibraries = all
+            await reloadServerFavorites()
         }
     }
 
