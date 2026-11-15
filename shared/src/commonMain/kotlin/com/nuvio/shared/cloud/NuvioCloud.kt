@@ -108,7 +108,11 @@ class NuvioCloud(
             headers(auth = false)
             setBody(json(buildJsonObject { put("code", login.code); put("device_nonce", login.nonce) }))
         }
-        storeSession(parse(response).asObject() ?: throw CloudException("Sign-in exchange failed"))
+        val body = parse(response).asObject()
+        if (!response.status.isSuccess() || body == null) {
+            throw CloudException(body?.str("error_description") ?: body?.str("message") ?: body?.str("error") ?: "Sign-in exchange failed")
+        }
+        storeSession(body)
         return true
     }
 
@@ -130,7 +134,8 @@ class NuvioCloud(
     private fun storeSession(body: JsonObject) {
         val access = body.nonBlank("access_token") ?: throw CloudException("No access token")
         val expiresIn = body.long("expires_in") ?: 3600
-        store.writeToken(
+        // Same store the session is read from (shared by every profile on this Apple TV).
+        accountStore.writeToken(
             TOKEN,
             StoredToken(access, body.nonBlank("refresh_token"), currentTimeMillis() + expiresIn * 1000, body.obj("user")?.nonBlank("email"))
         )

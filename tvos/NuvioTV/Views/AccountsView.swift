@@ -14,6 +14,8 @@ struct AccountsView: View {
     @State private var showEmail = false
     @State private var email = ""
     @State private var password = ""
+    @State private var emailError: String?
+    @State private var isSigningIn = false
 
     private var core: NuvioCore { app.core }
 
@@ -46,7 +48,7 @@ struct AccountsView: View {
                             }
                         }
                     }
-                    Button("Sign in with email") { showEmail = true }
+                    Button("Sign in with email") { emailError = nil; showEmail = true }
                 }
             }
             Section("Trakt") {
@@ -138,23 +140,32 @@ struct AccountsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField("Password", text: $password)
+                if let emailError {
+                    Text(emailError).foregroundStyle(.red)
+                }
                 HStack(spacing: 30) {
-                    Button("Sign in") {
+                    Button(isSigningIn ? "Signing in…" : "Sign in") {
                         Task { @MainActor in
+                            isSigningIn = true
+                            emailError = nil
                             do {
                                 try await core.cloud.signInWithEmail(email: email, password: password)
+                                isSigningIn = false
                                 showEmail = false
                                 password = ""
+                                message = "Signed in. Syncing add-ons, library and progress…"
                                 revision += 1
                                 await app.syncCloud()
                                 await app.refreshAddons()
+                                message = app.cloudSyncError ?? "Signed in and synced."
                             } catch {
-                                message = error.localizedDescription
-                                showEmail = false
+                                // Keep the form open with the reason (wrong password, …).
+                                isSigningIn = false
+                                emailError = error.localizedDescription
                             }
                         }
                     }
-                    .disabled(email.isEmpty || password.isEmpty)
+                    .disabled(email.isEmpty || password.isEmpty || isSigningIn)
                     Button("Cancel", role: .cancel) { showEmail = false }
                 }
             }
