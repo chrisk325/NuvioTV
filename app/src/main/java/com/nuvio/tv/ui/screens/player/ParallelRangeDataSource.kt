@@ -117,6 +117,19 @@ internal class ParallelRangeDataSource(
 
         private const val EVICTION_TOUCH_GUARD_MS = 2_000L
 
+        // Idle chunk buffers hold native memory with nothing in them. Steady playback only swaps one
+        // evicted chunk for the next download at a time, so a couple are enough to skip the
+        // allocation; keeping one per prefetch slot parked a whole second window of chunks.
+        private const val IDLE_POOL_MAX_BUFFERS = 2
+        private const val IDLE_POOL_MAX_BUFFERS_LOW_RAM = 1
+
+        // Chunks kept past the prefetch window (seek-back, tail cues/moov) are bounded in bytes too,
+        // so a large chunk size does not multiply the retained set. Small chunks keep the count as is.
+        private const val RETAINED_EXTRA_BYTES_MAX = 64L * 1024L * 1024L
+        private const val RETAINED_EXTRA_BYTES_MAX_LOW_RAM = 32L * 1024L * 1024L
+
+        private const val BOOTSTRAP_BUFFER_BYTES = BOOTSTRAP_READ_BYTES.toInt()
+
         private const val MAX_CONSECUTIVE_ZERO_READS = 3
 
         private const val ESCALATE_AFTER_MS = 2_000L
@@ -390,6 +403,7 @@ internal class ParallelRangeDataSource(
                 hudNextStepAtMs = 0L
                 hudHedgeRestarts = 0
                 hudHedgeExhausted = false
+                drainOtherSizePools(chunkSz)
                 val created = ChunkSession(requestUri, requestHeaders, chunkSz, chunkCap, prefetchWindow)
                 currentChunkSession = created
                 return created
@@ -443,6 +457,23 @@ internal class ParallelRangeDataSource(
             }
         }
 
+        // A pool for a chunk size no session uses any more can never be drawn from again.
+        private fun drainOtherSizePools(keepChunkSize: Long) {
+            for (size in globalBufferPool.keys.toList()) {
+                if (size != keepChunkSize) drainIdleBuffers(size)
+            }
+        }
+
+        /**
+         * Frees every idle pooled chunk buffer. Buffers held by a session or a reader are untouched,
+         * so this is safe at any time; the next download just allocates again.
+         */
+        internal fun trimIdleBuffers() {
+            for (size in globalBufferPool.keys.toList()) {
+                drainIdleBuffers(size)
+            }
+        }
+
         private fun enforceSessionCap(session: ChunkSession, protectIndex: Long, poolCap: Int) {
             if (session.futures.size <= session.chunkCap) return
             synchronized(session) {
@@ -480,8 +511,18 @@ internal class ParallelRangeDataSource(
         }
     }
 
-    init {
-        activeInstances.incrementAndGet()
+    // Counted while open only. Counting from construction let reopen/close cycles drift the total
+    // and let a never-opened instance (the prestart one) hold it above zero.
+    private val registered = AtomicBoolean(false)
+
+    private fun registerInstance() {
+        if (registered.compareAndSet(false, true)) activeInstances.incrementAndGet()
+    }
+
+    private fun unregisterInstance() {
+        if (registered.compareAndSet(true, false) && activeInstances.decrementAndGet() <= 0) {
+            clearGlobalPool()
+        }
     }
 
     // Readers lease the memory per copy; it is recycled once, after release and the last lease.
@@ -548,7 +589,10 @@ internal class ParallelRangeDataSource(
     private val effectivePrefetchDepth: Int =
         prefetchDepthChunks.coerceAtLeast(parallelConnections + 1)
 
-    private val maxPoolSize = effectivePrefetchDepth + 2
+    private val maxPoolSize = (effectivePrefetchDepth + 2).coerceAtMost(
+        if (com.nuvio.tv.ui.screens.settings.MemoryBudget.isLowRamTier) IDLE_POOL_MAX_BUFFERS_LOW_RAM
+        else IDLE_POOL_MAX_BUFFERS
+    )
 
     private var currentChunk: DownloadedChunk? = null
     private var currentChunkIndex: Long = -1
@@ -570,10 +614,20 @@ internal class ParallelRangeDataSource(
     private var bytesServedThisOpen: Long = 0L
     private var inFlightServeLogged: Boolean = false
 
-    private val sessionChunkCap: Int = effectivePrefetchDepth +
-        if (com.nuvio.tv.ui.screens.settings.MemoryBudget.isLowRamTier) 2 else 4
+    private val sessionChunkCap: Int = run {
+        val lowRam = com.nuvio.tv.ui.screens.settings.MemoryBudget.isLowRamTier
+        val extraChunks = if (lowRam) 2 else 4
+        val extraBytes = if (lowRam) RETAINED_EXTRA_BYTES_MAX_LOW_RAM else RETAINED_EXTRA_BYTES_MAX
+        val byBytes = (extraBytes / chunkSize.coerceAtLeast(1L)).toInt().coerceAtLeast(1)
+        effectivePrefetchDepth + extraChunks.coerceAtMost(byBytes)
+    }
+
+    // Seeks reopen this source and each open reads a bootstrap window; reusing one array for the
+    // windows that are not handed to the startup cache keeps that off the heap churn.
+    private var reusableBootstrapBuffer: ByteArray? = null
 
     override fun open(dataSpec: DataSpec): Long {
+        registerInstance()
         val isSubtitle = dataSpec.uri.getQueryParameter("nuvio_type") == "subtitle"
         if (isSubtitle) {
             closed.set(false)
@@ -766,7 +820,7 @@ internal class ParallelRangeDataSource(
         if (openLength > 0L) {
             val bootstrapBytes = minOf(minOf(chunkSize, BOOTSTRAP_READ_BYTES), openLength).toInt()
             val diagReadStartMs = SystemClock.uptimeMillis()
-            val chunk = readBootstrapChunk(probeSource, bootstrapBytes)
+            val chunk = readBootstrapChunk(probeSource, bootstrapBytes, reuseBuffer = position != 0L)
             diagBootstrapMs = SystemClock.uptimeMillis() - diagReadStartMs
             bootstrapChunk = chunk
             bootstrapStartPosition = position
@@ -1375,7 +1429,9 @@ internal class ParallelRangeDataSource(
 
         val inFlight = InFlightChunk(buffer)
         activeSession.inFlight[chunkIndex] = inFlight
-        val tempArray = readBufferLocal.get()!!
+        // Only the byte-array path copies through this; resolving it lazily keeps a 64 KB scratch
+        // array off every worker thread that reads straight into native memory.
+        var tempArray: ByteArray? = null
         var totalRead = 0
         var consecutiveZeroReads = 0
 
@@ -1411,10 +1467,11 @@ internal class ParallelRangeDataSource(
                     buffer.byteBuffer.position(totalRead)
                     byteBufferReader.read(buffer.byteBuffer, maxRead)
                 } else {
-                    val r = ds.read(tempArray, 0, maxRead)
+                    val scratch = tempArray ?: readBufferLocal.get()!!.also { tempArray = it }
+                    val r = ds.read(scratch, 0, maxRead)
                     if (r != C.RESULT_END_OF_INPUT) {
                         buffer.byteBuffer.position(totalRead)
-                        buffer.byteBuffer.put(tempArray, 0, r)
+                        buffer.byteBuffer.put(scratch, 0, r)
                     }
                     r
                 }
@@ -1488,12 +1545,17 @@ internal class ParallelRangeDataSource(
         return totalPart.toLongOrNull() ?: C.LENGTH_UNSET.toLong()
     }
 
-    private fun readBootstrapChunk(ds: DataSource, maxBytes: Int): DownloadedChunk {
-        val buffer = ByteArray(maxBytes)
+    private fun readBootstrapChunk(ds: DataSource, maxBytes: Int, reuseBuffer: Boolean = false): DownloadedChunk {
+        // A window at position 0 goes into the startup cache by reference, so it gets its own array.
+        val buffer = if (reuseBuffer && maxBytes <= BOOTSTRAP_BUFFER_BYTES) {
+            reusableBootstrapBuffer ?: ByteArray(BOOTSTRAP_BUFFER_BYTES).also { reusableBootstrapBuffer = it }
+        } else {
+            ByteArray(maxBytes)
+        }
         var totalRead = 0
         try {
-            while (!closed.get() && totalRead < buffer.size) {
-                val maxRead = minOf(buffer.size - totalRead, READ_BUFFER_SIZE)
+            while (!closed.get() && totalRead < maxBytes) {
+                val maxRead = minOf(maxBytes - totalRead, READ_BUFFER_SIZE)
                 if (maxRead <= 0) break
                 val read = ds.read(buffer, totalRead, maxRead)
                 if (read == C.RESULT_END_OF_INPUT) break
@@ -1552,12 +1614,9 @@ internal class ParallelRangeDataSource(
 
             resetLocalReadState()
             session = null
-
-            val active = activeInstances.decrementAndGet()
-            if (active <= 0) {
-                clearGlobalPool()
-            }
         }
+        // Outside the guard so an open that failed before clearing [closed] is still uncounted.
+        unregisterInstance()
     }
 
     override fun addTransferListener(transferListener: TransferListener) {
