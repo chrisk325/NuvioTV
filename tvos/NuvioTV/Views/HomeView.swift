@@ -180,7 +180,7 @@ struct ContinueWatchingRow: View {
                 LazyHStack(spacing: 40) {
                     ForEach(items, id: \.videoId) { progress in
                         VStack(alignment: .leading, spacing: 28) { // room for the focused card's lift
-                            NavigationLink(value: Route.detail(app.core.previewFor(progress: progress))) {
+                            NavigationLink(value: route(for: progress)) {
                                 ZStack(alignment: .bottom) {
                                     ContinueWatchingArtwork(progress: progress)
                                     GeometryReader { geo in
@@ -227,6 +227,15 @@ struct ContinueWatchingRow: View {
             }
         }
         .focusSection()
+    }
+
+    /// Episodes open the details page on that episode; movies on the details page.
+    private func route(for progress: WatchProgress) -> Route {
+        let preview = app.core.previewFor(progress: progress)
+        guard progress.season != nil || progress.episode != nil else { return .detail(preview) }
+        return .detailEpisode(preview, EpisodeTarget(videoId: progress.videoId,
+                                                     season: progress.season?.int32Value,
+                                                     episode: progress.episode?.int32Value))
     }
 
     private func subtitle(_ p: WatchProgress) -> String {

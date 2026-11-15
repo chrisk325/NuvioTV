@@ -24,8 +24,17 @@ struct StreamTarget: Hashable {
     }
 }
 
+/// An episode to open the details page on (Continue Watching): matched by id, else season / episode.
+struct EpisodeTarget: Hashable {
+    let videoId: String
+    let season: Int32?
+    let episode: Int32?
+}
+
 enum Route: Hashable {
     case detail(MetaPreview)
+    /// Details of a series, opened on one episode's card (season selected, card focused).
+    case detailEpisode(MetaPreview, EpisodeTarget)
     case streams(StreamTarget)
     case catalog(CatalogSlot)
     case person(Int32)
@@ -40,6 +49,8 @@ struct RouteDestination: View {
         switch route {
         case .detail(let preview):
             DetailView(preview: preview)
+        case .detailEpisode(let preview, let episode):
+            DetailView(preview: preview, initialEpisode: episode)
         case .streams(let target):
             StreamsView(target: target)
         case .catalog(let slot):

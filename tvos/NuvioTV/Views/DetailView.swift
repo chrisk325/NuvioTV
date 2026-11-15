@@ -48,8 +48,12 @@ struct DetailView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
     let preview: MetaPreview
+    /// Continue Watching: open on this episode (its season, its card focused on the lower screen).
+    var initialEpisode: EpisodeTarget? = nil
 
     @State private var meta: Meta?
+    /// Episode card the episode row scrolls to (lazy rows only build cards near the visible ones).
+    @State private var scrollToEpisode: String?
     @State private var error: String?
     @State private var selectedSeason: Int32 = 1
     @State private var details: DetailContent?
@@ -141,13 +145,23 @@ struct DetailView: View {
                 sourceAddonBaseUrl: preview.sourceAddonBaseUrl
             )
             let seasons = loaded.seasons().map { $0.int32Value }
-            if let latest = app.core.latestProgressFor(contentId: loaded.id)?.season?.int32Value,
+            let target = initialEpisode.flatMap { matchEpisode($0, in: loaded) }
+            if let season = target?.season?.int32Value, seasons.contains(season) {
+                selectedSeason = season
+            } else if let latest = app.core.latestProgressFor(contentId: loaded.id)?.season?.int32Value,
                seasons.contains(latest) {
                 selectedSeason = latest
             } else {
                 selectedSeason = seasons.first ?? 1
             }
             meta = loaded
+            if let target {
+                // Straight to the episodes screen with that episode's card focused.
+                lastEpisodeId = target.id
+                scrollToEpisode = target.id
+                showLower = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { focus = .episode(target.id) }
+            }
             // Add-on meta shows immediately; the merged version (TMDB groups that are enabled,
             // add-on data for the rest) replaces it when ready. Kotlin suspend calls stay on the
             // main thread, so no `async let`.
@@ -160,6 +174,17 @@ struct DetailView: View {
             ratings = (try? await app.core.ratings(meta: loaded)) ?? []
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    /// The meta's episode for a Continue Watching entry: same id, else same season and episode
+    /// (tracker ids and add-on ids can use different schemes).
+    private func matchEpisode(_ target: EpisodeTarget, in meta: Meta) -> Video? {
+        guard meta.isSeriesLike else { return nil }
+        if let byId = meta.videos.first(where: { $0.id == target.videoId }) { return byId }
+        guard let episode = target.episode else { return nil }
+        return meta.videos.first { video in
+            video.episode?.int32Value == episode && (target.season == nil || video.season?.int32Value == target.season)
         }
     }
 
@@ -308,6 +333,7 @@ struct DetailView: View {
                     .padding(.top, 20)
                 if hasEpisodes(meta) {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus,
+                                    scrollTarget: scrollToEpisode,
                                     onShowInfo: { video in
                                         withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { episodeInfo = video }
                                     },
@@ -490,6 +516,8 @@ struct EpisodesSection: View {
     let meta: Meta
     @Binding var selectedSeason: Int32
     var focus: FocusState<DetailFocus?>.Binding? = nil
+    /// Episode card to scroll into view (Continue Watching opens the page on it).
+    var scrollTarget: String? = nil
     /// Tap and hold on an episode: show its full description.
     var onShowInfo: ((Video) -> Void)? = nil
     /// The episode card last focused (Up from the rows below returns to it).
@@ -524,6 +552,7 @@ struct EpisodesSection: View {
                 .focusSection()
             }
 
+            ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 40) {
                     ForEach(episodes, id: \.id) { video in
@@ -539,14 +568,23 @@ struct EpisodesSection: View {
                         // cards rebuilt the focused card and threw focus back to episode 1.
                         .detailFocus(focus, .episode(video.id))
                         .onMoveUp(seasons.count > 1 ? nil : onMoveUpFromTop)
+                        .id(video.id)
                     }
                 }
                 .padding(.horizontal, 80)
                 .padding(.vertical, 30)
             }
             .focusSection()
+            .onAppear { scroll(proxy, to: scrollTarget) }
+            .onChange(of: scrollTarget) { _, id in scroll(proxy, to: id) }
+            }
         }
         .onChange(of: selectedSeason) { _, _ in lastFocusedId = nil }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to id: String?) {
+        guard let id, meta.episodesForSeason(season: selectedSeason).contains(where: { $0.id == id }) else { return }
+        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .leading) }
     }
 }
 
