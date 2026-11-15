@@ -18,7 +18,9 @@ import com.nuvio.shared.model.PosterShape
 import com.nuvio.shared.model.Stream
 import com.nuvio.shared.model.StreamBehaviorHints
 import com.nuvio.shared.storage.KeyValueStore
+import com.nuvio.shared.model.WatchProgress
 import com.nuvio.shared.util.currentTimeMillis
+import com.nuvio.shared.util.parseReleaseEpochMs
 import com.nuvio.shared.util.encodeUrlComponent
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
@@ -567,6 +569,197 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         if (!response.status.isSuccess()) return null
         val info = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return null
         return info.takeIf { it.str("ErrorCode") == null }
+    }
+
+    // --- Playback state (two-way) ----------------------------------------------------------
+
+    /** contentId|videoId → the matching items on each server (looked up once). */
+    private val playTargets = mutableMapOf<String, List<Pair<MediaServer, String>>>()
+
+    /**
+     * The server items for a movie or one episode. [contentId] / [imdbId] identify the title
+     * (IMDb, "tmdb:…" or a server-native id), [videoId] the episode ("tt…:s:e", native, …).
+     */
+    private suspend fun playbackTargets(
+        contentId: String, imdbId: String?, isShow: Boolean, videoId: String, season: Int?, episode: Int?
+    ): List<Pair<MediaServer, String>> {
+        if (servers.isEmpty()) return emptyList()
+        val key = "$contentId|$videoId"
+        playTargets[key]?.let { return it }
+        val result: List<Pair<MediaServer, String>> = parseNative(videoId)?.takeIf { videoId != contentId || !isShow }
+            ?.let { listOf(it) }
+            ?: run {
+                val native = parseNative(contentId)
+                val imdb = (imdbId ?: contentId).substringBefore(':').takeIf { it.startsWith("tt") }
+                    ?: videoId.substringBefore(':').takeIf { it.startsWith("tt") }
+                val tmdb = if (contentId.startsWith("tmdb:")) contentId.split(':').getOrNull(1) else null
+                val candidates = native?.let { listOf(it) } ?: servers.mapNotNull { server ->
+                    runCatching { findItemId(server, imdb, tmdb, isShow) }.getOrNull()?.let { server to it }
+                }
+                if (!isShow) candidates
+                else if (season == null || episode == null) emptyList()
+                else candidates.mapNotNull { (server, seriesId) ->
+                    runCatching {
+                        get(server, "/Shows/$seriesId/Episodes?UserId=${server.userId}&Season=$season")
+                            ?.objects("Items")?.firstOrNull { it.int("IndexNumber") == episode }?.nonBlank("Id")
+                    }.getOrNull()?.let { server to it }
+                }
+            }
+        if (result.isNotEmpty()) playTargets[key] = result
+        return result
+    }
+
+    /**
+     * Playback reporting, as Jellyfin / Emby clients do: "start" → /Sessions/Playing,
+     * "progress" / "pause" → /Sessions/Playing/Progress, "stop" → /Sessions/Playing/Stopped (which
+     * saves the resume point, or marks the item played near the end). No-op for titles the
+     * servers don't have.
+     */
+    suspend fun reportPlayback(
+        contentId: String, imdbId: String?, isShow: Boolean, videoId: String, season: Int?, episode: Int?,
+        event: String, positionMs: Long, isPaused: Boolean = false
+    ) {
+        val targets = playbackTargets(contentId, imdbId, isShow, videoId, season, episode)
+        for ((server, itemId) in targets) {
+            val body = buildJsonObject {
+                put("ItemId", itemId)
+                put("PositionTicks", positionMs.coerceAtLeast(0) * 10_000L)
+                put("CanSeek", true)
+                put("IsPaused", isPaused)
+                put("PlayMethod", "DirectPlay")
+                if (event == "progress" || event == "pause") put("EventName", if (isPaused) "pause" else "timeupdate")
+            }.toString()
+            val paths = when (event) {
+                "start" -> listOf("/Sessions/Playing")
+                "stop" -> listOf("/Sessions/Playing", "/Sessions/Playing/Stopped").let { if (startedSessions.remove("${server.id}|$itemId")) it.drop(1) else it }
+                else -> listOf("/Sessions/Playing/Progress")
+            }
+            for (path in paths) {
+                runCatching {
+                    http.post(server.address + path) {
+                        auth(server)
+                        setBody(TextContent(body, HttpContentType.Application.Json))
+                    }
+                }.onFailure { if (it is CancellationException) throw it }
+            }
+            if (event == "start") startedSessions += "${server.id}|$itemId"
+        }
+    }
+
+    private val startedSessions = mutableSetOf<String>()
+
+    /** Marks a movie / episode played or unplayed on every server that has it. */
+    suspend fun setPlayed(
+        contentId: String, imdbId: String?, isShow: Boolean, videoId: String, season: Int?, episode: Int?, played: Boolean
+    ) {
+        for ((server, itemId) in playbackTargets(contentId, imdbId, isShow, videoId, season, episode)) {
+            runCatching {
+                val url = "${server.address}/Users/${server.userId}/PlayedItems/$itemId"
+                if (played) http.post(url) { auth(server) } else http.delete(url) { auth(server) }
+            }.onFailure { if (it is CancellationException) throw it }
+        }
+    }
+
+    /** Series item id → IMDb id (null when the server has none), per server. */
+    private val seriesImdb = mutableMapOf<String, String?>()
+
+    private suspend fun seriesImdbId(server: MediaServer, seriesId: String): String? {
+        val key = "${server.id}|$seriesId"
+        if (key in seriesImdb) return seriesImdb[key]
+        val ids = item(server, seriesId)?.obj("ProviderIds")
+        val imdb = ids?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
+        seriesImdb[key] = imdb
+        return imdb
+    }
+
+    /**
+     * Partly watched movies and episodes on the servers (their Continue Watching), as progress
+     * entries with the same ids the app uses for those titles.
+     */
+    suspend fun resumeProgress(): List<WatchProgress> = servers.flatMap { server ->
+        val items = runCatching {
+            get(server, "/Users/${server.userId}/Items/Resume?Limit=100&Recursive=true&MediaTypes=Video" +
+                "&IncludeItemTypes=Movie,Episode&Fields=ProviderIds&EnableUserData=true&EnableImages=false")
+                ?.objects("Items").orEmpty()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
+        items.mapNotNull { item -> item.toResumeProgress(server) }
+    }
+
+    private suspend fun JsonObject.toResumeProgress(server: MediaServer): WatchProgress? {
+        val itemId = nonBlank("Id") ?: return null
+        val data = obj("UserData") ?: return null
+        val position = (data.long("PlaybackPositionTicks") ?: 0L) / 10_000L
+        val duration = (long("RunTimeTicks") ?: 0L) / 10_000L
+        if (position <= 0 || duration <= 0) return null
+        val updated = parseReleaseEpochMs(data.str("LastPlayedDate")) ?: return null
+        return if (str("Type") == "Episode") {
+            val seriesId = nonBlank("SeriesId") ?: return null
+            val season = int("ParentIndexNumber") ?: return null
+            val number = int("IndexNumber") ?: return null
+            val imdb = seriesImdbId(server, seriesId)
+            val contentId = imdb ?: nativeId(server, seriesId)
+            WatchProgress(
+                contentId = contentId,
+                contentType = "series",
+                videoId = imdb?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
+                name = str("SeriesName") ?: str("Name") ?: contentId,
+                poster = "${server.address}/Items/$seriesId/Images/Primary?maxHeight=600&api_key=${server.token}",
+                background = "${server.address}/Items/$seriesId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
+                season = season,
+                episode = number,
+                episodeTitle = str("Name"),
+                positionMs = position,
+                durationMs = duration,
+                updatedAtMs = updated,
+                thumbnail = "${server.address}/Items/$itemId/Images/Primary?maxWidth=640&api_key=${server.token}"
+            )
+        } else {
+            val ids = obj("ProviderIds")
+            val imdb = ids?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
+            remember(server, false, ids, itemId)
+            val contentId = imdb ?: nativeId(server, itemId)
+            WatchProgress(
+                contentId = contentId,
+                contentType = "movie",
+                videoId = contentId,
+                name = str("Name") ?: contentId,
+                poster = "${server.address}/Items/$itemId/Images/Primary?maxHeight=600&api_key=${server.token}",
+                background = "${server.address}/Items/$itemId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
+                positionMs = position,
+                durationMs = duration,
+                updatedAtMs = updated
+            )
+        }
+    }
+
+    /**
+     * Watched keys for everything played on the servers, in the app's format: "movie:<id>" for
+     * movies, "<series imdb>:<season>:<episode>" (or the native episode id) for episodes.
+     */
+    suspend fun playedKeys(): Set<String> = servers.flatMapTo(mutableSetOf()) { server ->
+        runCatching {
+            val series = get(server, "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=Series" +
+                "&Fields=ProviderIds&EnableImages=false&EnableUserData=false")
+                ?.objects("Items").orEmpty()
+                .mapNotNull { s -> s.nonBlank("Id")?.let { id -> id to s.obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } } }
+                .toMap()
+            series.forEach { (id, imdb) -> seriesImdb["${server.id}|$id"] = imdb }
+            get(server, "/Users/${server.userId}/Items?Recursive=true&Filters=IsPlayed&IncludeItemTypes=Movie,Episode" +
+                "&Fields=ProviderIds&EnableImages=false")
+                ?.objects("Items").orEmpty()
+                .mapNotNull { item ->
+                    val id = item.nonBlank("Id") ?: return@mapNotNull null
+                    if (item.str("Type") == "Episode") {
+                        val season = item.int("ParentIndexNumber")
+                        val number = item.int("IndexNumber")
+                        val imdb = item.nonBlank("SeriesId")?.let { series[it] }
+                        if (imdb != null && season != null && number != null) "$imdb:$season:$number" else nativeId(server, id)
+                    } else {
+                        val imdb = item.obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
+                        "movie:${imdb ?: nativeId(server, id)}"
+                    }
+                }
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
     }
 
     private suspend fun get(server: MediaServer, path: String): JsonObject? {

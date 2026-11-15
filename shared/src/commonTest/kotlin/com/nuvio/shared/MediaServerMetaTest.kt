@@ -230,3 +230,66 @@ class MediaServerPlaybackInfoTest {
         assertEquals("> 4K\n> 11.21 GB", stream.description)
     }
 }
+
+class MediaServerPlaybackSyncTest {
+    private val json = headersOf("Content-Type", "application/json")
+    private fun store() = InMemoryStore().apply {
+        putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"Home","address":"http://jf","userId":"u1","token":"tok"}]""")
+    }
+
+    @Test
+    fun resumePointsAndPlayedItemsUseTheAppsIds() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            val params = request.url.parameters
+            when {
+                request.url.encodedPath == "/Users/u1/Items/Resume" -> respond(
+                    """{"Items":[
+                        {"Id":"e5","Type":"Episode","Name":"Five","SeriesId":"s1","SeriesName":"Show","ParentIndexNumber":2,"IndexNumber":5,
+                         "RunTimeTicks":36000000000,"UserData":{"PlaybackPositionTicks":12000000000,"LastPlayedDate":"2026-11-15T20:00:00.0000000Z"}},
+                        {"Id":"m1","Type":"Movie","Name":"Film","ProviderIds":{"Imdb":"tt200"},
+                         "RunTimeTicks":72000000000,"UserData":{"PlaybackPositionTicks":36000000000,"LastPlayedDate":"2026-11-14T10:00:00Z"}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                request.url.encodedPath == "/Users/u1/Items/s1" -> respond("""{"Id":"s1","ProviderIds":{"Imdb":"tt100"}}""", HttpStatusCode.OK, json)
+                request.url.encodedPath == "/Users/u1/Items" && params["IncludeItemTypes"] == "Series" ->
+                    respond("""{"Items":[{"Id":"s1","ProviderIds":{"Imdb":"tt100"}}]}""", HttpStatusCode.OK, json)
+                request.url.encodedPath == "/Users/u1/Items" && params["Filters"] == "IsPlayed" -> respond(
+                    """{"Items":[{"Id":"e1","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1},
+                                 {"Id":"m1","Type":"Movie","ProviderIds":{"Imdb":"tt200"}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, store())
+        val resume = service.resumeProgress()
+        val episode = resume.first { it.contentType == "series" }
+        assertEquals("tt100", episode.contentId)
+        assertEquals("tt100:2:5", episode.videoId)
+        assertEquals(1_200_000L, episode.positionMs)
+        assertEquals(3_600_000L, episode.durationMs)
+        val movie = resume.first { it.contentType == "movie" }
+        assertEquals("tt200", movie.videoId)
+        assertEquals(setOf("tt100:1:1", "movie:tt200"), service.playedKeys())
+    }
+
+    @Test
+    fun stopWithoutStartOpensAndClosesASession() = runTest {
+        val posted = mutableListOf<String>()
+        val http = HttpClient(MockEngine { request ->
+            when {
+                request.url.encodedPath.startsWith("/Sessions/Playing") -> {
+                    posted += request.url.encodedPath
+                    respond("", HttpStatusCode.NoContent)
+                }
+                request.url.encodedPath == "/Users/u1/Items" -> respond(
+                    """{"Items":[{"Id":"m1","Type":"Movie","ProviderIds":{"Imdb":"tt200"}}]}""", HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, store())
+        service.reportPlayback("tt200", "tt200", false, "tt200", null, null, "stop", 60_000L)
+        assertEquals(listOf("/Sessions/Playing", "/Sessions/Playing/Stopped"), posted)
+    }
+}

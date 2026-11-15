@@ -577,6 +577,35 @@ class NuvioCore(
                 thumbnail = if (meta.isSeriesLike) meta.videos.firstOrNull { it.id == videoId }?.thumbnail else null
             )
         )
+        // Jellyfin / Emby: a progress report at most every 30 s while playing.
+        if (mediaServers.servers.isNotEmpty()) {
+            val now = currentTimeMillis()
+            if (now - (serverReportedAt[videoId] ?: 0L) >= 30_000L) {
+                serverReportedAt[videoId] = now
+                val video = meta.videos.firstOrNull { it.id == videoId }
+                scope.launch { reportToServers(meta, video, videoId, "progress", positionMs) }
+            }
+        }
+    }
+
+    private val serverReportedAt = mutableMapOf<String, Long>()
+
+    private suspend fun reportToServers(meta: Meta, video: Video?, videoId: String, event: String, positionMs: Long, paused: Boolean = false) {
+        runCatching {
+            mediaServers.reportPlayback(
+                contentId = meta.id, imdbId = meta.imdbId, isShow = meta.isSeriesLike && video != null,
+                videoId = videoId, season = video?.season, episode = video?.episode,
+                event = event, positionMs = positionMs, isPaused = paused
+            )
+        }.onFailure { if (it is CancellationException) throw it }
+    }
+
+    private fun setPlayedOnServers(contentId: String, imdbId: String?, isShow: Boolean, videoId: String, season: Int?, episode: Int?, played: Boolean) {
+        if (mediaServers.servers.isEmpty()) return
+        scope.launch {
+            runCatching { mediaServers.setPlayed(contentId, imdbId, isShow, videoId, season, episode, played) }
+                .onFailure { if (it is CancellationException) throw it }
+        }
     }
 
     /** contentId → (video id / "season:episode") → episode still. */
@@ -632,6 +661,10 @@ class NuvioCore(
     fun setWatched(meta: Meta, video: Video?, isWatched: Boolean) {
         watched.mark(watchedKey(meta, video), isWatched)
         if (video != null) refreshSeriesWatched(meta)
+        if (!meta.isSeriesLike || video != null) {
+            setPlayedOnServers(meta.id, meta.imdbId, meta.isSeriesLike, video?.id ?: meta.defaultVideoId,
+                video?.season, video?.episode, isWatched)
+        }
         if (isWatched) {
             val media = TrackedMedia.from(meta, video)
             scope.launch {
@@ -655,6 +688,26 @@ class NuvioCore(
             "start" -> ScrobbleAction.START
             "pause" -> ScrobbleAction.PAUSE
             else -> ScrobbleAction.STOP
+        }
+        if (mediaServers.servers.isNotEmpty()) {
+            val videoId = video?.id ?: meta.defaultVideoId
+            val saved = watchProgress.progressFor(videoId)
+            val positionMs = saved?.let { (it.durationMs * progressPercent / 100).toLong().takeIf { p -> p > 0 } ?: it.positionMs } ?: 0L
+            val event = when (scrobble) {
+                ScrobbleAction.START -> "start"
+                ScrobbleAction.PAUSE -> "pause"
+                else -> "stop"
+            }
+            serverReportedAt[videoId] = currentTimeMillis()
+            scope.launch {
+                reportToServers(meta, video, videoId, event, positionMs, paused = scrobble == ScrobbleAction.PAUSE)
+                if (scrobble == ScrobbleAction.STOP && progressPercent >= 90.0) {
+                    runCatching {
+                        mediaServers.setPlayed(meta.id, meta.imdbId, meta.isSeriesLike && video != null, videoId,
+                            video?.season, video?.episode, true)
+                    }.onFailure { if (it is CancellationException) throw it }
+                }
+            }
         }
         scope.launch {
             runCatching { trakt.scrobble(media, scrobble, progressPercent) }
@@ -708,6 +761,12 @@ class NuvioCore(
             val state = aniList.completedItems()
             watched.addAll(state.keys)
             setTrackerCompleted("anilist", state.completedSeries)
+        }
+        // Jellyfin / Emby: what's played there counts as watched here, and its resume points join
+        // Continue Watching (newest position wins, as with Trakt / Simkl).
+        if (mediaServers.servers.isNotEmpty()) sync("Media server") {
+            watched.addAll(mediaServers.playedKeys())
+            mediaServers.resumeProgress().forEach(::mergeRemoteProgress)
         }
         return error
     }
@@ -881,6 +940,7 @@ class NuvioCore(
         // Kitsu anime episodes have no season but are still episodes.
         val isEpisode = progress.episode != null && progress.contentType != "movie"
         watched.mark(if (isEpisode) progress.videoId else "movie:${progress.contentId}", true)
+        setPlayedOnServers(progress.contentId, null, isEpisode, progress.videoId, progress.season, progress.episode, true)
         watchProgress.remove(progress.contentId)
         dismissFromContinueWatching(progress.contentId)
         val media = TrackedMedia(
