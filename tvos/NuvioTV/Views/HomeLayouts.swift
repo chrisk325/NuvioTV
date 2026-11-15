@@ -344,7 +344,16 @@ struct ModernHomeView: View {
                                            onMoveUp: upToContinueWatching(from: slot))
                         }
                     }
+                    .padding(.top, 30)
                     .padding(.bottom, 60)
+                }
+                // Rows fade out under the hero instead of being cut at a hard line.
+                .mask {
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 70)
+                        Color.black
+                    }
                 }
                 }
             }
