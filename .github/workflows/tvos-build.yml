@@ -63,6 +63,9 @@ jobs:
       # Push / pull_request runs have no inputs: build everything and run the tests.
       BUILD_TARGET: ${{ inputs.target || 'all' }}
       LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 || secrets.NUVIO_LOCAL_PROPERTIES_BASE64 }}
+      # Same extra secrets as the Android workflows (android-release.yml / pr-full-debug-build.yml).
+      LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+      ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
     steps:
       - name: Check out
         uses: actions/checkout@v6
@@ -112,13 +115,24 @@ jobs:
 
       - name: Configure API keys
         run: |
+          local_props="${RUNNER_TEMP}/local.properties"
+          dev_props="${RUNNER_TEMP}/local.dev.properties"
+          : > "${local_props}"
           if [[ -n "${LOCAL_PROPERTIES_BASE64}" ]]; then
-            printf '%s' "${LOCAL_PROPERTIES_BASE64}" | base64 --decode > "${RUNNER_TEMP}/local.properties"
-            ./tvos/scripts/write-secrets.sh "${RUNNER_TEMP}/local.properties"
-            rm -f "${RUNNER_TEMP}/local.properties"
+            printf '%s' "${LOCAL_PROPERTIES_BASE64}" | base64 --decode > "${local_props}"
           else
             echo "::notice::No LOCAL_PROPERTIES_BASE64 secret; building without TMDB/Trakt/Simkl/… keys."
           fi
+          if [[ -n "${LOCAL_DEV_PROPERTIES_BASE64}" ]]; then
+            printf '%s' "${LOCAL_DEV_PROPERTIES_BASE64}" | base64 --decode > "${dev_props}"
+          fi
+          # Like the Android release workflow: the AniList client id comes from its own secret.
+          if [[ -n "${ANILIST_CLIENT_ID}" ]]; then
+            sed -i '' -E '/^[[:space:]]*ANILIST_CLIENT_ID[[:space:]]*[=:]/d' "${local_props}"
+            printf '\n%s=%s\n' "ANILIST_CLIENT_ID" "${ANILIST_CLIENT_ID}" >> "${local_props}"
+          fi
+          ./tvos/scripts/write-secrets.sh "${local_props}" "${dev_props}"
+          rm -f "${local_props}" "${dev_props}"
 
       - name: Test shared core (JVM)
         if: github.event_name != 'workflow_dispatch' || inputs.run_tests

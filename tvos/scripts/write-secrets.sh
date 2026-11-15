@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Writes tvos/Config/Secrets.xcconfig from a local.properties file (same keys as the Android app).
-# Usage: tvos/scripts/write-secrets.sh [path/to/local.properties]
+# Usage: tvos/scripts/write-secrets.sh [local.properties] [local.dev.properties …]
+# A key missing (or empty) in the first file is looked up in the next ones.
 set -euo pipefail
-props="${1:-local.properties}"
+if [[ $# -gt 0 ]]; then files=("$@"); else files=(local.properties local.dev.properties); fi
 out="$(cd "$(dirname "$0")/.." && pwd)/Config/Secrets.xcconfig"
 keys=(TMDB_API_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET SIMKL_CLIENT_ID SIMKL_APP_NAME MDBLIST_CLIENT_ID
       ANILIST_CLIENT_ID PREMIUMIZE_CLIENT_ID INTRODB_API_URL TRAILER_API_URL SUPABASE_URL SUPABASE_ANON_KEY)
 # Value of a key in a Java .properties file, unescaped the way java.util.Properties does it
 # (Android Studio writes "https\://…"; Gradle's Properties.load drops the backslashes).
 read_prop() {
-  [[ -f "$props" ]] || return 0
-  grep -E "^[[:space:]]*$1[[:space:]]*[=:]" "$props" | tail -n 1 \
-    | sed -E "s/^[[:space:]]*$1[[:space:]]*[=:][[:space:]]*//; s/[[:space:]]+\$//" \
-    | sed -E 's/\\(.)/\1/g' || true
+  local file found
+  for file in "${files[@]}"; do
+    [[ -f "$file" ]] || continue
+    found="$(grep -E "^[[:space:]]*$1[[:space:]]*[=:]" "$file" | tail -n 1 \
+      | sed -E "s/^[[:space:]]*$1[[:space:]]*[=:][[:space:]]*//; s/[[:space:]]+\$//" \
+      | sed -E 's/\\(.)/\1/g' || true)"
+    if [[ -n "$found" ]]; then printf '%s' "$found"; return 0; fi
+  done
 }
 
 {
