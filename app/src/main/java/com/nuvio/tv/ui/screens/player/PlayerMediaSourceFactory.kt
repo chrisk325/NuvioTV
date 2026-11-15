@@ -460,6 +460,9 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
 
     fun shutdown() {
         ParallelRangeDataSource.releaseRetainedSession()
+        // The torn-down session's chunks land in the idle pool; nothing draws from it once the
+        // player is gone, so give that native memory back now instead of on the next playback.
+        ParallelRangeDataSource.trimIdleBuffers()
     }
 
     // The counters are all zero at playback start, so the start line never shows what the cache

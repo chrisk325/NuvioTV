@@ -98,6 +98,17 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
         LocaleCache.localeTag = tag ?: ""
     }
 
+    // Idle parallel-download chunk buffers are native memory nothing is using; free them when the
+    // system asks. Chunks a playback still holds are untouched, so this never interrupts playback.
+    @Suppress("DEPRECATION")
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            com.nuvio.tv.ui.screens.player.ParallelRangeDataSource.trimIdleBuffers()
+        }
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun newImageLoader(context: android.content.Context): ImageLoader {
         val imageOkHttpClient by lazy {
