@@ -25,9 +25,10 @@ struct StreamsView: View {
                                startPoint: .leading, endPoint: .trailing)
             }
 
-            HStack(alignment: .top, spacing: 60) {
+            // Narrow info panel, wide cards: formatters with long file names get the room.
+            HStack(alignment: .top, spacing: 40) {
                 header
-                    .frame(width: 520, alignment: .topLeading)
+                    .frame(width: 420, alignment: .topLeading)
                     .padding(.top, 40)
 
                 Group {
@@ -68,7 +69,7 @@ struct StreamsView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(.horizontal, 80)
+            .padding(.horizontal, 50)
         }
         .onAppear(perform: start)
         // Menu always goes back to the details page.
@@ -154,7 +155,7 @@ struct StreamsView: View {
         VStack(alignment: .leading, spacing: 20) {
             if let logo = target.meta.logo {
                 RemoteImage(url: logo, contentMode: .fit)
-                    .frame(maxWidth: 460, maxHeight: 160, alignment: .leading)
+                    .frame(maxWidth: 400, maxHeight: 150, alignment: .leading)
             } else {
                 Text(target.meta.name).font(.system(size: 48, weight: .bold)).lineLimit(3)
             }
@@ -296,7 +297,7 @@ struct StreamRow: View {
                 .font(.headline)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(width: 260, alignment: .leading)
+                .frame(width: 230, alignment: .leading)
             VStack(alignment: .leading, spacing: 10) {
                 if let detail = stream.getDisplayDescription(), detail != stream.getDisplayName() {
                     Text(detail)
