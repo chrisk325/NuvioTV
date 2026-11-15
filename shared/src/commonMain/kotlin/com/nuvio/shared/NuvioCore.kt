@@ -573,9 +573,45 @@ class NuvioCore(
                 episodeTitle = episodeTitle,
                 positionMs = positionMs,
                 durationMs = durationMs,
-                updatedAtMs = currentTimeMillis()
+                updatedAtMs = currentTimeMillis(),
+                thumbnail = if (meta.isSeriesLike) meta.videos.firstOrNull { it.id == videoId }?.thumbnail else null
             )
         )
+    }
+
+    /** contentId → (video id / "season:episode") → episode still. */
+    private val episodeThumbs = LinkedHashMap<String, Map<String, String>>()
+
+    /**
+     * The episode still for a Continue Watching / Up Next entry of a series: the one saved with the
+     * progress, else looked up (once per show) in the show's meta. Null for movies or when the
+     * add-on has no stills, so the card falls back to the show's artwork.
+     */
+    @Throws(Exception::class)
+    suspend fun episodeThumbnail(progress: WatchProgress): String? {
+        progress.thumbnail?.let { return it }
+        if (progress.season == null && progress.episode == null) return null
+        val thumbs = episodeThumbs[progress.contentId] ?: run {
+            val meta = try {
+                meta(progress.contentType, progress.contentId, null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return null
+            }
+            val map = buildMap {
+                for (v in meta.videos) {
+                    val thumb = v.thumbnail?.takeIf { it.isNotBlank() } ?: continue
+                    put(v.id, thumb)
+                    if (v.season != null && v.episode != null) put("${v.season}:${v.episode}", thumb)
+                }
+            }
+            episodeThumbs[progress.contentId] = map
+            if (episodeThumbs.size > 100) episodeThumbs.remove(episodeThumbs.keys.first())
+            map
+        }
+        return thumbs[progress.videoId]
+            ?: if (progress.season != null && progress.episode != null) thumbs["${progress.season}:${progress.episode}"] else null
     }
 
     fun removeProgress(contentId: String) {

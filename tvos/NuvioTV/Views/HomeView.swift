@@ -182,7 +182,7 @@ struct ContinueWatchingRow: View {
                         VStack(alignment: .leading, spacing: 28) { // room for the focused card's lift
                             NavigationLink(value: Route.detail(app.core.previewFor(progress: progress))) {
                                 ZStack(alignment: .bottom) {
-                                    RemoteImage(url: progress.background ?? progress.poster, maxPixel: ImageLoader.wideCardSize)
+                                    ContinueWatchingArtwork(progress: progress)
                                     GeometryReader { geo in
                                         VStack {
                                             Spacer()
@@ -334,5 +334,26 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+/// Continue Watching card art: the episode's still for series (saved with the progress or looked
+/// up once in the show's meta), the show's backdrop / poster for movies or while it loads.
+struct ContinueWatchingArtwork: View {
+    @EnvironmentObject private var app: AppModel
+    let progress: WatchProgress
+    @State private var episodeThumb: String?
+
+    private var isEpisode: Bool { progress.season != nil || progress.episode != nil }
+
+    var body: some View {
+        RemoteImage(url: episodeThumb ?? progress.thumbnail ?? progress.background ?? progress.poster,
+                     maxPixel: ImageLoader.wideCardSize)
+            .task(id: progress.videoId) {
+                guard isEpisode, progress.thumbnail == nil else { return }
+                if let thumb = try? await app.core.episodeThumbnail(progress: progress), !Task.isCancelled {
+                    episodeThumb = thumb
+                }
+            }
     }
 }
