@@ -20,13 +20,14 @@ final class SettingsBinder: ObservableObject {
 
 /// Settings categories, shown in the sidebar (tvOS Settings-app style two-pane layout).
 enum SettingsCategory: String, CaseIterable, Identifiable {
-    case profiles, player, subtitles, home, metadata, accounts, debrid, servers, about
+    case profiles, appearance, player, subtitles, home, metadata, accounts, debrid, servers, about
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .profiles: return "Profiles"
+        case .appearance: return "Appearance"
         case .player: return "Player"
         case .subtitles: return "Subtitles"
         case .home: return "Home"
@@ -41,6 +42,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .profiles: return "person.2.fill"
+        case .appearance: return "paintbrush.fill"
         case .player: return "play.rectangle.fill"
         case .subtitles: return "captions.bubble.fill"
         case .home: return "house.fill"
@@ -55,6 +57,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .profiles: return "Who's watching, PINs"
+        case .appearance: return "Top bar items"
         case .player: return "Engine, HDR, audio, auto-play"
         case .subtitles: return "Languages, style, timing"
         case .home: return "Layout, hero, catalogs"
@@ -145,6 +148,7 @@ struct SettingsView: View {
     private func pane(_ binder: SettingsBinder) -> some View {
         switch selected {
         case .profiles: ProfilesSettingsView()
+        case .appearance: AppearanceSettingsPane(binder: binder)
         case .player: PlayerSettingsPane(binder: binder)
         case .subtitles: SubtitleSettingsPane(binder: binder)
         case .home: HomeSettingsPane(binder: binder)
@@ -321,6 +325,32 @@ private struct SubtitleSettingsPane: View {
                 Text("Advanced")
             } footer: {
                 Text("Leave restyling off to keep anime typesetting exactly as authored (rendered by libass).")
+            }
+        }
+        .padding(.horizontal, 30)
+    }
+}
+
+private struct AppearanceSettingsPane: View {
+    @ObservedObject var binder: SettingsBinder
+    @EnvironmentObject private var app: AppModel
+
+    var body: some View {
+        let s = binder
+        List {
+            Section {
+                ForEach(TopBarTab.allCases) { tab in
+                    Toggle(isOn: s.bind(
+                        { !$0.isTabHidden(tab: tab.rawValue) },
+                        { $0.setTabHidden(tab: tab.rawValue, hidden: !$1); app.objectWillChange.send() }
+                    )) {
+                        Label(tab.title, systemImage: tab.icon)
+                    }
+                }
+            } header: {
+                Text("Top bar")
+            } footer: {
+                Text("Choose which items appear in the top bar. Home and Settings are always shown.")
             }
         }
         .padding(.horizontal, 30)

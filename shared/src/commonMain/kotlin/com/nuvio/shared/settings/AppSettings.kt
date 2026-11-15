@@ -179,6 +179,17 @@ class AppSettings(private val store: KeyValueStore) {
         set(value) = put("home.continueWatching", value)
 
     /** CatalogSlot.key values the user hid from Home. */
+    /** Top bar tabs turned off in Settings > Appearance ("search", "livetv", "library", "addons"). */
+    var hiddenTabs: List<String>
+        get() = list("ui.hiddenTabs")
+        set(value) = putList("ui.hiddenTabs", value.distinct())
+
+    fun isTabHidden(tab: String): Boolean = tab in hiddenTabs
+
+    fun setTabHidden(tab: String, hidden: Boolean) {
+        hiddenTabs = if (hidden) hiddenTabs + tab else hiddenTabs - tab
+    }
+
     var hiddenCatalogKeys: List<String>
         get() = list("home.hiddenCatalogs")
         set(value) = putList("home.hiddenCatalogs", value.distinct())
