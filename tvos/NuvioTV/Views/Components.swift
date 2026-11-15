@@ -254,10 +254,11 @@ extension MetaPreview {
 struct WatchedBadge: View {
     var body: some View {
         Image(systemName: "checkmark")
-            .font(.system(size: 18, weight: .bold))
-            .foregroundStyle(.black)
+            .font(.system(size: 18, weight: .heavy))
+            .foregroundStyle(.white)
             .frame(width: 36, height: 36)
-            .background(Circle().fill(Color.white))
+            .background(Circle().fill(Color(white: 0.38).opacity(0.92)))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
             .shadow(color: .black.opacity(0.4), radius: 4)
             .accessibilityLabel("Watched")
     }

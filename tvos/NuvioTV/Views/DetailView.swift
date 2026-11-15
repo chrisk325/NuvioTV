@@ -452,7 +452,7 @@ struct EpisodeCard: View {
                         if isWatched {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 34))
-                                .foregroundStyle(.white, Color.accentColor)
+                                .foregroundStyle(.white, Color(white: 0.38))
                         } else {
                             Circle()
                                 .strokeBorder(Color.white.opacity(0.85), lineWidth: 3)
