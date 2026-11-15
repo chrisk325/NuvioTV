@@ -196,6 +196,8 @@ import com.nuvio.tv.ui.theme.NuvioPrimitives
 import com.nuvio.tv.ui.theme.NuvioRadii
 import com.nuvio.tv.ui.theme.NuvioStrokes
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.v2.components.GlassRole
+import com.nuvio.tv.ui.v2.components.nuvioGlass
 import com.nuvio.tv.ui.theme.ThemeColors
 import com.nuvio.tv.ui.theme.accentBrush
 import com.nuvio.tv.ui.theme.brandWordmarkResource
@@ -608,6 +610,9 @@ open class MainActivity : ComponentActivity() {
                 }.collectAsState(initial = null)
             }
             val discoverLocation = mainUiPrefs.discoverLocation
+            val v2Appearance by remember {
+                com.nuvio.tv.data.local.V2AppearancePreferenceStore.flow(applicationContext)
+            }.collectAsState(initial = null)
 
             NuvioTheme(
                 appTheme = mainUiPrefs.theme,
@@ -615,7 +620,8 @@ open class MainActivity : ComponentActivity() {
                 appFont = mainUiPrefs.font,
                 amoledMode = mainUiPrefs.amoledMode,
                 amoledSurfacesMode = mainUiPrefs.amoledSurfacesMode,
-                settingsUiStyle = mainUiPrefs.settingsUiStyle
+                settingsUiStyle = mainUiPrefs.settingsUiStyle,
+                v2Appearance = v2Appearance
             ) {
                 val defaultBringIntoViewSpec = LocalBringIntoViewSpec.current
                 val bringIntoViewSpec = if (mainUiPrefs.smoothBringIntoViewEnabled) {
@@ -860,10 +866,18 @@ open class MainActivity : ComponentActivity() {
                         )
                     } else {
                     val sidebarCollapsed = mainUiPrefs.sidebarCollapsed
-                    val modernSidebarEnabled = mainUiPrefs.modernSidebarEnabled
-                    val modernSidebarBlurEnabled =
+                    // Nuvio V2 looks always use the floating sidebar (or the top menu).
+                    val activeV2Appearance = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current
+                    val v2TopNavigation = activeV2Appearance?.navigationStyle ==
+                        com.nuvio.tv.domain.model.NavigationStyle.TOP_NAVIGATION
+                    val modernSidebarEnabled = mainUiPrefs.modernSidebarEnabled || activeV2Appearance != null
+                    val modernSidebarBlurEnabled = if (activeV2Appearance != null) {
+                        activeV2Appearance.visualStyle == com.nuvio.tv.domain.model.VisualStyle.CINEMATIC_GLASS &&
+                            com.nuvio.tv.ui.v2.appearance.LocalGlassTokens.current.liveBlur
+                    } else {
                         mainUiPrefs.modernSidebarBlurPref && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
-                    val hideBuiltInHeadersForFloatingPill = modernSidebarEnabled && !sidebarCollapsed
+                    }
+                    val hideBuiltInHeadersForFloatingPill = (modernSidebarEnabled && !sidebarCollapsed) || v2TopNavigation
 
                     val startDestination = when {
                         needsExperienceSelection -> Screen.ExperienceModeSelection.route
@@ -1194,7 +1208,23 @@ open class MainActivity : ComponentActivity() {
                         }
                         Box(modifier = Modifier.fillMaxSize()) {
                             CompositionLocalProvider(LocalNavViewModelStoreOwner provides navViewModelStoreOwner) {
-                                if (modernSidebarEnabled) {
+                                if (v2TopNavigation) {
+                                    TopNavigationScaffold(
+                                        navController = navController,
+                                        startDestination = startDestination,
+                                        currentRoute = currentRoute,
+                                        rootRoutes = rootRoutes,
+                                        drawerItems = drawerItems,
+                                        selectedDrawerRoute = selectedDrawerRoute,
+                                        activeProfileName = activeProfile?.name ?: "",
+                                        activeProfileColorHex = activeProfile?.avatarColorHex ?: "#1E88E5",
+                                        activeProfileAvatarImageUrl = activeProfileAvatarImageUrl,
+                                        showProfileSelector = profiles.size > 1,
+                                        onSwitchProfile = handleSwitchProfile,
+                                        onNavigate = { optimisticRoute = it },
+                                        onExitApp = handleExitApp
+                                    )
+                                } else if (modernSidebarEnabled) {
                                     ModernSidebarScaffold(
                                         longPressBackHeld = longPressBackHeld,
                                         navController = navController,
@@ -1851,6 +1881,55 @@ private fun LegacySidebarButton(
 }
 }
 
+/** Nuvio V2 top menu: same routes, focus model and destinations as the sidebar. */
+@Composable
+private fun TopNavigationScaffold(
+    navController: NavHostController,
+    startDestination: String,
+    currentRoute: String?,
+    rootRoutes: Set<String>,
+    drawerItems: List<DrawerItem>,
+    selectedDrawerRoute: String?,
+    activeProfileName: String,
+    activeProfileColorHex: String,
+    activeProfileAvatarImageUrl: String?,
+    showProfileSelector: Boolean,
+    onSwitchProfile: () -> Unit,
+    onNavigate: (String) -> Unit,
+    onExitApp: () -> Unit
+) {
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    com.nuvio.tv.ui.v2.navigation.V2TopNavigation(
+        navigationContent = {
+            NuvioNavHost(
+                navController = navController,
+                startDestination = startDestination,
+                hideBuiltInHeaders = true
+            )
+        },
+        currentRoute = currentRoute,
+        rootRoutes = rootRoutes,
+        items = drawerItems,
+        selectedRoute = selectedDrawerRoute,
+        profile = if (showProfileSelector && activeProfileName.isNotEmpty()) {
+            com.nuvio.tv.ui.v2.navigation.TopNavigationProfile(
+                activeProfileName, activeProfileColorHex, activeProfileAvatarImageUrl
+            )
+        } else null,
+        onNavigate = { targetRoute ->
+            keyboardController?.hide()
+            onNavigate(targetRoute)
+            navigateToDrawerRoute(
+                navController = navController,
+                currentRoute = currentRoute,
+                targetRoute = targetRoute
+            )
+        },
+        onSwitchProfile = onSwitchProfile,
+        onExit = onExitApp
+    )
+}
+
 @Composable
 private fun ModernSidebarScaffold(
     longPressBackHeld: MutableState<Boolean>,
@@ -2323,21 +2402,30 @@ private fun CollapsedSidebarPill(
             .padding(horizontal = NuvioTheme.spacing.hairline, vertical = NuvioTheme.spacing.xxs),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
         Box(
             modifier = Modifier
                 .height(NuvioTheme.sizes.player.control)
-                .clip(pillShape)
                 .then(
-                    if (blurEnabled && hazeState != null) {
-                        Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 24.dp
-                            inputScale = HazeInputScale.Fixed(0.66f)
-                        }
+                    if (isV2) {
+                        // V2 pill: shared glass material instead of the plain smoked pill.
+                        Modifier.nuvioGlass(GlassRole.NAVIGATION, shape = pillShape, hazeState = hazeState)
                     } else {
                         Modifier
+                            .clip(pillShape)
+                            .then(
+                                if (blurEnabled && hazeState != null) {
+                                    Modifier.hazeEffect(state = hazeState) {
+                                        blurRadius = 24.dp
+                                        inputScale = HazeInputScale.Fixed(0.66f)
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .background(brush = pillBackgroundBrush, shape = pillShape)
                     }
                 )
-                .background(brush = pillBackgroundBrush, shape = pillShape)
         ) {
             Row(
                 modifier = Modifier

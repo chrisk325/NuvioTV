@@ -187,6 +187,8 @@ fun ThemeSettingsContent(
                 subtitle = stringResource(R.string.appearance_subtitle)
             )
 
+            V2AppearanceSettingsCard()
+
             SettingsGroupCard(
                 modifier = Modifier.fillMaxWidth(),
                 title = stringResource(R.string.appearance_color_theme),
@@ -262,6 +264,8 @@ fun ThemeSettingsContent(
                 }
             }
 
+            // The Nuvio V2 look renders settings flat on glass; the style choice applies to Original.
+            if (com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current == null) {
             SettingsGroupCard(
                 modifier = Modifier.fillMaxWidth(),
                 title = stringResource(R.string.appearance_settings_style),
@@ -289,6 +293,7 @@ fun ThemeSettingsContent(
                         )
                     }
                 }
+            }
             }
 
             SettingsGroupCard(

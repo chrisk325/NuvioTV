@@ -2,6 +2,7 @@
 
 package com.nuvio.tv.ui.screens.settings
 
+import com.nuvio.tv.ui.v2.appearance.v2PageBackground
 import com.nuvio.tv.ui.screens.party.PartySettingsContent
 import com.nuvio.tv.ui.screens.party.PartyViewModel
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -408,10 +409,11 @@ fun SettingsScreen(
         pendingContentFocusCategory = null
     }
 
+    com.nuvio.tv.ui.v2.appearance.V2PageBackdrop {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioTheme.colors.Background)
+            .v2PageBackground(NuvioTheme.colors.Background)
             .padding(
                 start = NuvioTheme.spacing.xxl,
                 end = NuvioTheme.spacing.xxl,
@@ -829,6 +831,7 @@ fun SettingsScreen(
             }
             }
         }
+    }
     }
 }
 

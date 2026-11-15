@@ -82,6 +82,33 @@ fun SourceStatusFilterChip(
         else -> NuvioTheme.colors.TextSecondary
     }
 
+    if (com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null) {
+        // Nuvio V2: glass filter pill; selection is the accent tint, focus the bloom.
+        com.nuvio.tv.ui.v2.components.NuvioFilterPill(
+            onClick = { if (isSelectable) onClick() },
+            selected = isSelected,
+            modifier = modifier
+                .graphicsLayer {
+                    alpha = alphaPulse.value
+                    translationX = shakeOffsetPx.value
+                }
+                .onFocusChanged {
+                    isFocused = it.isFocused
+                    if (it.isFocused && !isSelected && isSelectable) onFocusSelect?.invoke()
+                }
+        ) {
+            Text(
+                text = name,
+                modifier = Modifier.shimmer(isLoading),
+                style = MaterialTheme.typography.labelLarge.copy(
+                    textDirection = name.contentTextDirection()
+                ),
+                color = if (isError) NuvioTheme.colors.Error else NuvioTheme.colors.TextPrimary
+            )
+        }
+        return
+    }
+
     FilterChip(
         selected = isSelected,
         onClick = { if (isSelectable) onClick() },

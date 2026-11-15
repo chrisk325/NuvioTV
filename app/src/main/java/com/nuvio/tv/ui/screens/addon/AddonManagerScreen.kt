@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.addon
 
+import com.nuvio.tv.ui.v2.appearance.v2PageAtmosphere
 import com.nuvio.tv.ui.theme.NuvioPrimitives
 import com.nuvio.tv.ui.theme.NuvioTheme
 
@@ -353,7 +354,7 @@ fun AddonManagerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioTheme.colors.Background)
+            .v2PageAtmosphere(NuvioTheme.colors.Background)
     ) {
         LazyColumn(
             state = listState,

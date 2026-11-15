@@ -12,6 +12,13 @@ import com.nuvio.tv.domain.model.AppFont
 import com.nuvio.tv.domain.model.AppTheme
 import com.nuvio.tv.domain.model.CustomThemeColors
 import com.nuvio.tv.domain.model.SettingsUiStyle
+import com.nuvio.tv.domain.model.V2AppearancePreferences
+import com.nuvio.tv.domain.model.VisualStyle
+import com.nuvio.tv.ui.v2.appearance.GlassQualityTokens
+import com.nuvio.tv.ui.v2.appearance.LocalGlassTokens
+import com.nuvio.tv.ui.v2.appearance.LocalV2Appearance
+import com.nuvio.tv.ui.v2.appearance.v2Palette
+import com.nuvio.tv.ui.v2.components.LocalGlassBackdrop
 
 data class NuvioExtendedColors(
     val backgroundElevated: Color,
@@ -60,17 +67,34 @@ fun NuvioTheme(
     amoledSurfacesMode: Boolean = false,
     settingsUiStyle: SettingsUiStyle = SettingsUiStyle.CLASSIC,
     customThemeColors: CustomThemeColors = CustomThemeColors.Default,
+    v2Appearance: V2AppearancePreferences? = null,
     content: @Composable () -> Unit
 ) {
-    val palette = androidx.compose.runtime.remember(appTheme, customThemeColors) {
+    // Original look: v2 is null and everything below resolves exactly as before.
+    val v2 = v2Appearance?.takeIf { it.isV2 }
+    val originalPalette = androidx.compose.runtime.remember(appTheme, customThemeColors) {
         ThemeColors.getColorPalette(appTheme, customThemeColors)
+    }
+    val palette = androidx.compose.runtime.remember(originalPalette, v2) {
+        if (v2 == null) originalPalette else v2Palette(originalPalette, v2)
     }
     val focusRingStyle = createFocusRingStyle(palette)
     val colorScheme = NuvioColorScheme(
         palette = palette,
-        amoledMode = amoledMode,
-        amoledSurfacesMode = amoledSurfacesMode
+        amoledMode = v2 == null && amoledMode,
+        amoledSurfacesMode = v2 == null && amoledSurfacesMode,
+        glassPresentation = v2 != null
     )
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val deviceGlass = androidx.compose.runtime.remember(context) { GlassQualityTokens.forDevice(context) }
+    val glassTokens = androidx.compose.runtime.remember(deviceGlass, v2?.visualStyle, v2?.glassBlurStrengthPercent) {
+        when (v2?.visualStyle) {
+            VisualStyle.CINEMATIC_GLASS -> deviceGlass.withBlurStrength(v2?.glassBlurStrengthPercent ?: 65)
+            null -> GlassQualityTokens.Performance
+            else -> deviceGlass.copy(liveBlur = false, blurRadiusDp = 0f, inputScale = 0f, noise = 0f)
+        }
+    }
+    val glassBackdrop = androidx.compose.runtime.remember { dev.chrisbanes.haze.HazeState() }
     val typography = buildNuvioTypography(getFontFamily(appFont))
     val textStyles = buildNuvioTextStyles(typography)
 
@@ -99,12 +123,16 @@ fun NuvioTheme(
     )
 
     CompositionLocalProvider(
+        LocalV2Appearance provides v2,
+        LocalGlassTokens provides glassTokens,
+        LocalGlassBackdrop provides glassBackdrop.takeIf { v2?.visualStyle == VisualStyle.CINEMATIC_GLASS },
         LocalNuvioColors provides colorScheme,
         LocalNuvioExtendedColors provides extendedColors,
         LocalNuvioTextStyles provides textStyles,
         LocalAppTheme provides appTheme,
         LocalThemePalette provides palette,
-        LocalSettingsUiStyle provides settingsUiStyle,
+        // V2 renders settings flat on glass, as the Nuvio V2 interface does.
+        LocalSettingsUiStyle provides if (v2 != null) SettingsUiStyle.ZEN else settingsUiStyle,
         LocalNuvioFocusRingStyle provides focusRingStyle
     ) {
         MaterialTheme(

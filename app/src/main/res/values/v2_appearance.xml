@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="v2_look_title">Nuvio V2 look</string>
+    <string name="v2_look_subtitle">Glass styling for menus, pages, dialogs and the player. Only the look changes.</string>
+    <string name="v2_visual_style_title">Visual style</string>
+    <string name="v2_visual_style_subtitle">Original keeps the classic Nuvio look</string>
+    <string name="v2_style_original">Original</string>
+    <string name="v2_style_cinematic" translatable="false">Cinematic Glass</string>
+    <string name="v2_style_dark" translatable="false">Pure Liquid Dark</string>
+    <string name="v2_style_cinematic_description">Frosted glass over the selected title\'s artwork</string>
+    <string name="v2_style_dark_description">Deep dark surfaces with soft liquid folds</string>
+    <string name="v2_navigation_title">Navigation style</string>
+    <string name="v2_navigation_subtitle">Where the main menu sits</string>
+    <string name="v2_navigation_sidebar">Floating sidebar</string>
+    <string name="v2_navigation_top">Top menu</string>
+    <string name="v2_player_chrome">Player controls</string>
+    <string name="v2_player_chrome_subtitle">How the playback controls are drawn</string>
+    <string name="v2_player_deck">Control deck</string>
+    <string name="v2_player_invisible">Invisible</string>
+    <string name="v2_player_deck_description">Controls sit on a glass panel</string>
+    <string name="v2_player_invisible_description">Controls float over the picture</string>
+</resources>

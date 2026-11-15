@@ -79,6 +79,25 @@ fun RefreshFilterChip(
         }
     }
 
+    if (com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null) {
+        com.nuvio.tv.ui.v2.components.NuvioFilterPill(
+            onClick = onClick,
+            modifier = modifier.onFocusChanged {
+                isFocused = it.isFocused
+                onFocusChanged(it.isFocused)
+            }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = stringResource(R.string.cd_refresh),
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer { rotationZ = rotationAnimatable.value },
+                tint = NuvioTheme.colors.TextPrimary
+            )
+        }
+        return
+    }
     FilterChip(
         selected = false,
         onClick = onClick,

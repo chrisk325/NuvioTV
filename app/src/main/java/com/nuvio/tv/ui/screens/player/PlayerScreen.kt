@@ -17,6 +17,9 @@ import com.nuvio.tv.ui.screens.player.seekpreview.rememberSeekPreviewController
 import kotlinx.coroutines.delay
 
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.v2.components.GlassRole
+import com.nuvio.tv.ui.v2.components.nuvioGlass
+import com.nuvio.tv.ui.v2.components.nuvioV2Focus
 import com.nuvio.tv.ui.theme.accentBrush
 
 import android.util.Log
@@ -2995,6 +2998,18 @@ private fun PlayerControlsOverlay(
         progressBarFocusRequester
     }
 
+    // Nuvio V2 player chrome: Control deck (glass panel) or Invisible (controls float on video).
+    val v2Appearance = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current
+    val v2Deck = v2Appearance?.playerChromeStyle == com.nuvio.tv.domain.model.PlayerChromeStyle.CONTROL_DECK
+    val v2CinematicGlass = v2Appearance?.visualStyle == com.nuvio.tv.domain.model.VisualStyle.CINEMATIC_GLASS
+    val bottomShadeAlpha = when {
+        v2Appearance == null -> 0.8f
+        v2CinematicGlass && v2Deck -> 0.20f
+        v2Deck -> 0.55f
+        else -> 0.78f
+    }
+    val deckShape = remember { RoundedCornerShape(12.dp) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Top gradient
         Box(
@@ -3022,7 +3037,7 @@ private fun PlayerControlsOverlay(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.8f)
+                            Color.Black.copy(alpha = bottomShadeAlpha)
                         )
                     )
                 )
@@ -3111,6 +3126,19 @@ private fun PlayerControlsOverlay(
 
             Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
 
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (v2Deck) {
+                            Modifier
+                                .nuvioGlass(GlassRole.CONTROL, shape = deckShape)
+                                .padding(horizontal = 12.dp, vertical = 14.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
+            ) {
             if (!isLivePlayback) {
                 // Progress bar — always LTR regardless of locale
                 DisposableEffect(Unit) {
@@ -3145,8 +3173,8 @@ private fun PlayerControlsOverlay(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
-            } else {
+                Spacer(modifier = Modifier.height(if (v2Deck) NuvioTheme.spacing.sm else NuvioTheme.spacing.lg))
+            } else if (!v2Deck) {
                 Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
             }
 
@@ -3369,6 +3397,7 @@ private fun PlayerControlsOverlay(
                 PlayerControlsTimeTextHost(viewModel = viewModel)
             }
             }
+            }
         }
     }
 
@@ -3503,6 +3532,7 @@ private fun ControlButton(
     contentColor: Color = Color.White
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
 
     IconButton(
         onClick = onClick,
@@ -3544,12 +3574,22 @@ private fun ControlButton(
             .onFocusChanged {
                 isFocused = it.isFocused
                 if (it.isFocused) onFocused?.invoke()
-            },
+            }
+            .then(
+                if (isV2) {
+                    // V2 glass transport button: accent bloom focus instead of a white disc.
+                    Modifier
+                        .nuvioV2Focus(isFocused, CircleShape, hardwareShadow = false)
+                        .nuvioGlass(GlassRole.CONTROL, isFocused, CircleShape)
+                } else {
+                    Modifier
+                }
+            ),
         colors = IconButtonDefaults.colors(
             containerColor = Color.Transparent,
-            focusedContainerColor = Color.White,
+            focusedContainerColor = if (isV2) Color.Transparent else Color.White,
             contentColor = contentColor,
-            focusedContentColor = Color.Black
+            focusedContentColor = if (isV2) Color.White else Color.Black
         ),
         shape = IconButtonDefaults.shape(shape = CircleShape)
     ) {
