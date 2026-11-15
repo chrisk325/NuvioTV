@@ -17,18 +17,29 @@ struct HeroCarousel: View {
             let item = items[min(index, items.count - 1)]
             VStack(alignment: .leading, spacing: 16) {
                 NavigationLink(value: Route.detail(item)) {
-                    ZStack(alignment: .bottomLeading) {
-                        RemoteImage(url: item.backdropUrl ?? item.poster)
-                            .id(item.id)
-                            .transition(.opacity)
-                        LinearGradient(colors: [.black.opacity(0.85), .clear], startPoint: .leading, endPoint: .trailing)
-                        LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
-                        HeroInfo(item: item, maxWidth: 820)
-                            .padding(50)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: height)
-                    .clipped()
+                    // The backdrop fills (and overflows) the card, so it sits in an overlay of a
+                    // fixed-size base; otherwise it grows the layout and pushes the info out of view.
+                    Color.clear
+                        .frame(maxWidth: .infinity)
+                        .frame(height: height)
+                        .overlay {
+                            RemoteImage(url: item.backdropUrl ?? item.poster)
+                                .id(item.id)
+                                .transition(.opacity)
+                        }
+                        .overlay {
+                            ZStack {
+                                LinearGradient(colors: [.black.opacity(0.85), .clear], startPoint: .leading, endPoint: .trailing)
+                                LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
+                            }
+                        }
+                        .overlay(alignment: .bottomLeading) {
+                            HeroInfo(item: item, maxWidth: 820, logoMaxHeight: 130, spacing: 14)
+                                .padding(.horizontal, 50)
+                                .padding(.bottom, 44)
+                                .padding(.top, 30)
+                        }
+                        .clipped()
                     .background(FocusReporter { isFocused = true })
                 }
                 .buttonStyle(.card)
