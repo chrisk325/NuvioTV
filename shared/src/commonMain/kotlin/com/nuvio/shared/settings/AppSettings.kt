@@ -164,7 +164,7 @@ class AppSettings(private val store: KeyValueStore) {
         heroCatalogKeys = if (enabled) heroCatalogKeys + key else heroCatalogKeys - key
     }
 
-    /** Android modernLandscapePostersEnabled (default off): Modern rows use the add-on's posters. */
+    /** Android landscapePosterMode (default off): every poster card becomes a 16:9 card with the add-on's landscape art. */
     var modernLandscapePosters: Boolean
         get() = bool("home.modernLandscape", false)
         set(value) = put("home.modernLandscape", value)

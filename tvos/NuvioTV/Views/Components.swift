@@ -191,6 +191,15 @@ struct PosterCard: View {
     }
 
     var body: some View {
+        // Landscape posters (Settings > Home) switch every poster card in the app, as on Android.
+        if app.settings.modernLandscapePosters {
+            LandscapeCard(item: item, width: PosterGrid.landscapeWidth, onFocus: onFocus, onMoveUp: onMoveUp)
+        } else {
+            portrait
+        }
+    }
+
+    private var portrait: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: Route.detail(item)) {
                 ZStack {
@@ -219,6 +228,18 @@ struct PosterCard: View {
                 .frame(width: width, alignment: .leading)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Grid columns and card sizes for portrait vs landscape posters.
+enum PosterGrid {
+    static let portraitWidth: CGFloat = 220
+    static let landscapeWidth: CGFloat = 400
+
+    static func columns(landscape: Bool) -> [GridItem] {
+        landscape
+            ? Array(repeating: GridItem(.fixed(landscapeWidth), spacing: 40), count: 4)
+            : Array(repeating: GridItem(.fixed(portraitWidth), spacing: 40), count: 7)
     }
 }
 

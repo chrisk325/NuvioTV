@@ -3,7 +3,7 @@ import NuvioShared
 
 struct LibraryView: View {
     @EnvironmentObject private var app: AppModel
-    private let columns = Array(repeating: GridItem(.fixed(220), spacing: 40), count: 7)
+    private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
 
     var body: some View {
         if app.library.isEmpty && app.traktWatchlist.isEmpty {

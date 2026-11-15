@@ -339,11 +339,11 @@ private struct HomeSettingsPane: View {
                                     (AppSettings.companion.LAYOUT_GRID, "Grid")],
                           selection: s.bind({ $0.homeLayout }, { $0.homeLayout = $1; app.objectWillChange.send() }))
                 Toggle("Hero carousel (Classic / Grid)", isOn: s.bind({ $0.showHero }, { $0.showHero = $1; app.objectWillChange.send() }))
-                Toggle("Landscape posters (Modern)", isOn: s.bind({ $0.modernLandscapePosters }, { $0.modernLandscapePosters = $1; app.objectWillChange.send() }))
+                Toggle("Landscape posters", isOn: s.bind({ $0.modernLandscapePosters }, { $0.modernLandscapePosters = $1; app.objectWillChange.send() }))
             } header: {
                 Text("Layout")
             } footer: {
-                Text("Modern: artwork follows focus over the add-on's posters (or landscape art when Landscape posters is on). Classic: hero carousel and poster rows. Grid: every catalog as a poster grid.")
+                Text("Modern: artwork follows focus above poster rows. Classic: hero carousel and poster rows. Grid: every catalog as a poster grid. Landscape posters turns every poster in the app into a 16:9 card with the add-on's landscape art (its landscape poster, else its background, else its poster).")
             }
 
             Section("Rows") {

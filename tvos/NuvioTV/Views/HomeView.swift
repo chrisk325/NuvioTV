@@ -252,7 +252,7 @@ struct CatalogGridView: View {
     @State private var error: String?
     @State private var genre = ""
 
-    private let columns = Array(repeating: GridItem(.fixed(220), spacing: 40), count: 7)
+    private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
 
     var body: some View {
         ScrollView {

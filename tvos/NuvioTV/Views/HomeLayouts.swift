@@ -234,7 +234,8 @@ private struct GridSection: View {
     @EnvironmentObject private var feed: HomeFeed
     let slot: CatalogSlot
 
-    private let columns = Array(repeating: GridItem(.fixed(220), spacing: 40), count: 7)
+    private var landscape: Bool { app.settings.modernLandscapePosters }
+    private var columns: [GridItem] { PosterGrid.columns(landscape: landscape) }
 
     var body: some View {
         let state = feed.state(slot)
@@ -243,8 +244,8 @@ private struct GridSection: View {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(slot.title).font(.title3).bold().padding(.horizontal, 60)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 40) {
-                        // 13 posters + "See all" fills two rows of seven.
-                        ForEach(Array(state.items.prefix(13).enumerated()), id: \.offset) { _, item in
+                        // Posters + "See all" fill two rows: 13 + 1 of seven portrait, 7 + 1 of four landscape.
+                        ForEach(Array(state.items.prefix(landscape ? 7 : 13).enumerated()), id: \.offset) { _, item in
                             PosterCard(item: item)
                         }
                         NavigationLink(value: Route.catalog(slot)) {
@@ -252,7 +253,8 @@ private struct GridSection: View {
                                 Image(systemName: "square.grid.2x2").font(.largeTitle)
                                 Text("See all").font(.headline)
                             }
-                            .frame(width: 220, height: 326)
+                            .frame(width: landscape ? PosterGrid.landscapeWidth : PosterGrid.portraitWidth,
+                                   height: landscape ? PosterGrid.landscapeWidth * 9 / 16 : 326)
                             .background(Color.white.opacity(0.08))
                         }
                         .buttonStyle(.card)
@@ -270,8 +272,8 @@ private struct GridSection: View {
 
 // MARK: - Modern
 
-/// Large hero that follows focus, with poster rows below (landscape cards when enabled in
-/// settings, like Android ModernHomeContent's modernLandscapePostersEnabled).
+/// Large hero that follows focus, with poster rows below (landscape cards when Landscape
+/// posters is on, which applies to every layout).
 struct ModernHomeView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var feed: HomeFeed
