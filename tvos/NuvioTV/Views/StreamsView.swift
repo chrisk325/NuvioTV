@@ -295,7 +295,7 @@ struct StreamRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 28) {
             Text(stream.getDisplayName())
-                .font(.headline)
+                .font(.headline.weight(.bold))
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 230, alignment: .leading)

@@ -209,4 +209,24 @@ class MediaServerPlaybackInfoTest {
         assertEquals("AIOMetadata\n4K", streams[0].name)
         assertEquals("http://jf/Videos/m1/stream?static=true&MediaSourceId=a2&api_key=tok", streams[1].url)
     }
+
+    @Test
+    fun formatterTextSplitsIntoNameAndDescription() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items/m1" -> respond("""{"Id":"m1","Name":"Show","Type":"Episode","MediaSources":[]}""", HttpStatusCode.OK, json)
+                "/Items/m1/PlaybackInfo" -> respond(
+                    """{"MediaSources":[{"Id":"a1","Name":"Web T1 : 6375\n> 4K\n> 11.21 GB","Path":"https://aio.example/a1","Protocol":"Http","Size":11208000000}]}""",
+                    HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply {
+            putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"AIOMetadata","address":"http://jf","userId":"u1","token":"tok"}]""")
+        }
+        val stream = MediaServerService(http, store).streams("series", "mediaserver:srv:m1").single().streams.single()
+        assertEquals("Web T1 : 6375", stream.name)
+        assertEquals("> 4K\n> 11.21 GB", stream.description)
+    }
 }

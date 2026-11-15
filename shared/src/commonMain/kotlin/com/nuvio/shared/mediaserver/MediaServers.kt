@@ -486,10 +486,19 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             remote != null -> remote
             else -> "${server.address}/Videos/$itemId/stream?static=true&MediaSourceId=${encodeUrlComponent(sourceId)}&api_key=${server.token}"
         }
+        // Add-on bridges (AIOStreams formatters) put the stream's name on the first line of the
+        // source name and its details below, as Stremio's name / description: show them that way,
+        // as the Android app does, instead of the server name.
+        val lines = sourceName?.lines()?.map { it.trimEnd() }?.filter { it.isNotBlank() }.orEmpty()
+        val formatted = lines.size > 1
+        val name = if (formatted) lines.first().trim()
+            else listOf(server.name, label).filter { it.isNotBlank() }.joinToString("\n")
+        val description = if (formatted) lines.drop(1).joinToString("\n")
+            else listOfNotNull(sourceName, size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null }
         return Stream(
-            name = listOf(server.name, label).filter { it.isNotBlank() }.joinToString("\n"),
-            title = sourceName ?: target.str("Name"),
-            description = listOfNotNull(sourceName, size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null },
+            name = name,
+            title = if (formatted) description else sourceName ?: target.str("Name"),
+            description = description,
             url = url,
             ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
             behaviorHints = StreamBehaviorHints(
