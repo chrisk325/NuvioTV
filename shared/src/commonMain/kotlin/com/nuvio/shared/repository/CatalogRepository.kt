@@ -11,7 +11,31 @@ data class CatalogSlot(
     val catalog: CatalogDescriptor
 ) {
     val key: String get() = "${addon.id}_${addon.baseUrl}_${catalog.apiType}_${catalog.id}"
-    val title: String get() = "${catalog.name} - ${catalog.apiType.replaceFirstChar { it.uppercase() }}"
+    val title: String get() = titleFor(emptyList())
+
+    /**
+     * "Name - Movie" / "Name - Series". Catalogs with a custom type (e.g. AIOMetadata's mixed
+     * "TMDB Trending", typed "AIOMetadata") are labelled by what they contain instead:
+     * Movies, Series, or Movies & Series.
+     */
+    fun titleFor(items: List<com.nuvio.shared.model.MetaPreview>): String {
+        val type = catalog.apiType.trim().lowercase()
+        val label = when (type) {
+            "movie" -> "Movie"
+            "series" -> "Series"
+            "tv", "channel", "anime" -> type.replaceFirstChar { it.uppercase() }
+            else -> {
+                val kinds = items.map { if (it.apiType == "movie") "movie" else "series" }.toSet()
+                when {
+                    kinds == setOf("movie") -> "Movies"
+                    kinds == setOf("series") -> "Series"
+                    kinds.size > 1 -> "Movies & Series"
+                    else -> null
+                }
+            }
+        }
+        return if (label == null) catalog.name else "${catalog.name} - $label"
+    }
 }
 
 class CatalogRepository(private val client: StremioClient) {

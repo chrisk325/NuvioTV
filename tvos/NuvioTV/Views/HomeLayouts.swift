@@ -242,7 +242,7 @@ private struct GridSection: View {
         Group {
             if !state.items.isEmpty {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(slot.title).font(.title3).bold().padding(.horizontal, 60)
+                    Text(slot.titleFor(items: state.items)).font(.title3).bold().padding(.horizontal, 60)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 40) {
                         // Posters + "See all" fill two rows: 13 + 1 of seven portrait, 7 + 1 of four landscape.
                         ForEach(Array(state.items.prefix(landscape ? 7 : 13).enumerated()), id: \.offset) { _, item in

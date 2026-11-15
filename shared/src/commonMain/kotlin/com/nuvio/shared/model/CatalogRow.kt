@@ -24,5 +24,22 @@ data class CatalogRow(
 
     /** Row title as shown in Nuvio: "Popular - Movie". */
     val displayTitle: String
-        get() = "$catalogName - ${apiType.replaceFirstChar { it.uppercase() }}"
+        get() {
+            val label = when (val type = apiType.trim().lowercase()) {
+                "movie" -> "Movie"
+                "series" -> "Series"
+                "tv", "channel", "anime" -> type.replaceFirstChar { it.uppercase() }
+                else -> {
+                    // Custom catalog types (e.g. "AIOMetadata"): say what the row holds instead.
+                    val kinds = items.map { if (it.apiType == "movie") "movie" else "series" }.toSet()
+                    when {
+                        kinds == setOf("movie") -> "Movies"
+                        kinds == setOf("series") -> "Series"
+                        kinds.size > 1 -> "Movies & Series"
+                        else -> null
+                    }
+                }
+            }
+            return if (label == null) catalogName else "$catalogName - $label"
+        }
 }

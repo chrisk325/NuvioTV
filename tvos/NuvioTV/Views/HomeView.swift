@@ -108,7 +108,7 @@ struct CatalogRowView: View {
         Group {
             if !state.items.isEmpty {
                 MetaRowView(
-                    title: slot.title,
+                    title: slot.titleFor(items: state.items),
                     items: state.items,
                     seeAll: .catalog(slot),
                     landscape: landscape,
@@ -260,7 +260,7 @@ struct CatalogGridView: View {
         ScrollView {
             // The title is part of the scrolling content: a navigationTitle stays pinned on tvOS
             // and the grid slid over it.
-            Text(slot.title)
+            Text(slot.titleFor(items: items))
                 .font(.title2.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 60)
