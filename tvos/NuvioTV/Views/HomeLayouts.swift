@@ -300,9 +300,9 @@ struct ModernHomeView: View {
                     // Focusable hero: opens the title; left / right flick through the featured titles.
                     NavigationLink(value: Route.detail(hero)) {
                         // Compact so the poster rows get more of the screen.
-                        HeroInfo(item: hero, maxWidth: 820, descriptionLines: 2, logoMaxHeight: 120, spacing: 12)
+                        HeroInfo(item: hero, maxWidth: 820, descriptionLines: 2, logoMaxHeight: 90, spacing: 10)
                             .padding(.horizontal, 30)
-                            .padding(.vertical, 16)
+                            .padding(.vertical, 10)
                             .frame(maxWidth: 900, alignment: .leading)
                     }
                     .buttonStyle(ModernHeroStyle())
@@ -316,7 +316,7 @@ struct ModernHomeView: View {
                     }
                     .padding(.horizontal, 50)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 320, alignment: .topLeading)
+                    .frame(height: 260, alignment: .topLeading)
                     .focusSection()
                 }
                 ScrollViewReader { proxy in
