@@ -19,7 +19,8 @@ struct PeopleRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 36) {
                     ForEach(Array(people.enumerated()), id: \.offset) { index, person in
-                        VStack(spacing: 10) {
+                        // Room for the focused photo's lift (it grows ~10% and would touch the name).
+                        VStack(spacing: 30) {
                             if linksToTmdb && person.id > 0 {
                                 NavigationLink(value: Route.person(person.id)) { avatar(person) }
                                     .buttonStyle(.card)

@@ -200,7 +200,8 @@ struct PosterCard: View {
     }
 
     private var portrait: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Room for the focused poster's lift so it doesn't touch the title.
+        VStack(alignment: .leading, spacing: 28) {
             NavigationLink(value: Route.detail(item)) {
                 ZStack {
                     RemoteImage(url: item.poster ?? item.backdropUrl)
