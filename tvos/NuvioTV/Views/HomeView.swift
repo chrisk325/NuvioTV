@@ -177,7 +177,7 @@ struct ContinueWatchingRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 40) {
                     ForEach(items, id: \.videoId) { progress in
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 28) { // room for the focused card's lift
                             NavigationLink(value: Route.detail(app.core.previewFor(progress: progress))) {
                                 ZStack(alignment: .bottom) {
                                     RemoteImage(url: progress.background ?? progress.poster)
