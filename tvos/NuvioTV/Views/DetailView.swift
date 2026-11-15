@@ -21,6 +21,13 @@ extension View {
         }
     }
 
+    /// Runs [action] when the user presses Down on this (focused) view.
+    func onMoveDown(_ action: @escaping () -> Void) -> some View {
+        onMoveCommand { direction in
+            if direction == .down { action() }
+        }
+    }
+
     /// Runs [action] when the user presses Up on this view. Put it on the focusable control
     /// itself; a container never receives the press. The action runs a moment after the press:
     /// a focus change made while tvOS is still handling the same move is discarded.
@@ -52,6 +59,10 @@ struct DetailView: View {
     @FocusState private var focus: DetailFocus?
     /// The episode card last focused; Up from the rows below returns to it.
     @State private var lastEpisodeId: String?
+    /// Two screens, as in the Apple TV app: the hero (info + buttons over sharp artwork), and below
+    /// it episodes / cast / more over blurred artwork. The logo glides between the two.
+    @State private var showLower = false
+    @Namespace private var logoSpace
 
     var body: some View {
         Group {
@@ -75,7 +86,8 @@ struct DetailView: View {
                 }
             }
         }
-        .onExitCommand { dismiss() }
+        // Menu on the lower screen goes back to the hero first.
+        .onExitCommand { if showLower { goToHero() } else { dismiss() } }
         // Full-screen details: the tab bar (Home / Search / … / Settings) is hidden here and
         // comes back on Menu.
         .toolbar(.hidden, for: .tabBar)
@@ -158,17 +170,120 @@ struct DetailView: View {
         return hasEpisodes(meta) ? episodeAnchor(meta) : .play
     }
 
+    private func hasLowerContent(_ meta: Meta) -> Bool {
+        hasEpisodes(meta) || !(details?.people.isEmpty ?? true) || !meta.cast.isEmpty
+            || !meta.director.isEmpty || !meta.writer.isEmpty
+            || !(details?.collectionParts.isEmpty ?? true) || !(details?.recommendations.isEmpty ?? true)
+    }
+
+    private static let pageAnimation = Animation.spring(response: 0.55, dampingFraction: 0.9)
+
+    /// Down from the hero buttons: slide to the episodes / cast screen.
+    private func goToLower(_ meta: Meta) {
+        guard !showLower, hasLowerContent(meta) else { return }
+        withAnimation(Self.pageAnimation) { showLower = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            if hasEpisodes(meta) {
+                focus = episodeAnchor(meta)
+            } else if !(details?.people.isEmpty ?? true) {
+                focus = .people
+            }
+        }
+    }
+
+    /// Up from the top row of the lower screen (or Menu): back to the hero.
+    private func goToHero() {
+        guard showLower else { return }
+        withAnimation(Self.pageAnimation) { showLower = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focus = .play }
+    }
+
+    /// Up from a lower row: the row above, or the hero when that row was the top one.
+    private func moveUp(from meta: Meta) {
+        let target = rowAboveTarget(meta)
+        if target == .play { goToHero() } else { focus = target }
+    }
+
+    /// The title logo (or name), shared between the two screens so it glides from the hero's
+    /// bottom-left to the top centre of the lower screen.
+    @ViewBuilder
+    private func titleLogo(_ meta: Meta, compact: Bool) -> some View {
+        Group {
+            if let logo = meta.logo {
+                RemoteImage(url: logo, contentMode: .fit)
+            } else {
+                Text(meta.name)
+                    .font(compact ? .title2 : .largeTitle)
+                    .bold()
+                    .lineLimit(2)
+                    .multilineTextAlignment(compact ? .center : .leading)
+            }
+        }
+        .frame(maxWidth: compact ? 460 : 600, maxHeight: compact ? 100 : 200,
+               alignment: compact ? .center : .leading)
+        .matchedGeometryEffect(id: "title-logo", in: logoSpace)
+    }
+
     @ViewBuilder
     private func content(_ meta: Meta) -> some View {
+        ZStack {
+            FullScreenBackdrop(url: meta.backdropUrl) {
+                LinearGradient(
+                    colors: [.black.opacity(0.75), .black.opacity(0.25), .clear],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.55), .black.opacity(0.9)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+            .blur(radius: showLower ? 30 : 0, opaque: true)
+            .overlay(Color.black.opacity(showLower ? 0.35 : 0).ignoresSafeArea())
+
+            if showLower {
+                lowerScreen(meta)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                heroScreen(meta)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    /// First screen: title info and buttons at the bottom left over the sharp artwork.
+    private func heroScreen(_ meta: Meta) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 0)
+            hero(meta)
+            if hasLowerContent(meta) {
+                HStack(spacing: 10) {
+                    Text(hasEpisodes(meta) ? "Episodes" : "More")
+                    Image(systemName: "chevron.down")
+                }
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 80)
+                .padding(.top, 28)
+            }
+        }
+        .padding(.bottom, 60)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+
+    /// Second screen: logo on top, then episodes, cast and the rest, over blurred artwork.
+    private func lowerScreen(_ meta: Meta) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 40) {
-                hero(meta)
+                titleLogo(meta, compact: true)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
                 if hasEpisodes(meta) {
-                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus, lastFocusedId: $lastEpisodeId)
+                    EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus,
+                                    lastFocusedId: $lastEpisodeId, onMoveUpFromTop: { goToHero() })
                 }
                 if let people = details?.people, !people.isEmpty {
                     PeopleRow(title: "Cast", people: people, linksToTmdb: app.core.tmdb.isConfigured, focus: $focus,
-                              onMoveUp: { focus = hasEpisodes(meta) ? episodeAnchor(meta) : .play })
+                              onMoveUp: { if hasEpisodes(meta) { focus = episodeAnchor(meta) } else { goToHero() } })
                 } else if !meta.cast.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Cast").font(.headline)
@@ -195,36 +310,22 @@ struct DetailView: View {
                 }
                 if let details, !details.collectionParts.isEmpty {
                     MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts,
-                                onMoveUp: { focus = rowAboveTarget(meta) })
+                                onMoveUp: { moveUp(from: meta) })
                 }
                 if let details, !details.recommendations.isEmpty {
                     // With a collection row above, let the focus engine move between the two rows.
                     MetaRowView(title: "More like this", items: details.recommendations,
-                                onMoveUp: details.collectionParts.isEmpty ? (({ focus = rowAboveTarget(meta) }) as () -> Void) : nil)
+                                onMoveUp: details.collectionParts.isEmpty ? (({ moveUp(from: meta) }) as () -> Void) : nil)
                 }
             }
             .padding(.bottom, 80)
-        }
-        .background {
-            FullScreenBackdrop(url: meta.backdropUrl) {
-                LinearGradient(
-                    colors: [.black.opacity(0.35), .black.opacity(0.85), .black],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
         }
     }
 
     @ViewBuilder
     private func hero(_ meta: Meta) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            if let logo = meta.logo {
-                RemoteImage(url: logo, contentMode: .fit)
-                    .frame(maxWidth: 600, maxHeight: 200, alignment: .leading)
-            } else {
-                Text(meta.name).font(.largeTitle).bold()
-            }
+            titleLogo(meta, compact: false)
             Text(infoLine(meta)).font(.callout).foregroundStyle(.secondary)
             if !ratings.isEmpty {
                 RatingsRow(ratings: ratings)
@@ -235,11 +336,14 @@ struct DetailView: View {
             if let description = meta.description_, !description.isEmpty {
                 Text(description)
                     .font(.body)
-                    .lineLimit(5)
+                    .lineLimit(3)
                     .frame(maxWidth: 1200, alignment: .leading)
             }
+            // Down from any button slides to the episodes / cast screen (handled on each button:
+            // move commands only reach the focused control).
             HStack(spacing: 30) {
                 playButton(meta)
+                    .onMoveDown { goToLower(meta) }
                 if !meta.isSeriesLike {
                     let watched = app.isWatched(meta, nil)
                     Button {
@@ -247,6 +351,7 @@ struct DetailView: View {
                     } label: {
                         Label(watched ? "Watched" : "Mark watched", systemImage: watched ? "eye.fill" : "eye")
                     }
+                    .onMoveDown { goToLower(meta) }
                 }
                 if app.core.hasTrailerApi && !meta.trailerYtIds.isEmpty {
                     Button {
@@ -255,6 +360,7 @@ struct DetailView: View {
                         Label(isLoadingTrailer ? "Loading…" : "Trailer", systemImage: "film")
                     }
                     .disabled(isLoadingTrailer)
+                    .onMoveDown { goToLower(meta) }
                 }
                 Button {
                     app.toggleLibrary(meta)
@@ -264,12 +370,12 @@ struct DetailView: View {
                         systemImage: app.isInLibrary(meta.id) ? "checkmark" : "plus"
                     )
                 }
+                .onMoveDown { goToLower(meta) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .focusSection()
         }
         .padding(.horizontal, 80)
-        .padding(.top, 300)
     }
 
     @ViewBuilder
@@ -336,7 +442,7 @@ private struct EpisodeAction {
     let label: String
 }
 
-/// Episodes on the details page: centred logo, season tabs, then a horizontal row of large
+/// Episodes on the details page: season tabs, then a horizontal row of large
 /// episode cards (watched circle, "Episode N", title, synopsis, runtime · air date).
 struct EpisodesSection: View {
     @EnvironmentObject private var app: AppModel
@@ -345,17 +451,13 @@ struct EpisodesSection: View {
     var focus: FocusState<DetailFocus?>.Binding? = nil
     /// The episode card last focused (Up from the rows below returns to it).
     @Binding var lastFocusedId: String?
+    /// Up from the top row (season tabs, else the episode cards): back to the hero screen.
+    var onMoveUpFromTop: (() -> Void)? = nil
 
     var body: some View {
         let seasons = meta.seasons().map { $0.int32Value }
         let episodes = meta.episodesForSeason(season: selectedSeason)
         VStack(alignment: .leading, spacing: 28) {
-            if let logo = meta.logo {
-                RemoteImage(url: logo, contentMode: .fit)
-                    .frame(maxWidth: 520, maxHeight: 110)
-                    .frame(maxWidth: .infinity)
-            }
-
             if seasons.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
@@ -370,6 +472,7 @@ struct EpisodesSection: View {
                                     })
                             }
                             .buttonStyle(SeasonTabStyle(isSelected: season == selectedSeason))
+                            .onMoveUp(onMoveUpFromTop)
                         }
                     }
                     .padding(.horizontal, 80)
@@ -391,6 +494,7 @@ struct EpisodesSection: View {
                         // Same modifier on every card, always: a focus binding that moves between
                         // cards rebuilt the focused card and threw focus back to episode 1.
                         .detailFocus(focus, .episode(video.id))
+                        .onMoveUp(seasons.count > 1 ? nil : onMoveUpFromTop)
                     }
                 }
                 .padding(.horizontal, 80)
