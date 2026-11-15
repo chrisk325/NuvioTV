@@ -8,6 +8,16 @@ struct StreamTarget: Hashable {
 
     var videoId: String { video?.id ?? meta.defaultVideoId }
 
+    /// "tt…" / "tt…:season:episode" for Jellyfin / Emby, whatever id scheme the add-on uses.
+    var serverVideoId: String? {
+        guard let imdb = (meta.imdbId ?? (meta.id.hasPrefix("tt") ? meta.id : nil))?
+            .components(separatedBy: ":").first else { return nil }
+        if let video, let s = video.season?.int32Value, let e = video.episode?.int32Value {
+            return "\(imdb):\(s):\(e)"
+        }
+        return imdb
+    }
+
     var title: String {
         guard let video, let label = video.episodeLabel else { return meta.name }
         return "\(meta.name) · \(label) · \(video.title)"

@@ -315,7 +315,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         streamSubscription = core.loadStreams(
             type: request.meta.apiType,
             videoId: target.videoId,
-            embedded: next.streams
+            embedded: next.streams,
+            serverVideoId: target.serverVideoId
         ) { [weak self] update in
             MainActor.assumeIsolated {
                 guard let self, self.isResolvingNext else { return }

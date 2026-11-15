@@ -380,10 +380,15 @@ class NuvioCore(
     }
 
     /** Streams from every add-on, progressively; torrent streams get debrid cache badges once all arrive. */
+    /**
+     * [serverVideoId]: the IMDb-based id ("tt…" / "tt…:season:episode") used to find the title on
+     * Jellyfin / Emby when [videoId] uses another scheme (e.g. AIOMetadata's tmdb: ids).
+     */
     fun loadStreams(
         type: String,
         videoId: String,
         embedded: List<Stream>,
+        serverVideoId: String?,
         onUpdate: (StreamsUpdate) -> Unit
     ): CoreSubscription = observe(
         streamRepository.streams(addonRepository.currentAddons, type, videoId, embedded)
@@ -392,7 +397,9 @@ class NuvioCore(
                 if (!update.isComplete) return@transform
                 var groups = update.groups
                 if (mediaServers.servers.isNotEmpty()) {
-                    val serverGroups = runCatching { mediaServers.streams(type, videoId) }.getOrDefault(emptyList())
+                    val lookupId = videoId.takeIf { it.startsWith("tt") } ?: serverVideoId
+                        ?: imdbVideoIdFromTmdb(type, videoId) ?: videoId
+                    val serverGroups = runCatching { mediaServers.streams(type, lookupId) }.getOrDefault(emptyList())
                     if (serverGroups.isNotEmpty()) {
                         groups = serverGroups + groups
                         emit(update.copy(groups = groups))
@@ -402,6 +409,15 @@ class NuvioCore(
             },
         onUpdate
     )
+
+    /** "tmdb:<id>[:s:e]" → "tt…[:s:e]" via TMDB's external ids, for media server lookups. */
+    private suspend fun imdbVideoIdFromTmdb(type: String, videoId: String): String? {
+        val parts = videoId.split(':')
+        if (parts.firstOrNull() != "tmdb") return null
+        val tmdbId = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        val imdb = runCatching { tmdb.imdbIdFor(tmdbId, type != "movie") }.getOrNull() ?: return null
+        return (listOf(imdb) + parts.drop(2)).joinToString(":")
+    }
 
     /** Add-on subtitles (OpenSubtitles etc.) for a video; never throws, returns [] on failure. */
     @Throws(Exception::class)

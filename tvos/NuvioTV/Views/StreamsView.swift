@@ -125,7 +125,8 @@ struct StreamsView: View {
         subscription = app.core.loadStreams(
             type: target.meta.apiType,
             videoId: target.videoId,
-            embedded: embedded
+            embedded: embedded,
+            serverVideoId: target.serverVideoId
         ) { value in
             MainActor.assumeIsolated {
                 update = value
