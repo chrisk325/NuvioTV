@@ -171,3 +171,42 @@ class CatalogNameTest {
         assertEquals("Popular", com.nuvio.shared.repository.catalogNameWithoutAddon("Popular", "Cinemeta"))
     }
 }
+
+class MediaServerPlaybackInfoTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun placeholderSourcesAreReplacedByWhatPlaybackInfoResolves() = runTest {
+        var posted = 0
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items/m1" -> respond(
+                    """{"Id":"m1","Name":"Superman","Type":"Movie","MediaSources":[
+                        {"Id":"p1","Name":"AIOMetadata MP4 - Streams load when played","Type":"Placeholder","Container":"mp4"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Items/m1/PlaybackInfo" -> {
+                    posted++
+                    respond(
+                        """{"PlaySessionId":"ps","MediaSources":[
+                            {"Id":"a1","Name":"[RD+] 2160p Superman.mkv","Path":"https://aio.example/play/a1.mkv","Protocol":"Http",
+                             "SupportsDirectPlay":true,"Size":40000000000,
+                             "MediaStreams":[{"Type":"Video","Width":3840,"Height":2160}]},
+                            {"Id":"a2","Name":"[RD+] 1080p Superman.mkv","Protocol":"File","SupportsDirectPlay":true}]}""",
+                        HttpStatusCode.OK, json
+                    )
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply {
+            putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"AIOMetadata","address":"http://jf","userId":"u1","token":"tok"}]""")
+        }
+        val streams = MediaServerService(http, store).streams("movie", "mediaserver:srv:m1").single().streams
+        assertTrue(posted >= 1)
+        assertEquals(listOf("[RD+] 2160p Superman.mkv", "[RD+] 1080p Superman.mkv"), streams.map { it.title })
+        assertEquals("https://aio.example/play/a1.mkv", streams[0].url)
+        assertEquals("AIOMetadata\n4K", streams[0].name)
+        assertEquals("http://jf/Videos/m1/stream?static=true&MediaSourceId=a2&api_key=tok", streams[1].url)
+    }
+}

@@ -38,6 +38,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.random.Random
 
 /** A signed-in Jellyfin or Emby server (both speak the MediaBrowser API). */
@@ -419,25 +423,141 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         }
     }
 
-    /** Every media source of one movie / episode item as a direct-play stream. */
+    /**
+     * Every media source of one movie / episode item as a stream.
+     *
+     * The stored item only lists the sources the library knows about. Plugins that bridge
+     * Stremio add-ons (AIOStreams via Gelato and similar) store placeholder sources such as
+     * "Streams load when played" and only resolve the real list when a player asks for
+     * playback info, so this asks POST /Items/{id}/PlaybackInfo (once without and once per
+     * stored source id) and lists what comes back, falling back to the stored sources.
+     */
     private suspend fun itemStreams(server: MediaServer, itemId: String): AddonStreams? {
         val target = item(server, itemId) ?: return null
-        val sources = target.objects("MediaSources").ifEmpty { listOf(JsonObject(mapOf())) }
-        val streams = sources.map { source ->
-            val sourceId = source.nonBlank("Id") ?: itemId
-            val size = source.long("Size")
-            Stream(
-                name = "${server.name}\n${source.str("Container")?.uppercase().orEmpty()}",
-                title = source.str("Name") ?: target.str("Name"),
-                description = listOfNotNull(source.str("Name"), size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null },
-                url = "${server.address}/Videos/$itemId/stream?static=true&MediaSourceId=$sourceId&api_key=${server.token}",
-                ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
-                behaviorHints = StreamBehaviorHints(null, null, null, videoSize = size, filename = source.str("Path")?.substringAfterLast('/')),
-                addonName = server.name,
-                addonLogo = null
-            )
+        val stored = target.objects("MediaSources")
+        val resolved = LinkedHashMap<String, JsonObject>()
+        suspend fun ask(sourceId: String?) {
+            val info = runCatching { playbackInfo(server, itemId, sourceId) }
+                .onFailure { if (it is CancellationException) throw it }
+                .getOrNull() ?: return
+            for (source in info.objects("MediaSources")) {
+                val key = source.nonBlank("Id") ?: source.nonBlank("Path") ?: continue
+                resolved.getOrPut(key) { source }
+            }
         }
+        ask(null)
+        val storedIds = stored.mapNotNull { it.nonBlank("Id") }.toSet()
+        for (id in storedIds.take(MAX_SOURCE_PROBES)) {
+            // The first call already produced new sources: no need to probe each stored one.
+            if (resolved.values.any { (it.nonBlank("Id") ?: "") !in storedIds && !it.isPlaceholderSource() }) break
+            ask(id)
+        }
+        // Still nothing new: the plugin may have saved the resolved versions on the item.
+        val refreshed = if (resolved.isEmpty() || resolved.values.all { it.isPlaceholderSource() }) {
+            item(server, itemId)?.objects("MediaSources").orEmpty()
+        } else emptyList()
+        val all = (resolved.values + refreshed + stored).distinctBy { it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString() }
+        val real = all.filterNot { it.isPlaceholderSource() }
+        val sources = real.ifEmpty { all }.ifEmpty { listOf(JsonObject(mapOf())) }
+        val streams = sources.map { source -> sourceStream(server, itemId, target, source) }
         return AddonStreams(server.name, null, streams)
+    }
+
+    private fun sourceStream(server: MediaServer, itemId: String, target: JsonObject, source: JsonObject): Stream {
+        val sourceId = source.nonBlank("Id") ?: itemId
+        val size = source.long("Size")
+        val path = source.nonBlank("Path")
+        val remote = path?.takeIf {
+            (it.startsWith("http://") || it.startsWith("https://")) &&
+                (source.str("Protocol")?.equals("Http", ignoreCase = true) != false)
+        }
+        val video = source.objects("MediaStreams").firstOrNull { it.str("Type").equals("Video", ignoreCase = true) }
+        val label = video?.let { resolutionLabel(it.int("Width"), it.int("Height")) }
+            ?: source.str("Container")?.substringBefore(',')?.uppercase().orEmpty()
+        val sourceName = source.nonBlank("Name")
+        val url = when {
+            remote != null && source.str("SupportsDirectPlay") != "false" -> remote
+            source.str("SupportsDirectPlay") == "false" && source.str("SupportsDirectStream") == "false" &&
+                source.nonBlank("TranscodingUrl") != null -> {
+                val t = source.nonBlank("TranscodingUrl")!!
+                val abs = if (t.startsWith("http")) t else server.address + (if (t.startsWith("/")) t else "/$t")
+                if ("api_key=" in abs) abs else abs + (if ('?' in abs) "&" else "?") + "api_key=${server.token}"
+            }
+            remote != null -> remote
+            else -> "${server.address}/Videos/$itemId/stream?static=true&MediaSourceId=${encodeUrlComponent(sourceId)}&api_key=${server.token}"
+        }
+        return Stream(
+            name = listOf(server.name, label).filter { it.isNotBlank() }.joinToString("\n"),
+            title = sourceName ?: target.str("Name"),
+            description = listOfNotNull(sourceName, size?.let { "${it / 1_000_000} MB" }).joinToString(" · ").ifEmpty { null },
+            url = url,
+            ytId = null, infoHash = null, fileIdx = null, externalUrl = null,
+            behaviorHints = StreamBehaviorHints(
+                null, null, null, videoSize = size,
+                filename = path?.substringBefore('?')?.substringAfterLast('/')?.substringAfterLast('\\')
+            ),
+            addonName = server.name,
+            addonLogo = null
+        )
+    }
+
+    private fun JsonObject.isPlaceholderSource(): Boolean =
+        str("Type").equals("Placeholder", ignoreCase = true)
+
+    private fun resolutionLabel(width: Int?, height: Int?): String? {
+        val w = width ?: 0
+        val h = height ?: 0
+        return when {
+            w >= 3200 || h >= 2000 -> "4K"
+            w >= 2400 || h >= 1400 -> "1440p"
+            w >= 1800 || h >= 1000 -> "1080p"
+            w >= 1200 || h >= 700 -> "720p"
+            w > 0 || h > 0 -> "${h}p"
+            else -> null
+        }
+    }
+
+    /** POST /Items/{id}/PlaybackInfo, which makes plugins resolve on-demand sources. */
+    private suspend fun playbackInfo(server: MediaServer, itemId: String, sourceId: String?): JsonObject? {
+        val body = buildJsonObject {
+            put("UserId", server.userId)
+            if (sourceId != null) put("MediaSourceId", sourceId)
+            put("MaxStreamingBitrate", 400_000_000L)
+            put("EnableDirectPlay", true)
+            put("EnableDirectStream", true)
+            put("EnableTranscoding", true)
+            put("AllowVideoStreamCopy", true)
+            put("AllowAudioStreamCopy", true)
+            put("AutoOpenLiveStream", false)
+            put("IsPlayback", true)
+            put("DeviceProfile", buildJsonObject {
+                put("Name", "NuvioTV")
+                put("MaxStreamingBitrate", 400_000_000L)
+                put("DirectPlayProfiles", buildJsonArray { add(buildJsonObject { put("Type", "Video") }) })
+                put("TranscodingProfiles", buildJsonArray {
+                    add(buildJsonObject {
+                        put("Type", "Video"); put("Container", "ts"); put("Protocol", "hls")
+                        put("VideoCodec", "h264,hevc"); put("AudioCodec", "aac,ac3,eac3")
+                    })
+                })
+                put("SubtitleProfiles", buildJsonArray {
+                    add(buildJsonObject { put("Format", "srt"); put("Method", "External") })
+                    add(buildJsonObject { put("Format", "ass"); put("Method", "External") })
+                })
+            })
+        }
+        val query = buildString {
+            append("UserId=").append(server.userId)
+            if (sourceId != null) append("&MediaSourceId=").append(encodeUrlComponent(sourceId))
+            append("&IsPlayback=true&AutoOpenLiveStream=false")
+        }
+        val response = http.post("${server.address}/Items/$itemId/PlaybackInfo?$query") {
+            auth(server)
+            setBody(TextContent(body.toString(), HttpContentType.Application.Json))
+        }
+        if (!response.status.isSuccess()) return null
+        val info = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return null
+        return info.takeIf { it.str("ErrorCode") == null }
     }
 
     private suspend fun get(server: MediaServer, path: String): JsonObject? {
@@ -456,5 +576,6 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     private companion object {
         const val KEY = "mediaservers.v1"
         const val NATIVE = "mediaserver"
+        const val MAX_SOURCE_PROBES = 3
     }
 }
