@@ -316,7 +316,7 @@ struct ModernHomeView: View {
                     }
                     .padding(.horizontal, 50)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 360, alignment: .topLeading)
+                    .frame(height: 320, alignment: .topLeading)
                     .focusSection()
                 }
                 ScrollViewReader { proxy in
@@ -348,6 +348,8 @@ struct ModernHomeView: View {
                 }
                 }
             }
+            // Hero sits higher, closer to the top bar, so the rows get more of the screen.
+            .padding(.top, -60)
         }
     }
 
