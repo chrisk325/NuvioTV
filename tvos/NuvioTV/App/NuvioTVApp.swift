@@ -18,9 +18,9 @@ struct NuvioTVApp: App {
                 }
             }
             .environmentObject(session)
-            // nuviotv:// callbacks from Infuse / VLC (x-success …): opening the URL is enough to
-            // bring Nuvio back to the front, where the details / streams page is still open.
-            .onOpenURL { _ in }
+            // nuviotv:// callbacks from Infuse / VLC (x-success …) bring Nuvio back to the front,
+            // where the details / streams page is still open; Infuse's reported position is saved.
+            .onOpenURL { url in ExternalPlayback.handle(url, core: session.app.core) }
         }
     }
 }
