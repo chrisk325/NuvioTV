@@ -227,18 +227,30 @@ struct DetailView: View {
     @ViewBuilder
     private func content(_ meta: Meta) -> some View {
         ZStack {
+            // Hero screen: the artwork stays bright, with shading only behind the text (bottom
+            // left). Lower screen: the same artwork, blurred and only lightly dimmed.
             FullScreenBackdrop(url: meta.backdropUrl) {
-                LinearGradient(
-                    colors: [.black.opacity(0.75), .black.opacity(0.25), .clear],
-                    startPoint: .leading, endPoint: .trailing
-                )
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.55), .black.opacity(0.9)],
-                    startPoint: .top, endPoint: .bottom
-                )
+                if showLower {
+                    Color.black.opacity(0.28)
+                } else {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black.opacity(0.55), location: 0),
+                            .init(color: .black.opacity(0.12), location: 0.45),
+                            .init(color: .clear, location: 0.7)
+                        ],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.45),
+                            .init(color: .black.opacity(0.65), location: 1)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                }
             }
-            .blur(radius: showLower ? 30 : 0, opaque: true)
-            .overlay(Color.black.opacity(showLower ? 0.35 : 0).ignoresSafeArea())
+            .blur(radius: showLower ? 40 : 0, opaque: true)
 
             if showLower {
                 lowerScreen(meta)
