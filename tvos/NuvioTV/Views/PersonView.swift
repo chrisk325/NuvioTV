@@ -58,7 +58,6 @@ struct PeopleRow: View {
         }
         .frame(width: 200, height: 280)
         .clipped()
-        .focusBorder()
     }
 }
 

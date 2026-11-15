@@ -192,7 +192,6 @@ struct ContinueWatchingRow: View {
                                 }
                                 .frame(width: 400, height: 225)
                                 .clipped()
-                                .focusBorder()
                                 .background(FocusReporter {
                                     if lastFocusedId?.wrappedValue != progress.videoId {
                                         lastFocusedId?.wrappedValue = progress.videoId

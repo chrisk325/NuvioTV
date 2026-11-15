@@ -476,7 +476,6 @@ struct EpisodeCard: View {
                 }
                 .frame(width: width, height: width * 9 / 16)
                 .clipped()
-                .focusBorder()
                 .background(FocusReporter { onFocus?() })
             }
             .buttonStyle(.card)

@@ -94,6 +94,8 @@ final class ImageLoader: @unchecked Sendable {
 struct FullScreenBackdrop<Overlay: View>: View {
     let url: String?
     var opacity: Double = 1
+    /// Crossfade when the artwork changes (off for the Modern home hero).
+    var animated = true
     @ViewBuilder var overlay: () -> Overlay
 
     var body: some View {
@@ -113,76 +115,13 @@ struct FullScreenBackdrop<Overlay: View>: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.5), value: url)
+        .animation(animated ? .easeInOut(duration: 0.5) : nil, value: url)
     }
 }
 
 extension FullScreenBackdrop where Overlay == EmptyView {
     init(url: String?, opacity: Double = 1) {
         self.init(url: url, opacity: opacity) { EmptyView() }
-    }
-}
-
-/// Glossy "glass" focus look drawn over a card while it has focus: a light-catching rim
-/// (brightest at the top-left and bottom-right corners), a soft glare from the top, and a sheen
-/// that sweeps across once when focus arrives. Rides along with the `.card` lift and tilt.
-///
-/// Deliberately stateless (no @State, onChange, GeometryReader or blend modes inside the button
-/// label): everything is derived from `isFocused`, so the button's press handling is untouched.
-struct FocusBorder: View {
-    @Environment(\.isFocused) private var isFocused
-    var cornerRadius: CGFloat = 12
-    var lineWidth: CGFloat = 3
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let focused = isFocused
-        ZStack {
-            // Glare: light falling on the top of the glass.
-            shape.fill(
-                LinearGradient(
-                    colors: [Color.white.opacity(0.2), Color.white.opacity(0.05), .clear],
-                    startPoint: .top, endPoint: .center
-                )
-            )
-            // Sheen: a diagonal band that slides across once when focus arrives.
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0.35),
-                    .init(color: Color.white.opacity(0.22), location: 0.5),
-                    .init(color: .clear, location: 0.65)
-                ],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            .visualEffect { content, proxy in
-                content.offset(x: (focused ? 1.2 : -1.2) * proxy.size.width)
-            }
-            .animation(focused ? .easeInOut(duration: 0.9) : nil, value: focused)
-            .clipShape(shape)
-            // Light-catching rim.
-            shape.strokeBorder(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.95), Color.white.opacity(0.35), Color.white.opacity(0.12),
-                        Color.white.opacity(0.35), Color.white.opacity(0.85)
-                    ],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ),
-                lineWidth: lineWidth
-            )
-            shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
-                .padding(lineWidth)
-        }
-        .opacity(focused ? 1 : 0)
-        .animation(.easeOut(duration: 0.18), value: focused)
-        .allowsHitTesting(false)
-    }
-}
-
-extension View {
-    /// Adds the glossy focus rim; apply inside a `.card` button's label.
-    func focusBorder(cornerRadius: CGFloat = 12) -> some View {
-        overlay(FocusBorder(cornerRadius: cornerRadius))
     }
 }
 
@@ -268,7 +207,6 @@ struct PosterCard: View {
                 .overlay(alignment: .topTrailing) {
                     if app.core.isPreviewWatched(preview: item) { WatchedBadge().padding(10) }
                 }
-                .focusBorder()
                 .background(FocusReporter { onFocus?(item) })
             }
             .buttonStyle(.card)
@@ -330,7 +268,6 @@ struct LandscapeCard: View {
             .overlay(alignment: .topTrailing) {
                 if app.core.isPreviewWatched(preview: item) { WatchedBadge().padding(12) }
             }
-            .focusBorder()
             .background(FocusReporter { onFocus?(item) })
         }
         .buttonStyle(.card)

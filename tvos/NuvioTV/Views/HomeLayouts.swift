@@ -29,7 +29,6 @@ struct HeroCarousel: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: height)
                     .clipped()
-                    .focusBorder()
                     .background(FocusReporter { isFocused = true })
                 }
                 .buttonStyle(.card)
@@ -255,7 +254,6 @@ private struct GridSection: View {
                             }
                             .frame(width: 220, height: 326)
                             .background(Color.white.opacity(0.08))
-                            .focusBorder()
                         }
                         .buttonStyle(.card)
                     }
@@ -288,7 +286,7 @@ struct ModernHomeView: View {
         let hero = focused ?? feed.heroItems(slots, core: app.core).first
         ZStack(alignment: .topLeading) {
             // Full-screen artwork of the focused title.
-            FullScreenBackdrop(url: hero?.backdropUrl) {
+            FullScreenBackdrop(url: hero?.backdropUrl, animated: false) {
                 LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.2), .clear],
                                startPoint: .leading, endPoint: .trailing)
                 LinearGradient(colors: [.clear, .black.opacity(0.65), .black],
@@ -304,7 +302,6 @@ struct ModernHomeView: View {
                             .padding(.horizontal, 30)
                             .padding(.vertical, 16)
                             .frame(maxWidth: 900, alignment: .leading)
-                            .animation(.easeInOut(duration: 0.3), value: hero.id)
                     }
                     .buttonStyle(ModernHeroStyle())
                     .focused($homeFocus, equals: .hero)
@@ -378,7 +375,7 @@ struct ModernHomeView: View {
         let index = items.firstIndex { $0.id == current.id } ?? -1
         let next = items[((index + offset) % items.count + items.count) % items.count]
         debounce?.cancel()
-        withAnimation(.easeInOut(duration: 0.3)) { focused = next }
+        focused = next
     }
 
     /// Debounced like Android (MODERN_HERO_FOCUS_DEBOUNCE_MS = 450) so fast scrolling doesn't flicker.
@@ -393,7 +390,7 @@ struct ModernHomeView: View {
     }
 }
 
-/// Modern hero when focused: a soft glass panel with the glossy rim behind the title info.
+/// Modern hero when focused: a soft frosted panel behind the title info (no rim, no animation).
 struct ModernHeroStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Panel(configuration: configuration)
@@ -411,9 +408,7 @@ struct ModernHeroStyle: ButtonStyle {
                         .background(.ultraThinMaterial.opacity(isFocused ? 1 : 0),
                                     in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 )
-                .overlay(FocusBorder(cornerRadius: 24))
-                .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.02 : 1), anchor: .leading)
-                .animation(.easeOut(duration: 0.15), value: isFocused)
+                .opacity(configuration.isPressed ? 0.85 : 1)
         }
     }
 }
