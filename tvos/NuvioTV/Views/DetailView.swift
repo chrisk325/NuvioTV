@@ -228,29 +228,27 @@ struct DetailView: View {
     private func content(_ meta: Meta) -> some View {
         ZStack {
             // Hero screen: the artwork stays bright, with shading only behind the text (bottom
-            // left). Lower screen: the same artwork, blurred and only lightly dimmed.
+            // left). Lower screen: a separate blurred copy of the artwork crossfades in.
             FullScreenBackdrop(url: meta.backdropUrl) {
-                if showLower {
-                    Color.black.opacity(0.28)
-                } else {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black.opacity(0.55), location: 0),
-                            .init(color: .black.opacity(0.12), location: 0.45),
-                            .init(color: .clear, location: 0.7)
-                        ],
-                        startPoint: .leading, endPoint: .trailing
-                    )
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0.45),
-                            .init(color: .black.opacity(0.65), location: 1)
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                }
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.55), location: 0),
+                        .init(color: .black.opacity(0.12), location: 0.45),
+                        .init(color: .clear, location: 0.7)
+                    ],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.45),
+                        .init(color: .black.opacity(0.65), location: 1)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
             }
-            .blur(radius: showLower ? 40 : 0, opaque: true)
+            .opacity(showLower ? 0 : 1)
+            BlurredBackdrop(url: meta.backdropUrl)
+                .opacity(showLower ? 1 : 0)
 
             if showLower {
                 lowerScreen(meta)
@@ -653,5 +651,31 @@ enum EpisodeFormat {
         }
         if !isReleased { parts.append("Upcoming") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The artwork heavily blurred and lightly dimmed, edge to edge (enlarged so the blur doesn't
+/// darken the edges). Background of the details page's lower screen.
+struct BlurredBackdrop: View {
+    let url: String?
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                if let url {
+                    RemoteImage(url: url)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .scaleEffect(1.25)
+                        .blur(radius: 50)
+                }
+                Color.black.opacity(0.22)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
