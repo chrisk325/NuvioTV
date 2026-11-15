@@ -63,6 +63,8 @@ struct DetailView: View {
     /// it episodes / cast / more over blurred artwork. The logo glides between the two.
     @State private var showLower = false
     @Namespace private var logoSpace
+    /// Episode whose full description is shown (tap and hold on an episode card).
+    @State private var episodeInfo: Video?
 
     var body: some View {
         Group {
@@ -87,7 +89,15 @@ struct DetailView: View {
             }
         }
         // Menu on the lower screen goes back to the hero first.
-        .onExitCommand { if showLower { goToHero() } else { dismiss() } }
+        .onExitCommand {
+            if episodeInfo != nil {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { episodeInfo = nil }
+            } else if showLower {
+                goToHero()
+            } else {
+                dismiss()
+            }
+        }
         // Full-screen details: the tab bar (Home / Search / … / Settings) is hidden here and
         // comes back on Menu.
         .toolbar(.hidden, for: .tabBar)
@@ -252,10 +262,19 @@ struct DetailView: View {
 
             if showLower {
                 lowerScreen(meta)
+                    .disabled(episodeInfo != nil)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
                 heroScreen(meta)
                     .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if let video = episodeInfo {
+                EpisodeInfoOverlay(meta: meta, video: video, isWatched: app.isWatched(meta, video)) {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { episodeInfo = nil }
+                }
+                .transition(.opacity)
+                .zIndex(10)
             }
         }
     }
@@ -289,6 +308,9 @@ struct DetailView: View {
                     .padding(.top, 20)
                 if hasEpisodes(meta) {
                     EpisodesSection(meta: meta, selectedSeason: $selectedSeason, focus: $focus,
+                                    onShowInfo: { video in
+                                        withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { episodeInfo = video }
+                                    },
                                     lastFocusedId: $lastEpisodeId, onMoveUpFromTop: { goToHero() })
                 }
                 if let people = details?.people, !people.isEmpty {
@@ -468,6 +490,8 @@ struct EpisodesSection: View {
     let meta: Meta
     @Binding var selectedSeason: Int32
     var focus: FocusState<DetailFocus?>.Binding? = nil
+    /// Tap and hold on an episode: show its full description.
+    var onShowInfo: ((Video) -> Void)? = nil
     /// The episode card last focused (Up from the rows below returns to it).
     @Binding var lastFocusedId: String?
     /// Up from the top row (season tabs, else the episode cards): back to the hero screen.
@@ -508,7 +532,8 @@ struct EpisodesSection: View {
                             video: video,
                             progress: app.core.progressFor(videoId: video.id),
                             isWatched: app.isWatched(meta, video),
-                            onFocus: { if lastFocusedId != video.id { lastFocusedId = video.id } }
+                            onFocus: { if lastFocusedId != video.id { lastFocusedId = video.id } },
+                            onLongPress: { onShowInfo?(video) }
                         )
                         // Same modifier on every card, always: a focus binding that moves between
                         // cards rebuilt the focused card and threw focus back to episode 1.
@@ -562,6 +587,8 @@ struct EpisodeCard: View {
     let progress: WatchProgress?
     var isWatched = false
     var onFocus: (() -> Void)? = nil
+    /// Tap and hold: full description card (Mark watched lives there).
+    var onLongPress: (() -> Void)? = nil
 
     private let width: CGFloat = 560
 
@@ -603,11 +630,7 @@ struct EpisodeCard: View {
                 .background(FocusReporter { onFocus?() })
             }
             .buttonStyle(.card)
-            .contextMenu {
-                Button(isWatched ? "Mark unwatched" : "Mark watched") {
-                    app.core.setWatched(meta: meta, video: video, isWatched: !isWatched)
-                }
-            }
+            .onLongPressGesture(minimumDuration: 0.5) { onLongPress?() }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Episode \(video.episode?.int32Value ?? 0)")
@@ -686,5 +709,89 @@ struct BlurredBackdrop: View {
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+    }
+}
+
+/// Tap-and-hold episode info: the episode's thumbnail fills the screen blurred behind a card with
+/// the thumbnail, title, runtime / date and the full description, plus Play and Mark watched.
+struct EpisodeInfoOverlay: View {
+    @EnvironmentObject private var app: AppModel
+    let meta: Meta
+    let video: Video
+    let isWatched: Bool
+    let onClose: () -> Void
+    @FocusState private var playFocused: Bool
+    @State private var appeared = false
+
+    var body: some View {
+        ZStack {
+            BlurredBackdrop(url: video.thumbnail ?? meta.backdropUrl)
+                .opacity(appeared ? 1 : 0)
+
+            HStack(alignment: .top, spacing: 50) {
+                RemoteImage(url: video.thumbnail ?? meta.backdropUrl)
+                    .frame(width: 640, height: 360)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(episodeHeading)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(video.title)
+                        .font(.title2.bold())
+                        .lineLimit(2)
+                    let info = EpisodeFormat.info(runtimeMinutes: Int(video.runtimeMinutes), released: video.released, isReleased: video.isReleased)
+                    if !info.isEmpty {
+                        Text(info).font(.callout).foregroundStyle(.secondary)
+                    }
+                    if let overview = video.overview, !overview.isEmpty {
+                        ScrollView {
+                            Text(overview)
+                                .font(.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 360)
+                    } else {
+                        Text("No description for this episode.").foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 24) {
+                        NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
+                            Label("Play", systemImage: "play.fill")
+                        }
+                        .focused($playFocused)
+                        Button {
+                            app.core.setWatched(meta: meta, video: video, isWatched: !isWatched)
+                        } label: {
+                            Label(isWatched ? "Mark unwatched" : "Mark watched",
+                                  systemImage: isWatched ? "eye.slash" : "eye")
+                        }
+                        Button("Close", action: onClose)
+                    }
+                    .padding(.top, 8)
+                }
+                .frame(maxWidth: 820, alignment: .leading)
+            }
+            .padding(50)
+            .background(
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 36, style: .continuous).fill(Color.black.opacity(0.25)))
+            )
+            .scaleEffect(appeared ? 1 : 0.88)
+            .opacity(appeared ? 1 : 0)
+            .focusSection()
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { appeared = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { playFocused = true }
+        }
+    }
+
+    private var episodeHeading: String {
+        var parts: [String] = []
+        if let e = video.episode?.int32Value { parts.append("Episode \(e)") }
+        if let s = video.season?.int32Value { parts.append(s == 0 ? "Specials" : "Season \(s)") }
+        return parts.joined(separator: " · ")
     }
 }
