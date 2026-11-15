@@ -180,8 +180,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val map = mutableMapOf<String, String>()
         get(
             server,
+            // (EnableImageTypes=None is not a valid value and made Jellyfin reject the request.)
             "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds" +
-                "&EnableImageTypes=None&EnableUserData=false"
+                "&EnableImages=false&EnableUserData=false"
         )?.objects("Items")?.forEach { item ->
             val id = item.nonBlank("Id") ?: return@forEach
             val isShow = item.str("Type") == "Series"
@@ -198,8 +199,20 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         if (key !in this) this[key] = value
     }
 
+    /** Items already shown from a server (rows, favourites, search), by provider id: no lookup needed. */
+    private val seenItems = mutableMapOf<String, String>()
+
+    private fun remember(server: MediaServer, isShow: Boolean, providerIds: JsonObject?, itemId: String) {
+        providerIds?.forEach { (provider, value) ->
+            val text = (value as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() } ?: return@forEach
+            seenItems["${server.id}|${indexKey(isShow, provider, text)}"] = itemId
+        }
+    }
+
     /** The server's item id for a title, by IMDb id ("tt…") or TMDB id ("tmdb:123" / "123"). */
     private suspend fun findItemId(server: MediaServer, imdbId: String?, tmdbId: String?, isShow: Boolean): String? {
+        imdbId?.let { seenItems["${server.id}|${indexKey(isShow, "imdb", it)}"] }?.let { return it }
+        tmdbId?.let { seenItems["${server.id}|${indexKey(isShow, "tmdb", it)}"] }?.let { return it }
         val itemType = if (isShow) "Series" else "Movie"
         if (imdbId != null) {
             runCatching {
@@ -252,8 +265,12 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         return null
     }
 
+    /** One item; /Users/{id}/Items/{item} (Emby, Jellyfin ≤10.9) or /Items/{item}?userId= (newer Jellyfin). */
+    private suspend fun item(server: MediaServer, itemId: String): JsonObject? =
+        get(server, "/Users/${server.userId}/Items/$itemId") ?: get(server, "/Items/$itemId?userId=${server.userId}")
+
     private suspend fun itemMeta(server: MediaServer, itemId: String, isShowHint: Boolean, knownImdb: String? = null): Meta? {
-        val item = get(server, "/Users/${server.userId}/Items/$itemId") ?: return null
+        val item = item(server, itemId) ?: return null
         val isShow = item.str("Type")?.let { it == "Series" } ?: isShowHint
         val imdb = item.obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") } ?: knownImdb
         val metaId = imdb ?: nativeId(server, itemId)
@@ -349,6 +366,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val itemId = nonBlank("Id") ?: return null
         val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
         val isShow = str("Type") == "Series"
+        remember(server, isShow, obj("ProviderIds"), itemId)
         val id = imdb ?: nativeId(server, itemId)
         return MetaPreview(
             id = id,
@@ -403,7 +421,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
 
     /** Every media source of one movie / episode item as a direct-play stream. */
     private suspend fun itemStreams(server: MediaServer, itemId: String): AddonStreams? {
-        val target = get(server, "/Users/${server.userId}/Items/$itemId") ?: return null
+        val target = item(server, itemId) ?: return null
         val sources = target.objects("MediaSources").ifEmpty { listOf(JsonObject(mapOf())) }
         val streams = sources.map { source ->
             val sourceId = source.nonBlank("Id") ?: itemId

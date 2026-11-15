@@ -65,7 +65,7 @@ class MediaServerLookupTest {
                 request.url.encodedPath == "/Users/u1/Items" && params["AnyProviderIdEquals"] != null ->
                     // Filter ignored: unrelated items come back.
                     respond("""{"Items":[{"Id":"x","Type":"Movie","ProviderIds":{"Imdb":"tt999"}}]}""", HttpStatusCode.OK, json)
-                request.url.encodedPath == "/Users/u1/Items" && params["EnableImageTypes"] == "None" ->
+                request.url.encodedPath == "/Users/u1/Items" && params["EnableImages"] == "false" ->
                     respond(
                         """{"Items":[{"Id":"x","Type":"Movie","ProviderIds":{"Imdb":"tt999"}},
                                      {"Id":"m1","Type":"Movie","ProviderIds":{"Imdb":"tt555","Tmdb":"42"}}]}""",
@@ -104,6 +104,42 @@ class MediaServerLookupTest {
         val meta = assertNotNull(service.meta("movie", preview.id))
         assertEquals("Home Video", meta.name)
         assertTrue(service.streams("movie", meta.defaultVideoId).single().streams.single().url!!.contains("/Videos/m9/stream"))
+    }
+}
+
+class MediaServerNewerJellyfinTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun rowItemsOpenDirectlyAndNewItemRouteIsUsed() = runTest {
+        var indexCalls = 0
+        val http = HttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            when {
+                // Library row listing (search here) includes the provider ids.
+                path == "/Users/u1/Items" && request.url.parameters["SearchTerm"] != null -> respond(
+                    """{"Items":[{"Id":"m1","Name":"Project Hail Mary","Type":"Movie","ProviderIds":{"Imdb":"tt777"}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                path == "/Users/u1/Items" -> { indexCalls++; respond("", HttpStatusCode.BadRequest) }
+                // Old per-user item route gone; the new one answers.
+                path == "/Users/u1/Items/m1" -> respond("", HttpStatusCode.NotFound)
+                path == "/Items/m1" && request.url.parameters["userId"] == "u1" -> respond(
+                    """{"Id":"m1","Name":"Project Hail Mary","Type":"Movie","Overview":"Space",
+                        "MediaSources":[{"Id":"s1","Container":"mkv"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply {
+            putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"Home","address":"http://jf","userId":"u1","token":"tok"}]""")
+        }
+        val service = MediaServerService(http, store)
+        service.search(service.servers.single(), "hail", 10)
+        assertEquals("Space", service.meta("movie", "tt777")?.description)
+        assertTrue(service.streams("movie", "tt777").single().streams.single().url!!.contains("/Videos/m1/stream"))
+        assertEquals(0, indexCalls)
     }
 }
 

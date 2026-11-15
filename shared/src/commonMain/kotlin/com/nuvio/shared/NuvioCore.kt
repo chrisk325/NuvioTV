@@ -263,6 +263,12 @@ class NuvioCore(
             val serverId = id.substringBefore(':').takeIf { it.startsWith("tt") } ?: id.takeIf { it.startsWith("tmdb:") }
             if (serverId != null && mediaServers.servers.isNotEmpty()) {
                 runCatching { mediaServers.meta(type, serverId) }.getOrNull()?.let { return it }
+                if (addonRepository.currentAddons.none { it.enabled }) {
+                    throw IllegalStateException(
+                        "Couldn't find this title on ${mediaServers.servers.joinToString { it.name }}. " +
+                            "Check that the server is reachable and the title is in a Movies or Shows library."
+                    )
+                }
             }
             val tmdbId = id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(':')?.toIntOrNull()
             val imdb = tmdbId?.let { tmdb.imdbIdFor(it, type != "movie") } ?: throw e
