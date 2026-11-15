@@ -1,12 +1,17 @@
 import SwiftUI
 import UIKit
+import CoreImage
+import ImageIO
 import NuvioShared
 
 /// Artwork loaded through [ImageLoader]. Unlike AsyncImage it keeps a memory cache, so cards
 /// recycled by lazy rows don't come back blank, and retries a load cancelled mid-flight.
+/// Images are decoded off the main thread at no more than [maxPixel] on their longest side,
+/// so a 3000 px add-on poster doesn't cost a full-size bitmap per card while scrolling.
 struct RemoteImage: View {
     let url: String?
     var contentMode: ContentMode = .fill
+    var maxPixel: CGFloat = ImageLoader.fullSize
     @State private var image: UIImage?
     @State private var loadedUrl: String?
 
@@ -24,11 +29,11 @@ struct RemoteImage: View {
         }
         .task(id: url) {
             guard let url else { image = nil; loadedUrl = nil; return }
-            if let cached = ImageLoader.shared.cached(url) {
+            if let cached = ImageLoader.shared.cached(url, maxPixel: maxPixel) {
                 image = cached; loadedUrl = url
                 return
             }
-            if let loaded = await ImageLoader.shared.load(url), !Task.isCancelled {
+            if let loaded = await ImageLoader.shared.load(url, maxPixel: maxPixel), !Task.isCancelled {
                 image = loaded; loadedUrl = url
             }
         }
@@ -36,19 +41,30 @@ struct RemoteImage: View {
 }
 
 /// Shared poster/backdrop loader: in-memory + on-disk cache, a browser-like User-Agent (some
-/// add-on image hosts reject the default one) and tolerant URL parsing.
+/// add-on image hosts reject the default one) and tolerant URL parsing. Decodes with ImageIO
+/// straight to the needed size on a background thread, and shares in-flight downloads.
 final class ImageLoader: @unchecked Sendable {
     static let shared = ImageLoader()
+    /// Cap for full-screen artwork (backdrops, heroes).
+    static let fullSize: CGFloat = 1920
+    /// Portrait posters / cards.
+    static let cardSize: CGFloat = 720
+    /// Landscape cards and episode thumbnails.
+    static let wideCardSize: CGFloat = 960
 
     private let memory = NSCache<NSString, UIImage>()
     private let session: URLSession
+    private let lock = NSLock()
+    private var inFlight: [String: Task<Data?, Never>] = [:]
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     private init() {
-        memory.totalCostLimit = 200 * 1024 * 1024
+        memory.totalCostLimit = 300 * 1024 * 1024
         let config = URLSessionConfiguration.default
         config.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 300 * 1024 * 1024)
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.timeoutIntervalForRequest = 30
+        config.httpMaximumConnectionsPerHost = 6
         config.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (AppleTV; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
             "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5",
@@ -56,25 +72,88 @@ final class ImageLoader: @unchecked Sendable {
         session = URLSession(configuration: config)
     }
 
-    func cached(_ url: String) -> UIImage? { memory.object(forKey: url as NSString) }
+    private func key(_ url: String, _ maxPixel: CGFloat) -> NSString { NSString(string: "\(Int(maxPixel))|\(url)") }
 
-    func load(_ raw: String) async -> UIImage? {
+    func cached(_ url: String, maxPixel: CGFloat = ImageLoader.fullSize) -> UIImage? {
+        memory.object(forKey: key(url, maxPixel))
+    }
+
+    func load(_ raw: String, maxPixel: CGFloat = ImageLoader.fullSize) async -> UIImage? {
+        let cacheKey = key(raw, maxPixel)
+        if let hit = memory.object(forKey: cacheKey) { return hit }
+        guard let data = await data(raw), !Task.isCancelled else { return nil }
+        guard let image = Self.decode(data, maxPixel: maxPixel) else { return nil }
+        memory.setObject(image, forKey: cacheKey, cost: Self.cost(image))
+        return image
+    }
+
+    /// A small, pre-blurred copy of the artwork for full-screen ambient backdrops: blurring once
+    /// here is far cheaper than a live full-screen blur re-rendered on every focus change.
+    func blurred(_ raw: String, radius: Double = 10) async -> UIImage? {
+        let cacheKey = NSString(string: "blur\(Int(radius))|\(raw)")
+        if let hit = memory.object(forKey: cacheKey) { return hit }
+        guard let data = await data(raw), !Task.isCancelled,
+              let small = Self.decode(data, maxPixel: 640)?.cgImage else { return nil }
+        let input = CIImage(cgImage: small)
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(radius, forKey: kCIInputRadiusKey)
+        guard let output = filter.outputImage?.cropped(to: input.extent),
+              let cg = ciContext.createCGImage(output, from: input.extent) else { return nil }
+        let image = UIImage(cgImage: cg)
+        memory.setObject(image, forKey: cacheKey, cost: Self.cost(image))
+        return image
+    }
+
+    /// One download per URL at a time; later callers wait for the same request.
+    private func data(_ raw: String) async -> Data? {
         guard let url = Self.parse(raw) else { return nil }
-        for attempt in 0..<2 {
-            do {
-                let (data, response) = try await session.data(from: url)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
-                guard let decoded = UIImage(data: data) else { return nil }
-                let image = await decoded.byPreparingForDisplay() ?? decoded
-                memory.setObject(image, forKey: raw as NSString, cost: data.count)
-                return image
-            } catch {
-                // A recycled card cancels its task; only retry genuine network hiccups.
-                if Task.isCancelled || attempt == 1 { return nil }
-                try? await Task.sleep(nanoseconds: 400_000_000)
+        let session = self.session
+        let task: Task<Data?, Never> = lock.withLock {
+            if let existing = inFlight[raw] { return existing }
+            let created = Task.detached(priority: .userInitiated) { () -> Data? in
+                for attempt in 0..<2 {
+                    do {
+                        let (data, response) = try await session.data(from: url)
+                        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+                        return data
+                    } catch {
+                        if attempt == 1 { return nil }
+                        try? await Task.sleep(nanoseconds: 400_000_000)
+                    }
+                }
+                return nil
+            }
+            inFlight[raw] = created
+            return created
+        }
+        let result = await task.value
+        lock.withLock { inFlight[raw] = nil }
+        return result
+    }
+
+    /// Decodes (and downsamples) to a ready-to-draw bitmap; falls back to UIImage for formats
+    /// ImageIO can't thumbnail.
+    private static func decode(_ data: Data, maxPixel: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        if let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) {
+            let options = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            ] as CFDictionary
+            if let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options) {
+                return UIImage(cgImage: cg)
             }
         }
-        return nil
+        guard let image = UIImage(data: data) else { return nil }
+        return image.preparingForDisplay() ?? image
+    }
+
+    private static func cost(_ image: UIImage) -> Int {
+        guard let cg = image.cgImage else { return 1 }
+        return cg.bytesPerRow * cg.height
     }
 
     /// Accepts protocol-relative ("//host/x.jpg") and unencoded URLs (spaces, "|", unicode).
@@ -204,7 +283,7 @@ struct PosterCard: View {
         VStack(alignment: .leading, spacing: 28) {
             NavigationLink(value: Route.detail(item)) {
                 ZStack {
-                    RemoteImage(url: item.poster ?? item.backdropUrl)
+                    RemoteImage(url: item.poster ?? item.backdropUrl, maxPixel: ImageLoader.cardSize)
                     if item.poster == nil && item.backdropUrl == nil {
                         Text(item.name)
                             .font(.caption)
@@ -276,7 +355,7 @@ struct LandscapeCard: View {
     var body: some View {
         NavigationLink(value: Route.detail(item)) {
             ZStack(alignment: .bottomLeading) {
-                RemoteImage(url: item.landscapeArtwork)
+                RemoteImage(url: item.landscapeArtwork, maxPixel: ImageLoader.wideCardSize)
                 LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
                 if let logo = item.logo {
                     RemoteImage(url: logo, contentMode: .fit)

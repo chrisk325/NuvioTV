@@ -597,7 +597,7 @@ struct EpisodeCard: View {
         VStack(alignment: .leading, spacing: 30) {
             NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
                 ZStack(alignment: .topLeading) {
-                    RemoteImage(url: video.thumbnail ?? meta.backdropUrl)
+                    RemoteImage(url: video.thumbnail ?? meta.backdropUrl, maxPixel: ImageLoader.wideCardSize)
                     // Watched state: empty ring, or a filled check.
                     Group {
                         if isWatched {
@@ -729,7 +729,7 @@ struct EpisodeInfoOverlay: View {
                 .opacity(appeared ? 1 : 0)
 
             HStack(alignment: .top, spacing: 50) {
-                RemoteImage(url: video.thumbnail ?? meta.backdropUrl)
+                RemoteImage(url: video.thumbnail ?? meta.backdropUrl, maxPixel: ImageLoader.wideCardSize)
                     .frame(width: 640, height: 360)
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .shadow(color: .black.opacity(0.5), radius: 20, y: 10)

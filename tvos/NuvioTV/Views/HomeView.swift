@@ -182,7 +182,7 @@ struct ContinueWatchingRow: View {
                         VStack(alignment: .leading, spacing: 28) { // room for the focused card's lift
                             NavigationLink(value: Route.detail(app.core.previewFor(progress: progress))) {
                                 ZStack(alignment: .bottom) {
-                                    RemoteImage(url: progress.background ?? progress.poster)
+                                    RemoteImage(url: progress.background ?? progress.poster, maxPixel: ImageLoader.wideCardSize)
                                     GeometryReader { geo in
                                         VStack {
                                             Spacer()

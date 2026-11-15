@@ -146,13 +146,15 @@ struct ClassicHomeView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var feed: HomeFeed
     let slots: [CatalogSlot]
-    @State private var focused: MetaPreview?
+    /// Held in @State but not observed here: a focus move only redraws the backdrop, not
+    /// every row of the (non-lazy) home stack.
+    @State private var artwork = FocusedArtwork()
     @FocusState private var homeFocus: HomeFocus?
     @State private var lastContinueWatchingId: String?
 
     var body: some View {
         ZStack {
-            FocusBackdrop(url: focused?.backdropUrl)
+            FocusBackdrop(artwork: artwork)
             ScrollView(.vertical) {
                 // Plain VStack: a LazyVStack unloads rows scrolled off screen, and tvOS then finds
                 // nothing above on Up (first catalog → Continue Watching / hero).
@@ -175,7 +177,10 @@ struct ClassicHomeView: View {
         }
     }
 
-    private func setFocus(_ item: MetaPreview) { focused = item }
+    private func setFocus(_ item: MetaPreview) {
+        let url = item.backdropUrl ?? item.poster
+        if artwork.url != url { artwork.url = url }
+    }
 
     private var showsContinueWatching: Bool {
         app.settings.showContinueWatching && !app.continueWatching.isEmpty
@@ -198,15 +203,47 @@ struct ClassicHomeView: View {
     }
 }
 
-/// Dimmed, blurred artwork of the focused title behind the rows.
+/// The artwork URL of the focused Classic home card.
+final class FocusedArtwork: ObservableObject {
+    @Published var url: String?
+}
+
+/// Dimmed, blurred artwork of the focused title behind the rows. Waits until focus settles
+/// (so scrolling quickly through a row doesn't load and crossfade every card's art) and shows
+/// a small pre-blurred copy instead of blurring the whole screen live.
 struct FocusBackdrop: View {
-    let url: String?
+    @ObservedObject var artwork: FocusedArtwork
+    @State private var image: UIImage?
+    @State private var shownUrl: String?
 
     var body: some View {
-        FullScreenBackdrop(url: url, opacity: 0.45) {
+        ZStack {
+            Color.black
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .opacity(0.45)
+                    .id(shownUrl)
+                    .transition(.opacity)
+            }
             LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
         }
-        .blur(radius: 30, opaque: true)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .task(id: artwork.url) {
+            guard let url = artwork.url, url != shownUrl else { return }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled,
+                  let blurred = await ImageLoader.shared.blurred(url),
+                  !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.45)) {
+                image = blurred
+                shownUrl = url
+            }
+        }
     }
 }
 

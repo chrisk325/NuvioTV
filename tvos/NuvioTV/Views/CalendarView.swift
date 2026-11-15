@@ -20,7 +20,7 @@ struct CalendarView: View {
                                 ForEach(Array(group.entries.enumerated()), id: \.offset) { _, entry in
                                     NavigationLink(value: Route.detail(entry.show)) {
                                         HStack(spacing: 24) {
-                                            RemoteImage(url: entry.video.thumbnail ?? entry.show.backdropUrl)
+                                            RemoteImage(url: entry.video.thumbnail ?? entry.show.backdropUrl, maxPixel: ImageLoader.wideCardSize)
                                                 .frame(width: 240, height: 135)
                                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                                             VStack(alignment: .leading, spacing: 6) {
