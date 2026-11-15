@@ -10,6 +10,10 @@ enum AppConfig {
             // An unset build setting can leave the literal "$(NAME)" behind.
             return trimmed.hasPrefix("$(") ? "" : trimmed
         }
+        /// URLs: drop properties-file escapes ("https\\://…") that would make them invalid.
+        func url(_ key: String) -> String {
+            value(key).replacingOccurrences(of: "\\", with: "")
+        }
         return NuvioConfig(
             tmdbApiKey: value("NuvioTmdbApiKey"),
             traktClientId: value("NuvioTraktClientId"),
@@ -19,9 +23,9 @@ enum AppConfig {
             mdbListClientId: value("NuvioMdbListClientId"),
             aniListClientId: value("NuvioAniListClientId"),
             premiumizeClientId: value("NuvioPremiumizeClientId"),
-            introDbApiUrl: value("NuvioIntroDbApiUrl"),
-            trailerApiUrl: value("NuvioTrailerApiUrl"),
-            supabaseUrl: value("NuvioSupabaseUrl"),
+            introDbApiUrl: url("NuvioIntroDbApiUrl"),
+            trailerApiUrl: url("NuvioTrailerApiUrl"),
+            supabaseUrl: url("NuvioSupabaseUrl"),
             supabaseAnonKey: value("NuvioSupabaseAnonKey")
         )
     }
