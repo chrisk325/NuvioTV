@@ -169,6 +169,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("home.modernLandscape", false)
         set(value) = put("home.modernLandscape", value)
 
+    /** Hide Up next episodes that haven't aired yet (Android showUnairedNextUp, inverted; default shows them). */
+    var hideUnreleasedUpNext: Boolean
+        get() = bool("home.hideUnairedNextUp", false)
+        set(value) = put("home.hideUnairedNextUp", value)
+
     var showContinueWatching: Boolean
         get() = bool("home.continueWatching", true)
         set(value) = put("home.continueWatching", value)

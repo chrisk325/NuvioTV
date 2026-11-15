@@ -348,6 +348,8 @@ private struct HomeSettingsPane: View {
 
             Section("Rows") {
                 Toggle("Continue Watching row", isOn: s.bind({ $0.showContinueWatching }, { $0.showContinueWatching = $1 }))
+                Toggle("Hide unreleased episodes in Up next",
+                       isOn: s.bind({ $0.hideUnreleasedUpNext }, { $0.hideUnreleasedUpNext = $1; app.reloadContinueWatching() }))
                 NavigationLink("Catalogs and hero sources") { HomeCatalogsSettings(binder: binder) }
             }
         }

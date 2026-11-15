@@ -14,6 +14,11 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var addons: [Addon] = []
     @Published private(set) var continueWatching: [WatchProgress] = []
+
+    /// Re-reads Continue Watching after a setting that filters it changed.
+    func reloadContinueWatching() {
+        continueWatching = core.continueWatching()
+    }
     @Published private(set) var library: [SavedItem] = []
     @Published private(set) var isRefreshingAddons = false
     @Published private(set) var failedAddonUrls: [String] = []

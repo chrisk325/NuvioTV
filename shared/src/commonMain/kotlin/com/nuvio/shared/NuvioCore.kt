@@ -415,8 +415,11 @@ class NuvioCore(
     fun continueWatching(): List<WatchProgress> {
         val inProgress = watchProgress.continueWatching()
         val busy = inProgress.map { it.contentId }.toSet()
+        val now = currentTimeMillis()
+        val hideUnreleased = settings.hideUnreleasedUpNext
         val next = upNext.value.filter {
-            it.contentId !in busy && upNextKey(it) !in dismissedUpNext && !watched.isWatched(it.videoId)
+            it.contentId !in busy && upNextKey(it) !in dismissedUpNext && !watched.isWatched(it.videoId) &&
+                !(hideUnreleased && (it.releasedAtMs ?: 0L) > now)
         }
         return (inProgress + next).sortedByDescending { it.updatedAtMs }
     }

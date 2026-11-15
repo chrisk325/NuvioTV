@@ -241,7 +241,7 @@ class TraktService(
             val imdb = ids.nonBlank("imdb") ?: return@mapNotNull null
             val traktId = ids.int("trakt")?.toString() ?: ids.nonBlank("slug") ?: return@mapNotNull null
             val progress = runCatching {
-                get("shows/$traktId/progress/watched?hidden=false&specials=false&count_specials=false")?.asObject()
+                get("shows/$traktId/progress/watched?hidden=false&specials=false&count_specials=false&extended=full")?.asObject()
             }.getOrNull() ?: return@mapNotNull null
             val next = progress.obj("next_episode") ?: return@mapNotNull null
             val season = next.int("season") ?: return@mapNotNull null
@@ -251,7 +251,8 @@ class TraktService(
                 name = show.str("title") ?: imdb, poster = poster(imdb), background = background(imdb),
                 season = season, episode = number, episodeTitle = next.str("title"),
                 positionMs = 0, durationMs = 0,
-                updatedAtMs = parseReleaseEpochMs(entry.str("last_watched_at")) ?: 0L
+                updatedAtMs = parseReleaseEpochMs(entry.str("last_watched_at")) ?: 0L,
+                releasedAtMs = parseReleaseEpochMs(next.str("first_aired"))
             )
         }
     }

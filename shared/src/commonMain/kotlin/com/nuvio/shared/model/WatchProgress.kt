@@ -17,7 +17,9 @@ data class WatchProgress(
     val episodeTitle: String? = null,
     val positionMs: Long,
     val durationMs: Long,
-    val updatedAtMs: Long
+    val updatedAtMs: Long,
+    /** Up next only: when the episode airs (epoch ms), if the tracker says. */
+    val releasedAtMs: Long? = null
 ) {
     val fraction: Double
         get() = if (durationMs <= 0) 0.0 else (positionMs.toDouble() / durationMs).coerceIn(0.0, 1.0)
