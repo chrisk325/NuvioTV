@@ -126,3 +126,12 @@ class MergeMetaTest {
         assertEquals(listOf("Action"), merged.genres)
     }
 }
+
+class CatalogNameTest {
+    @Test
+    fun addonSuffixIsStripped() {
+        assertEquals("TMDB Trending", com.nuvio.shared.repository.catalogNameWithoutAddon("TMDB Trending - AIOMetadata", "AIOMetadata"))
+        assertEquals("TMDB Trending", com.nuvio.shared.repository.catalogNameWithoutAddon("TMDB Trending (AIOMetadata)", "aiometadata"))
+        assertEquals("Popular", com.nuvio.shared.repository.catalogNameWithoutAddon("Popular", "Cinemeta"))
+    }
+}

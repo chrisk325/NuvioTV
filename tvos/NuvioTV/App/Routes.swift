@@ -29,6 +29,8 @@ enum Route: Hashable {
     case streams(StreamTarget)
     case catalog(CatalogSlot)
     case person(Int32)
+    /// "See all" of a Jellyfin / Emby library.
+    case serverLibrary(ServerLibrary)
 }
 
 struct RouteDestination: View {
@@ -44,6 +46,8 @@ struct RouteDestination: View {
             CatalogGridView(slot: slot)
         case .person(let id):
             PersonView(personId: id)
+        case .serverLibrary(let library):
+            ServerLibraryGridView(library: library)
         }
     }
 }

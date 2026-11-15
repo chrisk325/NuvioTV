@@ -73,12 +73,12 @@ struct ServerLibraryRow: View {
     var body: some View {
         Group {
             if !items.isEmpty {
-                MetaRowView(title: "\(library.name) · \(library.server.name)", items: items, onFocus: onFocus)
+                MetaRowView(title: title, items: items, seeAll: .serverLibrary(library), onFocus: onFocus)
             } else if !loaded {
                 // Something on screen while loading: an empty row never appears, so its .task
                 // never ran and Home stayed blank with only a media server set up.
                 VStack(alignment: .leading) {
-                    Text("\(library.name) · \(library.server.name)").font(.headline).padding(.horizontal, 60)
+                    Text(title).font(.headline).padding(.horizontal, 60)
                     ProgressView().padding(60)
                 }
             }
@@ -88,5 +88,60 @@ struct ServerLibraryRow: View {
             loaded = true
             items = (try? await app.core.mediaServers.latest(library: library, start: 0, limit: 30)) ?? []
         }
+    }
+
+    /// Like add-on rows: "Films - Movie"; the server name only when there are several servers.
+    private var title: String {
+        let base = "\(library.name) - \(library.typeLabel)"
+        return app.core.mediaServers.servers.count > 1 ? "\(base) · \(library.server.name)" : base
+    }
+}
+
+/// Whole Jellyfin / Emby library as a paged poster grid ("See all").
+struct ServerLibraryGridView: View {
+    @EnvironmentObject private var app: AppModel
+    let library: ServerLibrary
+
+    @State private var items: [MetaPreview] = []
+    @State private var hasMore = true
+    @State private var isLoading = false
+    private let pageSize: Int32 = 60
+
+    private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
+
+    var body: some View {
+        ScrollView {
+            Text("\(library.name) - \(library.typeLabel)")
+                .font(.title2.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 60)
+                .padding(.top, 20)
+            LazyVGrid(columns: columns, spacing: 50) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    PosterCard(item: item)
+                        .onAppear {
+                            if index >= items.count - 8 { Task { await loadMore() } }
+                        }
+                }
+            }
+            .padding(60)
+            if isLoading { ProgressView().padding() }
+            if !isLoading && items.isEmpty && !hasMore {
+                MessageView(title: "Nothing in this library", systemImage: "film.stack")
+            }
+        }
+        .task { if items.isEmpty { await loadMore() } }
+    }
+
+    @MainActor
+    private func loadMore() async {
+        guard hasMore, !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+        let page = (try? await app.core.mediaServers.latest(library: library, start: Int32(items.count), limit: pageSize)) ?? []
+        let known = Set(items.map(\.id))
+        let fresh = page.filter { !known.contains($0.id) }
+        items += fresh
+        hasMore = page.count >= Int(pageSize) && !fresh.isEmpty
     }
 }

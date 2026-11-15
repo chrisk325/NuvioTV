@@ -40,6 +40,7 @@ data class CatalogRow(
                     }
                 }
             }
-            return if (label == null) catalogName else "$catalogName - $label"
+            val name = com.nuvio.shared.repository.catalogNameWithoutAddon(catalogName, addonName)
+            return if (label == null) name else "$name - $label"
         }
 }

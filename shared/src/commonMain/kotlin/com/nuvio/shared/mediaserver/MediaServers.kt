@@ -51,8 +51,22 @@ data class MediaServer(
     val token: String
 )
 
-data class ServerLibrary(val server: MediaServer, val id: String, val name: String) {
+data class ServerLibrary(
+    val server: MediaServer,
+    val id: String,
+    val name: String,
+    /** Jellyfin / Emby CollectionType: "movies", "tvshows" or null (mixed). */
+    val collectionType: String? = null
+) {
     val key: String get() = "${server.id}:$id"
+
+    /** "Name - Movie" / "Name - Series" / "Name - Movies & Series", like add-on catalog rows. */
+    val typeLabel: String
+        get() = when (collectionType) {
+            "movies" -> "Movie"
+            "tvshows" -> "Series"
+            else -> "Movies & Series"
+        }
 }
 
 class MediaServerException(message: String) : Exception(message)
@@ -116,7 +130,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     suspend fun libraries(server: MediaServer): List<ServerLibrary> =
         get(server, "/Users/${server.userId}/Views")?.objects("Items").orEmpty()
             .filter { it.str("CollectionType") in setOf("movies", "tvshows", null) }
-            .mapNotNull { o -> ServerLibrary(server, o.nonBlank("Id") ?: return@mapNotNull null, o.str("Name").orEmpty()) }
+            .mapNotNull { o ->
+                ServerLibrary(server, o.nonBlank("Id") ?: return@mapNotNull null, o.str("Name").orEmpty(), o.str("CollectionType"))
+            }
 
     /** Newest titles of a library as previews; titles with an IMDb id open normal add-on details. */
     @Throws(Exception::class)

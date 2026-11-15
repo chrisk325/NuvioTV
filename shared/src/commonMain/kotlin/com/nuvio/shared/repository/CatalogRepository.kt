@@ -34,7 +34,8 @@ data class CatalogSlot(
                 }
             }
         }
-        return if (label == null) catalog.name else "${catalog.name} - $label"
+        val name = catalogNameWithoutAddon(catalog.name, addon.displayName)
+        return if (label == null) name else "$name - $label"
     }
 }
 
@@ -74,4 +75,20 @@ class CatalogRepository(private val client: StremioClient) {
 
     @Throws(Exception::class)
     suspend fun loadSlot(slot: CatalogSlot, skip: Int = 0): CatalogRow = loadRow(slot.addon, slot.catalog, skip)
+}
+
+/**
+ * Some add-ons append their own name to catalog names ("TMDB Trending - AIOMetadata"); rows show
+ * just the catalog name and its type.
+ */
+internal fun catalogNameWithoutAddon(name: String, addonName: String): String {
+    val addon = addonName.trim()
+    if (addon.isEmpty()) return name
+    val separators = listOf(" - ", " – ", " — ", " | ", " · ", " • ", ": ")
+    for (sep in separators) {
+        if (name.endsWith(sep + addon, ignoreCase = true)) return name.dropLast(sep.length + addon.length).trim()
+        if (name.startsWith(addon + sep, ignoreCase = true)) return name.drop(addon.length + sep.length).trim()
+    }
+    if (name.endsWith(" ($addon)", ignoreCase = true)) return name.dropLast(addon.length + 3).trim()
+    return name
 }
