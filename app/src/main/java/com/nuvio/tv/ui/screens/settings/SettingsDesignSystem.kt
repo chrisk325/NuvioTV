@@ -2,6 +2,7 @@
 
 package com.nuvio.tv.ui.screens.settings
 
+import com.nuvio.tv.ui.v2.components.v2Surface
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 import androidx.annotation.RawRes
@@ -696,8 +697,7 @@ internal fun SettingsGroupCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(settingsGroupShape())
-                    .background(NuvioTheme.colors.BackgroundCard.copy(alpha = 0.55f))
+                    .v2Surface(settingsGroupShape(), NuvioTheme.colors.BackgroundCard.copy(alpha = 0.55f))
                     .padding(NuvioTheme.spacing.sm),
                 verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)
             ) {

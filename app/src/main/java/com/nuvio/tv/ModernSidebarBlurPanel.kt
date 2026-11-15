@@ -66,6 +66,11 @@ import com.nuvio.tv.ui.util.rememberRawSvgPainter
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeInputScale
 import dev.chrisbanes.haze.hazeEffect
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.nuvio.tv.ui.v2.components.GlassRole
+import com.nuvio.tv.ui.v2.components.nuvioGlass
+import com.nuvio.tv.ui.v2.components.nuvioV2Focus
 
 private val SidebarLeadingVisualSize = NuvioComponents.tokens.sidebar.leadingVisual
 private val SidebarContentGap = NuvioComponents.tokens.sidebar.contentGap
@@ -93,13 +98,14 @@ internal fun ModernSidebarBlurPanel(
     showProfileSelector: Boolean,
     onSwitchProfile: () -> Unit
 ) {
+    val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
     val delayedBlurProgress =
         ((sidebarExpandProgress - 0.34f) / 0.66f).coerceIn(0f, 1f)
     val showPanelBlur = blurEnabled &&
         isSidebarExpanded &&
         !sidebarCollapsePending &&
         delayedBlurProgress > 0f
-    val expandedPanelBlurModifier = if (showPanelBlur) {
+    val expandedPanelBlurModifier = if (showPanelBlur && !isV2) {
         Modifier.hazeEffect(state = sidebarHazeState) {
             blurRadius = NuvioTheme.effects.blurPanel * delayedBlurProgress
             noiseFactor = 0.04f * delayedBlurProgress
@@ -135,19 +141,31 @@ internal fun ModernSidebarBlurPanel(
             .graphicsLayer {
                 val p = sidebarExpandProgress
                 alpha = p
-                val s = 0.97f + (0.03f * p)
+                val s = if (isV2) 1f else 0.97f + (0.03f * p)
                 scaleX = s
                 scaleY = s
                 transformOrigin = TransformOrigin(0f, 0f)
             }
-            .clip(panelShape)
-            .then(expandedPanelBlurModifier)
-            .background(brush = panelBackgroundBrush, shape = panelShape)
             .then(
-                if (panelBorderColor != Color.Transparent) {
-                    Modifier.border(width = NuvioStrokes.tokens.hairline, color = panelBorderColor, shape = panelShape)
+                if (isV2) {
+                    // Nuvio V2: frosted (Cinematic Glass) or deep dark (Pure Liquid Dark) glass panel.
+                    Modifier.nuvioGlass(
+                        GlassRole.NAVIGATION,
+                        shape = panelShape,
+                        hazeState = sidebarHazeState.takeIf { blurEnabled }
+                    )
                 } else {
                     Modifier
+                        .clip(panelShape)
+                        .then(expandedPanelBlurModifier)
+                        .background(brush = panelBackgroundBrush, shape = panelShape)
+                        .then(
+                            if (panelBorderColor != Color.Transparent) {
+                                Modifier.border(width = NuvioStrokes.tokens.hairline, color = panelBorderColor, shape = panelShape)
+                            } else {
+                                Modifier
+                            }
+                        )
                 }
             )
             .padding(horizontal = NuvioTheme.spacing.md, vertical = NuvioTheme.spacing.lg - NuvioTheme.spacing.xxs)
@@ -244,10 +262,13 @@ private fun SidebarNavigationItem(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = NuvioTheme.colors
-    val shape = RoundedCornerShape(NuvioRadii.tokens.full)
+    val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
+    val shape = RoundedCornerShape(if (isV2) 8.dp else NuvioRadii.tokens.full)
     val palette = NuvioTheme.palette
     val accentColor = palette.secondary
     val backgroundColorTarget = when {
+        isV2 && isFocused -> palette.focusBackground
+        isV2 -> Color.Transparent
         isFocused && selected -> accentColor.copy(alpha = 0.28f)
         isFocused -> Color.White.copy(alpha = 0.12f)
         selected -> accentColor.copy(alpha = 0.15f)
@@ -261,6 +282,7 @@ private fun SidebarNavigationItem(
     val backgroundColor = if (selected && !isFocused) backgroundColorTarget else animatedBackgroundColor
 
     val contentColorTarget = when {
+        isV2 && isFocused -> Color.White
         selected -> accentColor
         isFocused -> colors.TextPrimary
         else -> colors.text.onOverlay
@@ -272,7 +294,7 @@ private fun SidebarNavigationItem(
     )
     val contentColor = if (selected && !isFocused) contentColorTarget else animatedContentColor
 
-    val iconBrush = if (selected) palette.accentBrush() else null
+    val iconBrush = if (selected && !(isV2 && isFocused)) palette.accentBrush() else null
     val iconTintTarget = when {
         selected -> Color.White
         isFocused -> colors.TextPrimary
@@ -285,12 +307,15 @@ private fun SidebarNavigationItem(
     )
     val iconTint = if (selected && !isFocused) iconTintTarget else animatedIconTint
     val itemScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.1f else 1f,
+        targetValue = if (isFocused && !isV2) 1.1f else 1f,
         animationSpec = tween(durationMillis = NuvioMotion.tokens.durations.fast, easing = NuvioMotion.tokens.easings.standard),
         label = "sidebarItemScale"
     )
 
-    Card(
+    SidebarItemSurface(
+        isV2 = isV2,
+        backgroundColor = backgroundColor,
+        shape = shape,
         onClick = onClick,
         modifier = modifier
             .graphicsLayer {
@@ -302,20 +327,9 @@ private fun SidebarNavigationItem(
                 isFocused = it.hasFocus
                 onFocusChanged(it.hasFocus)
             }
-            .focusProperties { canFocus = focusEnabled },
-        colors = CardDefaults.colors(
-            containerColor = backgroundColor,
-            focusedContainerColor = backgroundColor,
-        ),
-        border = CardDefaults.border(
-            border = androidx.tv.material3.Border.None,
-            focusedBorder = androidx.tv.material3.Border(
-                border = androidx.compose.foundation.BorderStroke(NuvioStrokes.tokens.thin, Color.Transparent),
-                shape = shape
-            )
-        ),
-        shape = CardDefaults.shape(shape = shape),
-        scale = CardDefaults.scale(focusedScale = 1f, pressedScale = 1f)
+            .focusProperties { canFocus = focusEnabled }
+            // Shaped bloom supplies depth; a native shadow would show through the glass.
+            .then(if (isV2) Modifier.nuvioV2Focus(isFocused, shape, hardwareShadow = false) else Modifier)
     ) {
         Row(
             modifier = Modifier
@@ -391,29 +405,21 @@ private fun SidebarProfileItem(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = NuvioTheme.colors
-    val shape = RoundedCornerShape(NuvioRadii.tokens.full)
+    val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
+    val shape = RoundedCornerShape(if (isV2) 8.dp else NuvioRadii.tokens.full)
     val backgroundColor = if (isFocused) Color.White.copy(alpha = 0.12f) else Color.Transparent
-    Card(
+    SidebarItemSurface(
+        isV2 = isV2,
+        backgroundColor = backgroundColor,
+        shape = shape,
         onClick = onClick,
         modifier = modifier
             .onFocusChanged {
                 isFocused = it.hasFocus
                 onFocusChanged(it.hasFocus)
             }
-            .focusProperties { canFocus = focusEnabled },
-        colors = CardDefaults.colors(
-            containerColor = backgroundColor,
-            focusedContainerColor = backgroundColor,
-        ),
-        border = CardDefaults.border(
-            border = androidx.tv.material3.Border.None,
-            focusedBorder = androidx.tv.material3.Border(
-                border = androidx.compose.foundation.BorderStroke(NuvioStrokes.tokens.thin, Color.Transparent),
-                shape = shape
-            )
-        ),
-        shape = CardDefaults.shape(shape = shape),
-        scale = CardDefaults.scale(focusedScale = 1f, pressedScale = 1f)
+            .focusProperties { canFocus = focusEnabled }
+            .then(if (isV2) Modifier.nuvioV2Focus(isFocused, shape, hardwareShadow = false) else Modifier)
     ) {
         Row(
             modifier = Modifier
@@ -450,5 +456,44 @@ private fun SidebarProfileItem(
             )
         )
         }
+    }
+}
+
+/** V2 owns its shaped fill and focus; avoid nesting TV Card's surface layers inside it. */
+@Composable
+private fun SidebarItemSurface(
+    isV2: Boolean,
+    backgroundColor: Color,
+    shape: RoundedCornerShape,
+    onClick: () -> Unit,
+    modifier: Modifier,
+    content: @Composable () -> Unit
+) {
+    if (isV2) {
+        Box(
+            modifier
+                .background(backgroundColor, shape)
+                .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+        ) {
+            content()
+        }
+    } else {
+        Card(
+            onClick = onClick,
+            modifier = modifier,
+            colors = CardDefaults.colors(
+                containerColor = backgroundColor,
+                focusedContainerColor = backgroundColor,
+            ),
+            border = CardDefaults.border(
+                border = androidx.tv.material3.Border.None,
+                focusedBorder = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(NuvioStrokes.tokens.thin, Color.Transparent),
+                    shape = shape
+                )
+            ),
+            shape = CardDefaults.shape(shape = shape),
+            scale = CardDefaults.scale(focusedScale = 1f, pressedScale = 1f)
+        ) { content() }
     }
 }

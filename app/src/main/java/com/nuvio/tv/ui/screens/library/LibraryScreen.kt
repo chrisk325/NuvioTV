@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.library
 
+import com.nuvio.tv.ui.v2.appearance.v2PageAtmosphere
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -310,7 +311,7 @@ fun LibraryScreen(
         state = gridState,
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioTheme.colors.Background)
+            .v2PageAtmosphere(NuvioTheme.colors.Background)
             .focusRestorer {
                 val lastKey = lastFocusedPosterKey
                 (if (lastKey != null && lastKey in posterFocusRequesters) {

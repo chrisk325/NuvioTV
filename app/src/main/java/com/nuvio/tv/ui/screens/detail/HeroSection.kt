@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.detail
 
+import com.nuvio.tv.ui.v2.components.nuvioControlSurface
 import com.nuvio.tv.ui.theme.NuvioMotion
 
 import android.view.KeyEvent as AndroidKeyEvent
@@ -518,17 +519,22 @@ private fun ActionIconButtonPainter(
             .onFocusChanged { state ->
                 if (state.isFocused) onFocused()
             }
-            .focusProperties { up = FocusRequester.Cancel },
-        colors = IconButtonDefaults.colors(
-            containerColor = NuvioTheme.colors.BackgroundCard,
-            focusedContainerColor = NuvioTheme.colors.Secondary,
-            contentColor = NuvioTheme.colors.TextPrimary,
-            focusedContentColor = NuvioTheme.colors.OnSecondary
+            .focusProperties { up = FocusRequester.Cancel }
+            .nuvioControlSurface(CircleShape),
+        colors = v2IconButtonColors(
+            IconButtonDefaults.colors(
+                containerColor = NuvioTheme.colors.BackgroundCard,
+                focusedContainerColor = NuvioTheme.colors.Secondary,
+                contentColor = NuvioTheme.colors.TextPrimary,
+                focusedContentColor = NuvioTheme.colors.OnSecondary
+            )
         ),
-        border = IconButtonDefaults.border(
-            focusedBorder = Border(
-                border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
-                shape = CircleShape
+        border = v2IconButtonBorder(
+            IconButtonDefaults.border(
+                focusedBorder = Border(
+                    border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                    shape = CircleShape
+                )
             )
         ),
         shape = IconButtonDefaults.shape(
@@ -617,17 +623,27 @@ private fun ActionIconButton(
                     role = Role.Checkbox
                     toggleableState = if (selected) ToggleableState.On else ToggleableState.Off
                 }
-            },
-        colors = IconButtonDefaults.colors(
-            containerColor = if (selected) selectedContainerColor else NuvioTheme.colors.BackgroundCard,
+            }
+            .then(if (selected) Modifier else Modifier.nuvioControlSurface(CircleShape)),
+        colors = if (selected) IconButtonDefaults.colors(
+            containerColor = selectedContainerColor,
             focusedContainerColor = NuvioTheme.colors.Secondary,
-            contentColor = if (selected) selectedContentColor else NuvioTheme.colors.TextPrimary,
+            contentColor = selectedContentColor,
             focusedContentColor = NuvioTheme.colors.OnSecondary
+        ) else v2IconButtonColors(
+            IconButtonDefaults.colors(
+                containerColor = NuvioTheme.colors.BackgroundCard,
+                focusedContainerColor = NuvioTheme.colors.Secondary,
+                contentColor = NuvioTheme.colors.TextPrimary,
+                focusedContentColor = NuvioTheme.colors.OnSecondary
+            )
         ),
-        border = IconButtonDefaults.border(
-            focusedBorder = Border(
-                border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
-                shape = CircleShape
+        border = v2IconButtonBorder(
+            IconButtonDefaults.border(
+                focusedBorder = Border(
+                    border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                    shape = CircleShape
+                )
             )
         ),
         shape = IconButtonDefaults.shape(
@@ -976,3 +992,20 @@ private fun MetaInfoDivider() {
         color = NuvioTheme.extendedColors.textTertiary
     )
 }
+
+/** Nuvio V2: glass body (from nuvioControlSurface) shows through; focus is the accent bloom. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun v2IconButtonColors(original: androidx.tv.material3.ButtonColors): androidx.tv.material3.ButtonColors =
+    if (com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current == null) original else IconButtonDefaults.colors(
+        containerColor = Color.Transparent,
+        focusedContainerColor = NuvioTheme.colors.Secondary.copy(alpha = .24f),
+        contentColor = NuvioTheme.colors.TextPrimary,
+        focusedContentColor = NuvioTheme.colors.TextPrimary
+    )
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun v2IconButtonBorder(original: androidx.tv.material3.ButtonBorder): androidx.tv.material3.ButtonBorder =
+    if (com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current == null) original
+    else IconButtonDefaults.border(border = Border.None, focusedBorder = Border.None)

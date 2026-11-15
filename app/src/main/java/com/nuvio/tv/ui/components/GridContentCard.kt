@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.components
 
+import com.nuvio.tv.ui.v2.components.nuvioV2Focus
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 import android.view.KeyEvent as AndroidKeyEvent
@@ -81,6 +82,7 @@ fun GridContentCard(
     onFocused: () -> Unit = {}
 ) {
     val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
+    val isV2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
     val cardDepthStyle = LocalCardDepthStyle.current
     val density = LocalDensity.current
     val globalLandscape = LocalLandscapePosterMode.current
@@ -151,6 +153,7 @@ fun GridContentCard(
                     isFocused = state.isFocused
                     if (state.isFocused) onFocused()
                 }
+                .nuvioV2Focus(isFocused, cardShape, stationary = true)
                 .onPreviewKeyEvent { event ->
                     val native = event.nativeKeyEvent
                     if (native.action == AndroidKeyEvent.ACTION_DOWN && onLongPress != null) {
@@ -186,12 +189,13 @@ fun GridContentCard(
                 focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent
             ),
             border = CardDefaults.border(
-                focusedBorder = Border(
+                // Nuvio V2: the cinematic bloom replaces the ring; cards stay put.
+                focusedBorder = if (isV2) Border.None else Border(
                     border = NuvioTheme.focusRing.border(posterCardStyle.focusedBorderWidth),
                     shape = cardShape
                 )
             ),
-            scale = CardDefaults.scale(focusedScale = posterCardStyle.focusedScale)
+            scale = CardDefaults.scale(focusedScale = if (isV2) 1f else posterCardStyle.focusedScale)
         ) {
             Box(
                 modifier = Modifier

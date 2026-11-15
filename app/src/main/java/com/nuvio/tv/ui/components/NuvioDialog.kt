@@ -38,6 +38,8 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.ui.screens.ambient.AmbientDialogEffect
+import com.nuvio.tv.ui.v2.components.GlassRole
+import com.nuvio.tv.ui.v2.components.nuvioGlass
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -61,7 +63,11 @@ fun NuvioDialog(
     var isReady by remember { mutableStateOf(!suppressFirstKeyUp) }
     val maxDialogHeight = (LocalConfiguration.current.screenHeightDp.dp - NuvioTheme.spacing.xxxl).coerceAtLeast(320.dp)
     val containerShape = RoundedCornerShape(containerCornerRadius)
-    val backgroundModifier = if (containerBrush == null) {
+    val v2 = com.nuvio.tv.ui.v2.appearance.LocalV2Appearance.current != null
+    val backgroundModifier = if (v2 && containerBrush == null) {
+        // Nuvio V2: dialogs use the modal glass material of the selected visual style.
+        Modifier.nuvioGlass(GlassRole.MODAL, shape = containerShape)
+    } else if (containerBrush == null) {
         Modifier.background(NuvioTheme.colors.BackgroundElevated, containerShape)
     } else {
         Modifier.background(containerBrush, containerShape)
@@ -72,16 +78,26 @@ fun NuvioDialog(
         properties = DialogProperties(usePlatformDefaultWidth = usePlatformDefaultWidth)
     ) {
         AmbientDialogEffect(onDismiss)
+        // A dialog is its own window: the page backdrop cannot be sampled from here.
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.nuvio.tv.ui.v2.components.LocalGlassBackdrop provides null
+        ) {
         Box(
             modifier = Modifier
                 .width(width)
                 .heightIn(max = maxDialogHeight)
                 .clip(containerShape)
                 .then(backgroundModifier)
-                .border(
-                    containerBorderWidth,
-                    containerBorderColor ?: NuvioTheme.colors.Border,
-                    containerShape
+                .then(
+                    if (v2 && containerBorderColor == null) {
+                        Modifier
+                    } else {
+                        Modifier.border(
+                            containerBorderWidth,
+                            containerBorderColor ?: NuvioTheme.colors.Border,
+                            containerShape
+                        )
+                    }
                 )
                 .onPreviewKeyEvent { event ->
                     val native = event.nativeKeyEvent
@@ -127,6 +143,7 @@ fun NuvioDialog(
 
                 content()
             }
+        }
         }
     }
 }

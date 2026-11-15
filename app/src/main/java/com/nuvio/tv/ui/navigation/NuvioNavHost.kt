@@ -936,6 +936,10 @@ private fun PlaybackNavHost(
                 }
             }
 
+            // Player glass stays static over decoded video (no live blur of the page).
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.nuvio.tv.ui.v2.appearance.LocalV2PlaybackActive provides true
+            ) {
             PlayerScreen(
                 onBackPress = { currentVideoId, currentSeason, currentEpisode, autoPlayEnabled, playbackCompleted ->
                     val args = backStackEntry.arguments
@@ -1217,6 +1221,7 @@ private fun PlaybackNavHost(
                     }
                 }
             )
+            }
         }
 
         rootComposable(Screen.Search.route) { backStackEntry ->
