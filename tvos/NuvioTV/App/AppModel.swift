@@ -85,13 +85,19 @@ final class AppModel: ObservableObject {
     }
 
     /** Reloads Jellyfin / Emby libraries for Home. */
+    /// True while Jellyfin / Emby libraries are (re)loading.
+    @Published private(set) var isLoadingServerLibraries = false
+
     func serversChanged() {
+        // Set before the task starts so Home never flashes "Nothing to show yet" in between.
+        isLoadingServerLibraries = !core.mediaServers.servers.isEmpty
         Task { @MainActor in
             var all: [ServerLibrary] = []
             for server in core.mediaServers.servers {
                 all += (try? await core.mediaServers.libraries(server: server)) ?? []
             }
             serverLibraries = all
+            isLoadingServerLibraries = false
             await reloadServerFavorites()
         }
     }
@@ -99,9 +105,9 @@ final class AppModel: ObservableObject {
     func start() async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
+        serversChanged()
         await syncCloud()
         await refreshAddons()
-        serversChanged()
         await syncTrackers()
     }
 
@@ -144,9 +150,12 @@ final class AppModel: ObservableObject {
         watched.contains(core.watchedKey(meta: meta, video: video))
     }
 
+    /// Set once the first add-on refresh has finished (with or without add-ons installed).
+    @Published private(set) var hasLoadedAddons = false
+
     func refreshAddons() async {
         isRefreshingAddons = true
-        defer { isRefreshingAddons = false }
+        defer { isRefreshingAddons = false; hasLoadedAddons = true }
         do {
             failedAddonUrls = try await core.refreshAddons()
         } catch {

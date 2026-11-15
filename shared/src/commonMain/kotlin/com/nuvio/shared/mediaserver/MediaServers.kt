@@ -137,6 +137,15 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
 
+    /** Movies and shows on the server matching [query] (SearchTerm), for the Search tab. */
+    @Throws(Exception::class)
+    suspend fun search(server: MediaServer, query: String, limit: Int = 40): List<MetaPreview> =
+        get(
+            server,
+            "/Users/${server.userId}/Items?SearchTerm=${encodeUrlComponent(query)}&Recursive=true" +
+                "&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
+        )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
+
     /**
      * Details built from the server's own metadata, for titles no add-on describes (e.g. when
      * Jellyfin is the only source): title, synopsis, artwork, rating, genres, cast and, for

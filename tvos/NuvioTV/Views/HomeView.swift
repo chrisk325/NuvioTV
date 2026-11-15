@@ -66,12 +66,14 @@ struct HomeView: View {
         let slots = app.homeSlots
         Group {
             if slots.isEmpty && app.serverLibraries.isEmpty {
-                if app.isRefreshingAddons || (app.addons.isEmpty && app.failedAddonUrls.isEmpty) {
-                    LoadingView(label: "Loading add-ons…")
+                // Works with add-ons, a Jellyfin / Emby server, or both: only wait while either
+                // is still loading (no add-ons installed is not "loading").
+                if app.isRefreshingAddons || !app.hasLoadedAddons || app.isLoadingServerLibraries {
+                    LoadingView(label: "Loading…")
                 } else {
                     MessageView(
-                        title: "No catalogs",
-                        message: "Install or enable an add-on with catalogs in the Add-ons tab.",
+                        title: "Nothing to show yet",
+                        message: "Install an add-on with catalogs in the Add-ons tab, or add a Jellyfin / Emby server in Settings ▸ Media servers.",
                         systemImage: "square.grid.2x2"
                     )
                 }

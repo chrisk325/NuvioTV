@@ -5,6 +5,8 @@ struct SearchView: View {
     @EnvironmentObject private var app: AppModel
     @State private var query = ""
     @State private var results: [CatalogRow] = []
+    /// Matches on Jellyfin / Emby servers (works without any add-on).
+    @State private var serverResults: [AppModel.ServerFavorites] = []
     @State private var isSearching = false
     @State private var searchedQuery = ""
 
@@ -13,8 +15,11 @@ struct SearchView: View {
             LazyVStack(alignment: .leading, spacing: 30) {
                 if isSearching {
                     ProgressView().frame(maxWidth: .infinity).padding(60)
-                } else if results.isEmpty && !searchedQuery.isEmpty {
+                } else if results.isEmpty && serverResults.isEmpty && !searchedQuery.isEmpty {
                     MessageView(title: "No results for “\(searchedQuery)”", systemImage: "magnifyingglass")
+                }
+                ForEach(serverResults) { group in
+                    MetaRowView(title: group.serverName, items: group.items)
                 }
                 ForEach(results, id: \.stableKey) { row in
                     MetaRowView(title: row.displayTitle, items: row.items)
@@ -37,15 +42,22 @@ struct SearchView: View {
         guard trimmed != searchedQuery else { return }
         guard !trimmed.isEmpty else {
             results = []
+            serverResults = []
             searchedQuery = ""
             return
         }
         isSearching = true
         defer { isSearching = false }
         let rows = (try? await app.core.search(query: trimmed)) ?? []
+        var fromServers: [AppModel.ServerFavorites] = []
+        for server in app.core.mediaServers.servers {
+            let items = (try? await app.core.mediaServers.search(server: server, query: trimmed, limit: 40)) ?? []
+            if !items.isEmpty { fromServers.append(AppModel.ServerFavorites(id: server.id, serverName: server.name, items: items)) }
+        }
         // Ignore stale responses if the user kept typing.
         guard trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         results = rows
+        serverResults = fromServers
         searchedQuery = trimmed
     }
 }
