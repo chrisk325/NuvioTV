@@ -336,18 +336,27 @@ struct DetailView: View {
     private func hero(_ meta: Meta) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             titleLogo(meta, compact: false)
-            Text(infoLine(meta)).font(.callout).foregroundStyle(.secondary)
+            // White with a soft shadow so it reads on bright artwork (was the dim secondary grey).
+            Text(infoLine(meta))
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
             if !ratings.isEmpty {
                 RatingsRow(ratings: ratings)
+                    .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
             }
             if let tagline = details?.tagline {
-                Text(tagline).font(.callout).italic().foregroundStyle(.secondary)
+                Text(tagline).font(.callout).italic()
+                    .foregroundStyle(.white.opacity(0.9))
+                    .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
             }
             if let description = meta.description_, !description.isEmpty {
                 Text(description)
                     .font(.body)
+                    .foregroundStyle(.white)
                     .lineLimit(3)
                     .frame(maxWidth: 1200, alignment: .leading)
+                    .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
             }
             // Down from any button slides to the episodes / cast screen (handled on each button:
             // move commands only reach the focused control).
