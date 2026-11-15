@@ -547,7 +547,8 @@ struct EpisodeCard: View {
     private let width: CGFloat = 560
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Room for the focused card's lift (it grows ~10% and would touch the text).
+        VStack(alignment: .leading, spacing: 30) {
             NavigationLink(value: Route.streams(StreamTarget(meta: meta, video: video))) {
                 ZStack(alignment: .topLeading) {
                     RemoteImage(url: video.thumbnail ?? meta.backdropUrl)
