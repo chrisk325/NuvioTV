@@ -385,8 +385,11 @@ class NuvioCore(
         val key = "$imdb|$isShow"
         ratingsCache[key]?.let { return it }
         val result = mdbList.ratings(settings.mdbListApiKey, imdb, isShow)
-        ratingsCache[key] = result
-        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        // Empty (not found, network hiccup) isn't cached, so the next look tries again.
+        if (result.isNotEmpty()) {
+            ratingsCache[key] = result
+            if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        }
         return result
     }
 
@@ -409,9 +412,17 @@ class NuvioCore(
         if (tmdb == null) return emptyList()
         val key = "tmdb:$tmdb|$isShow"
         ratingsCache[key]?.let { return it }
-        val result = mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow)
-        ratingsCache[key] = result
-        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        // Same lookup the details page uses (by IMDb id), via TMDB's external ids; MDBList's own
+        // TMDB lookup as the fallback.
+        val viaImdb = tmdb.toIntOrNull()
+            ?.let { tmdbId -> runCatching { this.tmdb.imdbIdFor(tmdbId, isShow) }.getOrNull() }
+            ?.let { imdb -> cachedRatings(imdb, isShow) }
+            .orEmpty()
+        val result = viaImdb.ifEmpty { runCatching { mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow) }.getOrDefault(emptyList()) }
+        if (result.isNotEmpty()) {
+            ratingsCache[key] = result
+            if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        }
         return result
     }
 
