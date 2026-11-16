@@ -293,3 +293,36 @@ class MediaServerPlaybackSyncTest {
         assertEquals(listOf("/Sessions/Playing", "/Sessions/Playing/Stopped"), posted)
     }
 }
+
+class MediaServerEpisodeMatchTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun episodeNumberedDifferentlyIsFoundByAirDate() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            val params = request.url.parameters
+            when {
+                request.url.encodedPath == "/Users/u1/Items" && params["AnyProviderIdEquals"] != null -> respond(
+                    """{"Items":[{"Id":"s1","Type":"Series","ProviderIds":{"Imdb":"tt3530232"}}]}""", HttpStatusCode.OK, json
+                )
+                request.url.encodedPath == "/Shows/s1/Episodes" && params["Season"] == "12" -> respond(
+                    """{"Items":[{"Id":"x","IndexNumber":1}]}""", HttpStatusCode.OK, json
+                )
+                request.url.encodedPath == "/Shows/s1/Episodes" -> respond(
+                    """{"Items":[{"Id":"x","IndexNumber":1,"PremiereDate":"2025-02-16T00:00:00.0000000Z"},
+                                 {"Id":"e20","IndexNumber":20,"PremiereDate":"2025-11-10T03:00:00.0000000Z"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                request.url.encodedPath == "/Users/u1/Items/e20" -> respond(
+                    """{"Id":"e20","Name":"Ep","MediaSources":[{"Id":"src","Container":"mkv"}]}""", HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val store = InMemoryStore().apply {
+            putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"Home","address":"http://jf","userId":"u1","token":"tok"}]""")
+        }
+        val groups = MediaServerService(http, store).streamsFor("series", listOf("tt3530232:12:25"), "2025-11-09T23:00:00.000Z")
+        assertTrue(groups.single().streams.single().url!!.contains("/Videos/e20/"))
+    }
+}

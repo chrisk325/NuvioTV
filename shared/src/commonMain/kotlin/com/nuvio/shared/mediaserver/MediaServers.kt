@@ -401,32 +401,67 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
      * [videoId] is "tt…" / "tt…:season:episode", "tmdb:…" or a server-native "mediaserver:…" id
      * (a movie or an episode item).
      */
-    suspend fun streams(type: String, videoId: String): List<AddonStreams> {
-        parseNative(videoId)?.let { (server, itemId) ->
-            return listOfNotNull(runCatching { itemStreams(server, itemId) }.getOrNull())
+    suspend fun streams(type: String, videoId: String): List<AddonStreams> = streamsFor(type, listOf(videoId), null)
+
+    /**
+     * Streams from each server for the first of [candidateIds] it can place (IMDb, TMDB or native
+     * ids, with ":season:episode" for episodes). Episodes are matched by season and number, else
+     * by air date ([released]), since daily / talk shows are often numbered differently by TMDB
+     * and by the server's metadata (TVDB).
+     */
+    suspend fun streamsFor(type: String, candidateIds: List<String>, released: String?): List<AddonStreams> =
+        servers.mapNotNull { server ->
+            for (candidate in candidateIds.distinct()) {
+                val streams = try {
+                    serverStreams(server, candidate, released)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (streams != null) return@mapNotNull streams
+            }
+            null
+        }
+
+    private suspend fun serverStreams(server: MediaServer, videoId: String, released: String?): AddonStreams? {
+        parseNative(videoId)?.let { (owner, itemId) ->
+            return if (owner.id == server.id) itemStreams(server, itemId) else null
         }
         val parts = videoId.split(':')
         val imdb = parts.firstOrNull()?.takeIf { it.startsWith("tt") }
         val tmdb = if (parts.firstOrNull() == "tmdb") parts.getOrNull(1) else null
-        if (imdb == null && tmdb == null) return emptyList()
+        if (imdb == null && tmdb == null) return null
         val tail = if (imdb != null) parts.drop(1) else parts.drop(2)
         val season = tail.getOrNull(0)?.toIntOrNull()
         val episode = tail.getOrNull(1)?.toIntOrNull()
-        return servers.mapNotNull { server ->
-            try {
-                val itemId = findItemId(server, imdb, tmdb, isShow = season != null) ?: return@mapNotNull null
-                val targetId = if (season != null && episode != null) {
-                    get(server, "/Shows/$itemId/Episodes?UserId=${server.userId}&Season=$season")
-                        ?.objects("Items")?.firstOrNull { it.int("IndexNumber") == episode }?.nonBlank("Id")
-                        ?: return@mapNotNull null
-                } else itemId
-                itemStreams(server, targetId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
-            }
+        val isShow = season != null
+        val itemId = findItemId(server, imdb, tmdb, isShow) ?: return null
+        val targetId = if (isShow) findEpisode(server, itemId, season, episode, released) ?: return null else itemId
+        return itemStreams(server, targetId)
+    }
+
+    private suspend fun findEpisode(server: MediaServer, seriesId: String, season: Int?, episode: Int?, released: String?): String? {
+        if (season != null && episode != null) {
+            get(server, "/Shows/$seriesId/Episodes?UserId=${server.userId}&Season=$season")
+                ?.objects("Items")
+                ?.firstOrNull { e ->
+                    val first = e.int("IndexNumber")
+                    first == episode || (first != null && e.int("IndexNumberEnd")?.let { episode in first..it } == true)
+                }
+                ?.nonBlank("Id")?.let { return it }
         }
+        val target = parseReleaseEpochMs(released?.take(10)) ?: return null
+        val day = 86_400_000L
+        return get(server, "/Shows/$seriesId/Episodes?UserId=${server.userId}&Fields=PremiereDate")
+            ?.objects("Items").orEmpty()
+            .mapNotNull { e ->
+                val aired = parseReleaseEpochMs(e.str("PremiereDate")?.take(10)) ?: return@mapNotNull null
+                e to kotlin.math.abs(aired - target)
+            }
+            .filter { it.second <= day }
+            .minByOrNull { it.second }
+            ?.first?.nonBlank("Id")
     }
 
     /**

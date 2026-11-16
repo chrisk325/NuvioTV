@@ -447,6 +447,7 @@ class NuvioCore(
         videoId: String,
         embedded: List<Stream>,
         serverVideoId: String?,
+        serverReleased: String?,
         onUpdate: (StreamsUpdate) -> Unit
     ): CoreSubscription = observe(
         streamRepository.streams(addonRepository.currentAddons, type, videoId, embedded)
@@ -455,9 +456,8 @@ class NuvioCore(
                 if (!update.isComplete) return@transform
                 var groups = update.groups
                 if (mediaServers.servers.isNotEmpty()) {
-                    val lookupId = videoId.takeIf { it.startsWith("tt") } ?: serverVideoId
-                        ?: imdbVideoIdFromTmdb(type, videoId) ?: videoId
-                    val serverGroups = runCatching { mediaServers.streams(type, lookupId) }.getOrDefault(emptyList())
+                    val serverGroups = runCatching { serverStreams(type, videoId, serverVideoId, serverReleased) }
+                        .getOrDefault(emptyList())
                     if (serverGroups.isNotEmpty()) {
                         groups = serverGroups + groups
                         emit(update.copy(groups = groups))
@@ -467,6 +467,30 @@ class NuvioCore(
             },
         onUpdate
     )
+
+    /**
+     * Jellyfin / Emby streams for a video: tries the add-on id, the IMDb-based id and TMDB ids
+     * (converted through TMDB when only one kind is known), so a server that identifies the show
+     * by another provider still finds it.
+     */
+    private suspend fun serverStreams(type: String, videoId: String, serverVideoId: String?, released: String?): List<AddonStreams> {
+        val first = listOfNotNull(videoId.takeIf { it.startsWith("tt") }, serverVideoId, videoId).distinct()
+        val found = mediaServers.streamsFor(type, first, released)
+        if (found.isNotEmpty()) return found
+        val alternates = listOfNotNull(
+            imdbVideoIdFromTmdb(type, videoId),
+            tmdbVideoIdFromImdb(type, videoId.takeIf { it.startsWith("tt") } ?: serverVideoId)
+        ).filter { it !in first }
+        return if (alternates.isEmpty()) emptyList() else mediaServers.streamsFor(type, alternates, released)
+    }
+
+    /** "tt…[:s:e]" → "tmdb:<id>[:s:e]" via TMDB's find endpoint. */
+    private suspend fun tmdbVideoIdFromImdb(type: String, videoId: String?): String? {
+        val parts = videoId?.split(':') ?: return null
+        val imdb = parts.firstOrNull()?.takeIf { it.startsWith("tt") } ?: return null
+        val tmdbId = runCatching { tmdb.findByImdb(imdb, type != "movie") }.getOrNull() ?: return null
+        return (listOf("tmdb", tmdbId.toString()) + parts.drop(1)).joinToString(":")
+    }
 
     /** "tmdb:<id>[:s:e]" → "tt…[:s:e]" via TMDB's external ids, for media server lookups. */
     private suspend fun imdbVideoIdFromTmdb(type: String, videoId: String): String? {

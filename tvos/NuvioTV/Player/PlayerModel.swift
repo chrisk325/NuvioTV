@@ -316,7 +316,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             type: request.meta.apiType,
             videoId: target.videoId,
             embedded: next.streams,
-            serverVideoId: target.serverVideoId
+            serverVideoId: target.serverVideoId,
+            serverReleased: next.released
         ) { [weak self] update in
             MainActor.assumeIsolated {
                 guard let self, self.isResolvingNext else { return }

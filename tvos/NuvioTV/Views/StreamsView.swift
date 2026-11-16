@@ -126,7 +126,8 @@ struct StreamsView: View {
             type: target.meta.apiType,
             videoId: target.videoId,
             embedded: embedded,
-            serverVideoId: target.serverVideoId
+            serverVideoId: target.serverVideoId,
+            serverReleased: target.video?.released
         ) { value in
             MainActor.assumeIsolated {
                 update = value
