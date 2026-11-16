@@ -295,6 +295,8 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             description = item.str("Overview"),
             releaseInfo = item.int("ProductionYear")?.toString(),
             imdbRating = item.str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
+            // Jellyfin / Emby's community rating comes from TMDB (or TVDB), not IMDb.
+            ratingSource = "tmdb",
             genres = (item["Genres"] as? kotlinx.serialization.json.JsonArray)
                 ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty(),
             runtime = runtimeMinutes?.let { "$it min" },
@@ -374,6 +376,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val isShow = str("Type") == "Series"
         remember(server, isShow, obj("ProviderIds"), itemId)
         val id = imdb ?: nativeId(server, itemId)
+        if (imdb == null) obj("ProviderIds")?.nonBlank("Tmdb")?.let { nativeTmdb[id] = it }
         return MetaPreview(
             id = id,
             type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
@@ -386,7 +389,8 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             releaseInfo = int("ProductionYear")?.toString(),
             imdbRating = str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
             genres = emptyList(),
-            imdbId = imdb
+            imdbId = imdb,
+            ratingSource = "tmdb"
         )
     }
 
@@ -569,6 +573,21 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         if (!response.status.isSuccess()) return null
         val info = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return null
         return info.takeIf { it.str("ErrorCode") == null }
+    }
+
+    // --- Ratings --------------------------------------------------------------------------
+
+    /** Server-native id → the TMDB id the server stores for it (for MDBList lookups). */
+    private val nativeTmdb = mutableMapOf<String, String>()
+
+    /** The TMDB id a server keeps for a title only it knows (a "mediaserver:…" id). */
+    suspend fun tmdbIdFor(id: String): String? {
+        nativeTmdb[id]?.let { return it }
+        val (server, itemId) = parseNative(id) ?: return null
+        val tmdb = runCatching { item(server, itemId)?.obj("ProviderIds")?.nonBlank("Tmdb") }
+            .onFailure { if (it is CancellationException) throw it }.getOrNull() ?: return null
+        nativeTmdb[id] = tmdb
+        return tmdb
     }
 
     // --- Playback state (two-way) ----------------------------------------------------------

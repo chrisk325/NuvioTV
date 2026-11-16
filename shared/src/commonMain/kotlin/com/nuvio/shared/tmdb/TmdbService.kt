@@ -230,7 +230,8 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             description = str("overview"),
             releaseInfo = (str("release_date") ?: str("first_air_date"))?.take(4),
             imdbRating = str("vote_average")?.toDoubleOrNull()?.takeIf { it > 0 }?.let { ((it * 10).toInt() / 10.0).toString() },
-            genres = emptyList()
+            genres = emptyList(),
+            ratingSource = "tmdb"
         )
     }
 

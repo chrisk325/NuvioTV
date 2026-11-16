@@ -22,7 +22,9 @@ data class MetaPreview(
     val imdbId: String? = null,
     val landscapePoster: String? = null,
     val trailerYtIds: List<String> = emptyList(),
-    val sourceAddonBaseUrl: String? = null
+    val sourceAddonBaseUrl: String? = null,
+    /** Where [imdbRating] comes from when it isn't IMDb: "tmdb" (Jellyfin / Emby, TMDB). */
+    val ratingSource: String? = null
 ) {
     val apiType: String
         get() = type.toApiString(rawType)
@@ -62,7 +64,9 @@ data class Meta(
     val imdbId: String? = null,
     val released: String? = null,
     val landscapePoster: String? = null,
-    val behaviorHints: MetaBehaviorHints? = null
+    val behaviorHints: MetaBehaviorHints? = null,
+    /** Where [imdbRating] comes from when it isn't IMDb: "tmdb" (Jellyfin / Emby, TMDB). */
+    val ratingSource: String? = null
 ) {
     val apiType: String
         get() = type.toApiString(rawType)
@@ -114,7 +118,8 @@ data class Meta(
         imdbId = imdbId,
         landscapePoster = landscapePoster,
         trailerYtIds = trailerYtIds,
-        sourceAddonBaseUrl = sourceAddonBaseUrl
+        sourceAddonBaseUrl = sourceAddonBaseUrl,
+        ratingSource = ratingSource
     )
 }
 

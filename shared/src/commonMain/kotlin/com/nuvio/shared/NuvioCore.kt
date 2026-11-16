@@ -394,7 +394,7 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun ratings(meta: Meta): List<ExternalRating> {
         val mdb = if (settings.showMdbListRatings) mdbRatings(meta.imdbId, meta.id, meta.isSeriesLike) else emptyList()
-        return mdb.ifEmpty { imdbLogoRating(meta.imdbRating) }
+        return mdb.ifEmpty { fallbackRating(meta.imdbRating, meta.ratingSource) }
     }
 
     /** MDBList ratings by IMDb id, else by the TMDB id of a "tmdb:" id; cached per title. */
@@ -403,7 +403,10 @@ class NuvioCore(
         val imdb = imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") }
             ?: id.takeIf { it.startsWith("tt") }?.substringBefore(':')
         if (imdb != null) return cachedRatings(imdb, isShow)
-        val tmdb = id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1) ?: return emptyList()
+        // "tmdb:" catalog ids, or the TMDB id a Jellyfin / Emby server keeps for its own titles.
+        val tmdb = id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)
+            ?: if (mediaServers.isNativeId(id)) mediaServers.tmdbIdFor(id) else null
+        if (tmdb == null) return emptyList()
         val key = "tmdb:$tmdb|$isShow"
         ratingsCache[key]?.let { return it }
         val result = mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow)
@@ -412,10 +415,12 @@ class NuvioCore(
         return result
     }
 
-    private fun imdbLogoRating(raw: String?): List<ExternalRating> {
+    /** The title's own rating under the right logo: IMDb for add-ons, TMDB for Jellyfin / Emby and TMDB data. */
+    private fun fallbackRating(raw: String?, source: String?): List<ExternalRating> {
         val rating = raw?.toDoubleOrNull()?.takeIf { it > 0 } ?: return emptyList()
         val text = kotlin.math.round(rating * 10).toInt().let { "${it / 10}.${it % 10}" }
-        return listOf(ExternalRating("imdb", "IMDb", text, "rating_imdb"))
+        return if (source == "tmdb") listOf(ExternalRating("tmdb", "TMDB", text, "rating_tmdb"))
+        else listOf(ExternalRating("imdb", "IMDb", text, "rating_imdb"))
     }
 
     /**
@@ -429,7 +434,7 @@ class NuvioCore(
         val mdb = if (settings.showMdbListRatings && settings.showMdbListOnHero) {
             mdbRatings(preview.imdbId, preview.id, isShow)
         } else emptyList()
-        return mdb.ifEmpty { imdbLogoRating(preview.imdbRating) }
+        return mdb.ifEmpty { fallbackRating(preview.imdbRating, preview.ratingSource) }
     }
 
     /** Streams from every add-on, progressively; torrent streams get debrid cache badges once all arrive. */
@@ -1156,6 +1161,7 @@ internal fun mergeMeta(primary: Meta, fallback: Meta): Meta = primary.copy(
     description = primary.description?.takeIf { it.isNotBlank() } ?: fallback.description,
     releaseInfo = primary.releaseInfo ?: fallback.releaseInfo,
     imdbRating = primary.imdbRating ?: fallback.imdbRating,
+    ratingSource = if (primary.imdbRating != null) primary.ratingSource else fallback.ratingSource,
     genres = primary.genres.ifEmpty { fallback.genres },
     runtime = primary.runtime ?: fallback.runtime,
     director = primary.director.ifEmpty { fallback.director },
