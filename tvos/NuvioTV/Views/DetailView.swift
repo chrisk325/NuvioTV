@@ -668,7 +668,24 @@ struct EpisodeCard: View {
                 .background(FocusReporter { onFocus?() })
             }
             .buttonStyle(.card)
-            .onLongPressGesture(minimumDuration: 0.5) { onLongPress?() }
+            // A long-press gesture never fires on a tvOS button (the button keeps the press), so
+            // tap and hold opens the system context menu instead.
+            .contextMenu {
+                if let onLongPress {
+                    Button {
+                        // Let the menu close before the overlay animates in.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { onLongPress() }
+                    } label: {
+                        Label("Full description", systemImage: "text.alignleft")
+                    }
+                }
+                Button {
+                    app.core.setWatched(meta: meta, video: video, isWatched: !isWatched)
+                } label: {
+                    Label(isWatched ? "Mark as unwatched" : "Mark as watched",
+                          systemImage: isWatched ? "eye.slash" : "eye")
+                }
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Episode \(video.episode?.int32Value ?? 0)")
