@@ -397,12 +397,34 @@ class NuvioCore(
         return cachedRatings(imdb, meta.isSeriesLike)
     }
 
-    /** Ratings for a Home hero item (cached; empty when disabled or no IMDb id). */
+    /**
+     * Rating logos for a Home hero item: MDBList by IMDb id, else by TMDB id ("tmdb:…" catalogs);
+     * without MDBList ratings (no key, disabled, not found) the add-on's IMDb rating as the IMDb
+     * logo. Cached per title.
+     */
     @Throws(Exception::class)
     suspend fun heroRatings(preview: MetaPreview): List<ExternalRating> {
-        if (!settings.showMdbListRatings || !settings.showMdbListOnHero) return emptyList()
-        val imdb = preview.imdbId ?: preview.id.takeIf { it.startsWith("tt") }?.substringBefore(':') ?: return emptyList()
-        return cachedRatings(imdb, com.nuvio.shared.model.isSeriesLikeType(preview.apiType))
+        val isShow = com.nuvio.shared.model.isSeriesLikeType(preview.apiType)
+        val mdb = if (settings.showMdbListRatings && settings.showMdbListOnHero && settings.mdbListApiKey.isNotBlank()) {
+            val imdb = preview.imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") }
+                ?: preview.id.takeIf { it.startsWith("tt") }?.substringBefore(':')
+            val tmdb = preview.id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)
+            when {
+                imdb != null -> cachedRatings(imdb, isShow)
+                tmdb != null -> {
+                    val key = "tmdb:$tmdb|$isShow"
+                    ratingsCache[key] ?: mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow).also {
+                        ratingsCache[key] = it
+                        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+                    }
+                }
+                else -> emptyList()
+            }
+        } else emptyList()
+        if (mdb.isNotEmpty()) return mdb
+        val rating = preview.imdbRating?.toDoubleOrNull()?.takeIf { it > 0 } ?: return emptyList()
+        val text = kotlin.math.round(rating * 10).toInt().let { "${it / 10}.${it % 10}" }
+        return listOf(ExternalRating("imdb", "IMDb", text, "rating_imdb"))
     }
 
     /** Streams from every add-on, progressively; torrent streams get debrid cache badges once all arrive. */

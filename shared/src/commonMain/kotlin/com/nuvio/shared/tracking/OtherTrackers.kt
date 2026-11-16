@@ -555,10 +555,22 @@ data class ExternalRating(val source: String, val label: String, val value: Stri
 class MdbListService(private val http: HttpClient) {
     @Throws(Exception::class)
     suspend fun ratings(apiKey: String, imdbId: String, isShow: Boolean): List<ExternalRating> {
-        if (apiKey.isBlank() || !imdbId.startsWith("tt")) return emptyList()
+        if (!imdbId.startsWith("tt")) return emptyList()
+        return ratingsBy(apiKey, "imdb", imdbId, isShow)
+    }
+
+    /** Ratings by TMDB id (catalogs such as AIOMetadata's that use "tmdb:" ids). */
+    @Throws(Exception::class)
+    suspend fun ratingsByTmdb(apiKey: String, tmdbId: String, isShow: Boolean): List<ExternalRating> {
+        if (tmdbId.toIntOrNull() == null) return emptyList()
+        return ratingsBy(apiKey, "tmdb", tmdbId, isShow)
+    }
+
+    private suspend fun ratingsBy(apiKey: String, provider: String, id: String, isShow: Boolean): List<ExternalRating> {
+        if (apiKey.isBlank()) return emptyList()
         val type = if (isShow) "show" else "movie"
         val response = http.get(
-            "https://api.mdblist.com/imdb/$type/$imdbId?apikey=${encodeUrlComponent(apiKey)}&append_to_response=keyword"
+            "https://api.mdblist.com/$provider/$type/$id?apikey=${encodeUrlComponent(apiKey)}&append_to_response=keyword"
         )
         if (!response.status.isSuccess()) return emptyList()
         val body = AddonJson.parseToJsonElement(response.bodyAsText()).asObject() ?: return emptyList()

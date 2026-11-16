@@ -106,7 +106,7 @@ struct HeroInfo: View {
         var parts: [String] = []
         parts.append(item.apiType == "movie" ? "Movie" : "Series")
         if let year = item.releaseInfo, !year.isEmpty { parts.append(year) }
-        if let rating = item.imdbRating { parts.append("★ \(rating)") }
+        // Ratings show as logos (MDBList, else the IMDb logo) in HeroRatings below, not as a star.
         if let runtime = item.runtime { parts.append(runtime) }
         if !item.genres.isEmpty { parts.append(item.genres.prefix(3).joined(separator: ", ")) }
         return parts.joined(separator: "  ·  ")
