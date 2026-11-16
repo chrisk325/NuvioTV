@@ -487,13 +487,12 @@ struct MessageView: View {
 }
 
 extension Meta {
-    /// "2021 · 2h 10m · ★ 7.4 · Drama, Thriller"
+    /// "2021 · 2h 10m · PG-13 · Drama, Thriller" (ratings show as logos in RatingsRow).
     var infoLine: String {
         var parts: [String] = []
         if let releaseInfo, !releaseInfo.isEmpty { parts.append(releaseInfo) }
         if let runtime, !runtime.isEmpty { parts.append(runtime) }
         if let ageRating, !ageRating.isEmpty { parts.append(ageRating) }
-        if let imdbRating { parts.append("★ \(imdbRating)") }
         if !genres.isEmpty { parts.append(genres.prefix(3).joined(separator: ", ")) }
         return parts.joined(separator: "  ·  ")
     }

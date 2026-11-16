@@ -126,7 +126,7 @@ struct DetailView: View {
 
     private func infoLine(_ meta: Meta) -> String {
         var line = meta.infoLine
-        if let tmdbRating = details?.tmdbRating {
+        if let tmdbRating = details?.tmdbRating, !ratings.contains(where: { $0.source == "tmdb" }) {
             line += "  ·  TMDB \(tmdbRating)"
         }
         if meta.isSeriesLike, !meta.networks.isEmpty {
@@ -171,7 +171,7 @@ struct DetailView: View {
             }
             // Fully watched check against the episode list (cards and the card menu use it).
             app.core.refreshSeriesWatched(meta: meta ?? loaded)
-            ratings = (try? await app.core.ratings(meta: loaded)) ?? []
+            ratings = (try? await app.core.ratings(meta: meta ?? loaded)) ?? []
         } catch {
             self.error = error.localizedDescription
         }

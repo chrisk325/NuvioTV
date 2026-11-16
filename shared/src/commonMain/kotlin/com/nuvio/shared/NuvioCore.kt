@@ -390,11 +390,32 @@ class NuvioCore(
         return result
     }
 
+    /** Details page rating logos: MDBList (IMDb, else TMDB id), else the IMDb logo with the add-on's rating. */
     @Throws(Exception::class)
     suspend fun ratings(meta: Meta): List<ExternalRating> {
-        if (!settings.showMdbListRatings) return emptyList()
-        val imdb = meta.imdbId ?: meta.id.takeIf { it.startsWith("tt") }?.substringBefore(':') ?: return emptyList()
-        return cachedRatings(imdb, meta.isSeriesLike)
+        val mdb = if (settings.showMdbListRatings) mdbRatings(meta.imdbId, meta.id, meta.isSeriesLike) else emptyList()
+        return mdb.ifEmpty { imdbLogoRating(meta.imdbRating) }
+    }
+
+    /** MDBList ratings by IMDb id, else by the TMDB id of a "tmdb:" id; cached per title. */
+    private suspend fun mdbRatings(imdbId: String?, id: String, isShow: Boolean): List<ExternalRating> {
+        if (settings.mdbListApiKey.isBlank()) return emptyList()
+        val imdb = imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") }
+            ?: id.takeIf { it.startsWith("tt") }?.substringBefore(':')
+        if (imdb != null) return cachedRatings(imdb, isShow)
+        val tmdb = id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1) ?: return emptyList()
+        val key = "tmdb:$tmdb|$isShow"
+        ratingsCache[key]?.let { return it }
+        val result = mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow)
+        ratingsCache[key] = result
+        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
+        return result
+    }
+
+    private fun imdbLogoRating(raw: String?): List<ExternalRating> {
+        val rating = raw?.toDoubleOrNull()?.takeIf { it > 0 } ?: return emptyList()
+        val text = kotlin.math.round(rating * 10).toInt().let { "${it / 10}.${it % 10}" }
+        return listOf(ExternalRating("imdb", "IMDb", text, "rating_imdb"))
     }
 
     /**
@@ -405,26 +426,10 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun heroRatings(preview: MetaPreview): List<ExternalRating> {
         val isShow = com.nuvio.shared.model.isSeriesLikeType(preview.apiType)
-        val mdb = if (settings.showMdbListRatings && settings.showMdbListOnHero && settings.mdbListApiKey.isNotBlank()) {
-            val imdb = preview.imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") }
-                ?: preview.id.takeIf { it.startsWith("tt") }?.substringBefore(':')
-            val tmdb = preview.id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)
-            when {
-                imdb != null -> cachedRatings(imdb, isShow)
-                tmdb != null -> {
-                    val key = "tmdb:$tmdb|$isShow"
-                    ratingsCache[key] ?: mdbList.ratingsByTmdb(settings.mdbListApiKey, tmdb, isShow).also {
-                        ratingsCache[key] = it
-                        if (ratingsCache.size > 200) ratingsCache.remove(ratingsCache.keys.first())
-                    }
-                }
-                else -> emptyList()
-            }
+        val mdb = if (settings.showMdbListRatings && settings.showMdbListOnHero) {
+            mdbRatings(preview.imdbId, preview.id, isShow)
         } else emptyList()
-        if (mdb.isNotEmpty()) return mdb
-        val rating = preview.imdbRating?.toDoubleOrNull()?.takeIf { it > 0 } ?: return emptyList()
-        val text = kotlin.math.round(rating * 10).toInt().let { "${it / 10}.${it % 10}" }
-        return listOf(ExternalRating("imdb", "IMDb", text, "rating_imdb"))
+        return mdb.ifEmpty { imdbLogoRating(preview.imdbRating) }
     }
 
     /** Streams from every add-on, progressively; torrent streams get debrid cache badges once all arrive. */
