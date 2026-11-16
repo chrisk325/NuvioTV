@@ -399,12 +399,7 @@ struct DetailView: View {
                     .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
             }
             if let description = meta.description_, !description.isEmpty {
-                Text(description)
-                    .font(.body)
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                    .frame(maxWidth: 1200, alignment: .leading)
-                    .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
+                ExpandableDescription(text: description)
             }
             // Down from any button slides to the episodes / cast screen (handled on each button:
             // move commands only reach the focused control).
@@ -443,6 +438,8 @@ struct DetailView: View {
             .focusSection()
         }
         .padding(.horizontal, 80)
+        // Play first, not the "Show more" pill above it.
+        .defaultFocus($focus, .play)
     }
 
     @ViewBuilder
@@ -848,5 +845,56 @@ struct EpisodeInfoOverlay: View {
         if let e = video.episode?.int32Value { parts.append("Episode \(e)") }
         if let s = video.season?.int32Value { parts.append(s == 0 ? "Specials" : "Season \(s)") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Details description folded to three lines, with a "Show more" pill (only when the text is
+/// actually cut off) that unfolds the full text; "Show less" folds it again.
+struct ExpandableDescription: View {
+    let text: String
+    var lines = 3
+    @State private var expanded = false
+    @State private var truncated = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.white)
+                .lineLimit(expanded ? nil : lines)
+                .fixedSize(horizontal: false, vertical: expanded)
+                .frame(maxWidth: 1200, alignment: .leading)
+                .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
+                .background(
+                    // The full text, laid out at the same width: taller than the folded text means it's cut off.
+                    GeometryReader { folded in
+                        Text(text)
+                            .font(.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: folded.size.width, alignment: .leading)
+                            .hidden()
+                            .background(GeometryReader { full in
+                                Color.clear
+                                    .onAppear { measure(full: full.size.height, folded: folded.size.height) }
+                                    .onChange(of: full.size.height) { _, height in measure(full: height, folded: folded.size.height) }
+                            })
+                    }
+                    .hidden()
+                )
+            if truncated || expanded {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) { expanded.toggle() }
+                } label: {
+                    Label(expanded ? "Show less" : "Show more", systemImage: expanded ? "chevron.up" : "chevron.down")
+                }
+                .buttonStyle(SeeAllButtonStyle())
+            }
+        }
+    }
+
+    private func measure(full: CGFloat, folded: CGFloat) {
+        guard !expanded else { return }
+        let cut = full > folded + 2
+        if truncated != cut { truncated = cut }
     }
 }
