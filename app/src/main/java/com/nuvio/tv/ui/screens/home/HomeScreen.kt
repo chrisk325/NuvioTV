@@ -94,6 +94,23 @@ fun HomeScreen(
     onNavigateToFolderDetail: (String, String) -> Unit = { _, _ -> }
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // Content caches: download every poster of every Home row and the artwork of every hero
+    // item, including the ones not on screen yet (no-op while the caches are disabled).
+    val homePosterCacheItems = remember(uiState.catalogRows) {
+        uiState.catalogRows.flatMap { row -> row.items }
+    }
+    com.nuvio.tv.core.cache.PosterCachePrefetchEffect(homePosterCacheItems)
+    val heroBackgroundCacheTargets = remember(uiState.heroItems) {
+        uiState.heroItems.mapNotNull { item ->
+            item.backdropUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                com.nuvio.tv.core.cache.ImageCacheTarget(imageUrl = url)
+            }
+        }
+    }
+    com.nuvio.tv.core.cache.ImageCachePrefetchEffect(
+        type = com.nuvio.tv.core.cache.CacheType.Backgrounds,
+        targets = heroBackgroundCacheTargets,
+    )
 
     // Home was the only major screen without a lifecycle observer, so nothing ever told it to
     // look at its catalogs again.

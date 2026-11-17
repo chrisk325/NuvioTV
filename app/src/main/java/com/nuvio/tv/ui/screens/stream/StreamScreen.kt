@@ -601,6 +601,8 @@ internal fun StreamBackdrop(
         if (backdropModel != null) {
             AsyncImage(
                 model = backdropModel,
+                // Background artwork cache (when it is enabled).
+                imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()

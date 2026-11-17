@@ -3,6 +3,7 @@ package com.nuvio.tv.core.di
 import android.content.Context
 import android.util.Log
 import com.nuvio.tv.BuildConfig
+import com.nuvio.tv.core.cache.MetadataCacheInterceptor
 import com.nuvio.tv.core.network.NoDelaySocketFactory
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.api.AniSkipApi
@@ -161,6 +162,8 @@ object NetworkModule {
             .cache(Cache(File(context.cacheDir, "addon_http_cache"), 50L * 1024 * 1024))
             .sslSocketFactory(sslContext.socketFactory, trustAllManager)
             .hostnameVerifier { _, _ -> true }
+            // Content cache: addon catalogs and meta (no-op while the metadata cache is off).
+            .addInterceptor(MetadataCacheInterceptor(MetadataCacheInterceptor::isAddonMetadataUrl))
             .build()
     }
 
@@ -319,7 +322,12 @@ object NetworkModule {
     fun provideTmdbRetrofit(okHttpClient: OkHttpClient, moshi: Moshi): Retrofit =
         Retrofit.Builder()
             .baseUrl("https://api.themoviedb.org/3/")
-            .client(okHttpClient)
+            // Content cache: TMDB metadata (no-op while the metadata cache is off).
+            .client(
+                okHttpClient.newBuilder()
+                    .addInterceptor(MetadataCacheInterceptor { true })
+                    .build()
+            )
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
 

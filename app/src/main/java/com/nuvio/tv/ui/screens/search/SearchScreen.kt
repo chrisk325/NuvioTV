@@ -144,6 +144,12 @@ fun SearchScreen(
     val uiState by viewModel.uiState.collectAsState()
     val watchedMovieIds by viewModel.watchedMovieIds.collectAsState()
     val watchedSeriesIds by viewModel.watchedSeriesIds.collectAsState()
+    // Poster cache: download every poster listed in search results and Discover, not just the
+    // visible ones (no-op while the poster cache is disabled).
+    val searchPosterCacheItems = remember(uiState.catalogRows, uiState.discoverResults) {
+        uiState.catalogRows.flatMap { row -> row.items } + uiState.discoverResults
+    }
+    com.nuvio.tv.core.cache.PosterCachePrefetchEffect(searchPosterCacheItems)
     val context = LocalContext.current
     val view = LocalView.current
     val keyboardController = LocalSoftwareKeyboardController.current

@@ -752,6 +752,10 @@ fun AdvancedSettingsContent(
             }
         }
 
+        item(key = "content_cache") {
+            ContentCacheSettingsCard()
+        }
+
         item(key = "clear_cw_cache") {
             SettingsGroupCard(
                 modifier = Modifier.fillMaxWidth(),

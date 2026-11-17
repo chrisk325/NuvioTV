@@ -268,50 +268,53 @@ private fun PlaybackNavHost(
                 }
             }
 
-            HomeScreen(
-                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
-                    val heroBackdrop = HeroBackdropState.consumeAndClear()
-                    navController.navigate(
-                        Screen.Detail.createRoute(
-                            itemId = itemId,
-                            itemType = itemType,
-                            addonBaseUrl = addonBaseUrl,
-                            heroBackdropUrl = heroBackdrop
+            // Posters on this screen use the poster cache (when it is enabled).
+            androidx.compose.runtime.CompositionLocalProvider(com.nuvio.tv.core.cache.LocalUsePosterCache provides true) {
+                HomeScreen(
+                    onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                        val heroBackdrop = HeroBackdropState.consumeAndClear()
+                        navController.navigate(
+                            Screen.Detail.createRoute(
+                                itemId = itemId,
+                                itemType = itemType,
+                                addonBaseUrl = addonBaseUrl,
+                                heroBackdropUrl = heroBackdrop
+                            )
                         )
-                    )
-                },
-                onContinueWatchingClick = onContinueWatchingClick@{ item ->
-                    if (!playbackAvailability.canStream(item)) {
-                        Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
-                        return@onContinueWatchingClick
+                    },
+                    onContinueWatchingClick = onContinueWatchingClick@{ item ->
+                        if (!playbackAvailability.canStream(item)) {
+                            Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
+                            return@onContinueWatchingClick
+                        }
+                        navController.navigate(createContinueWatchingRoute(item))
+                    },
+                    onContinueWatchingStartFromBeginning = onContinueWatchingStartFromBeginning@{ item ->
+                        if (!playbackAvailability.canStream(item)) {
+                            Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
+                            return@onContinueWatchingStartFromBeginning
+                        }
+                        navController.navigate(
+                            createContinueWatchingRoute(item, startFromBeginning = true)
+                        )
+                    },
+                    onContinueWatchingPlayManually = onContinueWatchingPlayManually@{ item ->
+                        if (!playbackAvailability.canStream(item)) {
+                            Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
+                            return@onContinueWatchingPlayManually
+                        }
+                        navController.navigate(
+                            createContinueWatchingRoute(item, manualSelection = true)
+                        )
+                    },
+                    onNavigateToCatalogSeeAll = { catalogId, addonId, type ->
+                        navController.navigate(Screen.CatalogSeeAll.createRoute(catalogId, addonId, type))
+                    },
+                    onNavigateToFolderDetail = { collectionId, folderId ->
+                        navController.navigate(Screen.FolderDetail.createRoute(collectionId, folderId))
                     }
-                    navController.navigate(createContinueWatchingRoute(item))
-                },
-                onContinueWatchingStartFromBeginning = onContinueWatchingStartFromBeginning@{ item ->
-                    if (!playbackAvailability.canStream(item)) {
-                        Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
-                        return@onContinueWatchingStartFromBeginning
-                    }
-                    navController.navigate(
-                        createContinueWatchingRoute(item, startFromBeginning = true)
-                    )
-                },
-                onContinueWatchingPlayManually = onContinueWatchingPlayManually@{ item ->
-                    if (!playbackAvailability.canStream(item)) {
-                        Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
-                        return@onContinueWatchingPlayManually
-                    }
-                    navController.navigate(
-                        createContinueWatchingRoute(item, manualSelection = true)
-                    )
-                },
-                onNavigateToCatalogSeeAll = { catalogId, addonId, type ->
-                    navController.navigate(Screen.CatalogSeeAll.createRoute(catalogId, addonId, type))
-                },
-                onNavigateToFolderDetail = { collectionId, folderId ->
-                    navController.navigate(Screen.FolderDetail.createRoute(collectionId, folderId))
-                }
-            )
+                )
+            }
         }
 
         composable(
@@ -1227,43 +1230,49 @@ private fun PlaybackNavHost(
         rootComposable(Screen.Search.route) { backStackEntry ->
             val searchViewModel: com.nuvio.tv.ui.screens.search.SearchViewModel =
                 androidx.hilt.navigation.compose.hiltViewModel(backStackEntry)
-            SearchScreen(
-                viewModel = searchViewModel,
-                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
-                    val heroBackdrop = HeroBackdropState.consumeAndClear()
-                    navController.navigate(
-                        Screen.Detail.createRoute(
-                            itemId = itemId,
-                            itemType = itemType,
-                            addonBaseUrl = addonBaseUrl,
-                            heroBackdropUrl = heroBackdrop
+            // Posters on this screen use the poster cache (when it is enabled).
+            androidx.compose.runtime.CompositionLocalProvider(com.nuvio.tv.core.cache.LocalUsePosterCache provides true) {
+                SearchScreen(
+                    viewModel = searchViewModel,
+                    onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                        val heroBackdrop = HeroBackdropState.consumeAndClear()
+                        navController.navigate(
+                            Screen.Detail.createRoute(
+                                itemId = itemId,
+                                itemType = itemType,
+                                addonBaseUrl = addonBaseUrl,
+                                heroBackdropUrl = heroBackdrop
+                            )
                         )
-                    )
-                },
-                onNavigateToSeeAll = { catalogId, addonId, type ->
-                    navController.navigate(
-                        Screen.CatalogSeeAll.createRoute(catalogId, addonId, type, fromSearch = true)
-                    )
-                },
-                onOpenDiscover = { navController.navigate(Screen.Discover.route) }
-            )
+                    },
+                    onNavigateToSeeAll = { catalogId, addonId, type ->
+                        navController.navigate(
+                            Screen.CatalogSeeAll.createRoute(catalogId, addonId, type, fromSearch = true)
+                        )
+                    },
+                    onOpenDiscover = { navController.navigate(Screen.Discover.route) }
+                )
+            }
         }
 
         rootComposable(Screen.Discover.route, withInset = discoverIsRoot) {
-            DiscoverScreen(
-                showBuiltInHeader = !hideBuiltInHeaders,
-                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
-                    val heroBackdrop = HeroBackdropState.consumeAndClear()
-                    navController.navigate(
-                        Screen.Detail.createRoute(
-                            itemId = itemId,
-                            itemType = itemType,
-                            addonBaseUrl = addonBaseUrl,
-                            heroBackdropUrl = heroBackdrop
+            // Posters on this screen use the poster cache (when it is enabled).
+            androidx.compose.runtime.CompositionLocalProvider(com.nuvio.tv.core.cache.LocalUsePosterCache provides true) {
+                DiscoverScreen(
+                    showBuiltInHeader = !hideBuiltInHeaders,
+                    onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                        val heroBackdrop = HeroBackdropState.consumeAndClear()
+                        navController.navigate(
+                            Screen.Detail.createRoute(
+                                itemId = itemId,
+                                itemType = itemType,
+                                addonBaseUrl = addonBaseUrl,
+                                heroBackdropUrl = heroBackdrop
+                            )
                         )
-                    )
-                }
-            )
+                    }
+                )
+            }
         }
 
         rootComposable(Screen.Library.route) {

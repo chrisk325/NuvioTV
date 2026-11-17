@@ -286,6 +286,8 @@ fun ContentCard(
             }
             builder.build()
         }
+        // Poster cache on Home, Discover and Search (see LocalUsePosterCache).
+        val posterImageLoader = com.nuvio.tv.core.cache.rememberPosterImageLoader()
         val logoRequestHeightPx = remember(density) {
             with(density) { NuvioTheme.spacing.xxxl.roundToPx() }
         }
@@ -424,6 +426,7 @@ fun ContentCard(
                     AsyncImage(
                         model = imageModel,
                         contentDescription = item.name,
+                        imageLoader = posterImageLoader,
                         modifier = Modifier.fillMaxSize(),
                         placeholder = backgroundPainter,
                         error = backgroundPainter,
@@ -493,6 +496,7 @@ fun ContentCard(
                     AsyncImage(
                         model = imageModel,
                         contentDescription = null,
+                        imageLoader = posterImageLoader,
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer { alpha = trailerCoverAlpha },
