@@ -196,21 +196,26 @@ final class AppModel: ObservableObject {
     }
 
     /// Ids (and IMDb ids) of every Jellyfin / Emby favourite, to keep the Library free of duplicates.
+    /// Includes each favourite's other ids ("tmdb:…") so add-on items with TMDB ids match too.
     var serverFavoriteIds: Set<String> {
-        Set(serverFavorites.flatMap { group in group.items.flatMap { [$0.id, $0.imdbId].compactMap { $0 } } })
+        Set(serverFavorites.flatMap { group in
+            group.items.flatMap { item in
+                [item.id, item.imdbId].compactMap { $0 } + core.mediaServers.aliasesFor(id: item.id)
+            }
+        })
     }
 
     /// Details page Add to / Remove from Library.
     @discardableResult
     func toggleLibrary(_ meta: Meta) -> Bool {
-        return setInLibrary(id: meta.id, serverId: serverItemId(id: meta.id, imdb: meta.imdbId),
+        return setInLibrary(id: meta.id, imdbId: meta.imdbId,
                             isShow: meta.isSeriesLike) { core.toggleLibrary(meta: meta) }
     }
 
     /// Card / Continue Watching menu Add to / Remove from Library.
     @discardableResult
     func toggleLibrary(preview: MetaPreview) -> Bool {
-        return setInLibrary(id: preview.id, serverId: serverItemId(id: preview.id, imdb: preview.imdbId),
+        return setInLibrary(id: preview.id, imdbId: preview.imdbId,
                             isShow: preview.apiType != "movie") {
             core.toggleLibraryPreview(preview: preview)
         }
@@ -218,21 +223,16 @@ final class AppModel: ObservableObject {
 
     /// Flips the title in or out of the Library everywhere: this Apple TV (plus Trakt watchlist and
     /// the Nuvio account, via the core) and as a favourite on Jellyfin / Emby servers.
-    /// How a title is found on Jellyfin / Emby: its IMDb id, or its server-native id.
-    private func serverItemId(id: String, imdb: String?) -> String? {
-        if core.mediaServers.isNativeId(id: id) { return id }
-        return imdb ?? (id.hasPrefix("tt") ? id : nil)
-    }
-
-    private func setInLibrary(id: String, serverId: String?, isShow: Bool, toggleLocal: () -> Bool) -> Bool {
-        let wasSaved = isInLibrary(id)
+    private func setInLibrary(id: String, imdbId: String?, isShow: Bool, toggleLocal: () -> Bool) -> Bool {
+        let wasSaved = isInLibrary(id) || (imdbId.map(isServerFavorite) ?? false)
         let savedLocally = library.contains { $0.id == id }
         // Only touch the local library when it should change (a server-only favourite isn't saved here).
         if savedLocally == wasSaved { _ = toggleLocal() }
         let saved = !wasSaved
-        if let serverId, !core.mediaServers.servers.isEmpty {
+        if !core.mediaServers.servers.isEmpty {
             Task { @MainActor in
-                _ = try? await core.mediaServers.setFavorite(id: serverId, isShow: isShow, favorite: saved)
+                // Found on the server by its id, IMDb id or TMDB id (converted through TMDB when needed).
+                _ = try? await core.setServerFavorite(id: id, imdbId: imdbId, isShow: isShow, favorite: saved)
                 await reloadServerFavorites()
             }
         }

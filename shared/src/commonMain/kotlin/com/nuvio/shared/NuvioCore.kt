@@ -495,6 +495,27 @@ class NuvioCore(
         return if (alternates.isEmpty()) emptyList() else mediaServers.streamsFor(type, alternates, released)
     }
 
+    /**
+     * Favourite / unfavourite a title on Jellyfin / Emby. Tries its id, IMDb id and TMDB id, and
+     * converts between IMDb and TMDB through TMDB when only one is known (search results from
+     * TMDB-based add-ons carry only "tmdb:" ids). Returns how many servers were updated.
+     */
+    @Throws(Exception::class)
+    suspend fun setServerFavorite(id: String, imdbId: String?, isShow: Boolean, favorite: Boolean): Int {
+        if (mediaServers.servers.isEmpty()) return 0
+        val type = if (isShow) "series" else "movie"
+        val imdb = imdbId?.substringBefore(':')?.takeIf { it.startsWith("tt") } ?: id.substringBefore(':').takeIf { it.startsWith("tt") }
+        val tmdbIdString = id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)?.let { "tmdb:$it" }
+        val first = listOfNotNull(id.takeIf { mediaServers.isNativeId(it) }, imdb, tmdbIdString)
+        val updated = if (first.isEmpty()) 0 else mediaServers.setFavoriteAny(first, isShow, favorite)
+        if (updated > 0) return updated
+        val converted = listOfNotNull(
+            if (imdb == null) tmdbIdString?.let { imdbVideoIdFromTmdb(type, it) } else null,
+            if (tmdbIdString == null) imdb?.let { tmdbVideoIdFromImdb(type, it) } else null
+        )
+        return if (converted.isEmpty()) 0 else mediaServers.setFavoriteAny(converted, isShow, favorite)
+    }
+
     /** "tt…[:s:e]" → "tmdb:<id>[:s:e]" via TMDB's find endpoint. */
     private suspend fun tmdbVideoIdFromImdb(type: String, videoId: String?): String? {
         val parts = videoId?.split(':') ?: return null

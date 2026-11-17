@@ -348,12 +348,29 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
      * id. Returns how many servers were updated.
      */
     @Throws(Exception::class)
-    suspend fun setFavorite(id: String, isShow: Boolean, favorite: Boolean): Int {
-        val targets: List<Pair<MediaServer, String>> = parseNative(id)?.let { listOf(it) }
-            ?: servers.mapNotNull { server ->
-                runCatching { findItemId(server, id.substringBefore(':').takeIf { it.startsWith("tt") }, null, isShow) }
-                    .getOrNull()?.let { server to it }
+    suspend fun setFavorite(id: String, isShow: Boolean, favorite: Boolean): Int =
+        setFavoriteAny(listOf(id), isShow, favorite)
+
+    /**
+     * Like [setFavorite] for a title known by several ids (IMDb "tt…", "tmdb:…", native): each
+     * server uses the first one it can place, so a show the server identifies by TMDB only (or
+     * an add-on that only gives a TMDB id) still becomes a favourite there.
+     */
+    @Throws(Exception::class)
+    suspend fun setFavoriteAny(ids: List<String>, isShow: Boolean, favorite: Boolean): Int {
+        val candidates = ids.filter { it.isNotBlank() }.distinct()
+        val targets: List<Pair<MediaServer, String>> = servers.mapNotNull { server ->
+            for (id in candidates) {
+                parseNative(id)?.let { (owner, itemId) ->
+                    if (owner.id == server.id) return@mapNotNull server to itemId
+                }
+                val imdb = id.substringBefore(':').takeIf { it.startsWith("tt") }
+                val tmdb = if (id.startsWith("tmdb:")) id.split(':').getOrNull(1) else null
+                if (imdb == null && tmdb == null) continue
+                runCatching { findItemId(server, imdb, tmdb, isShow) }.getOrNull()?.let { return@mapNotNull server to it }
             }
+            null
+        }
         var updated = 0
         for ((server, itemId) in targets) {
             try {
@@ -376,7 +393,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val isShow = str("Type") == "Series"
         remember(server, isShow, obj("ProviderIds"), itemId)
         val id = imdb ?: nativeId(server, itemId)
-        if (imdb == null) obj("ProviderIds")?.nonBlank("Tmdb")?.let { nativeTmdb[id] = it }
+        val tmdbId = obj("ProviderIds")?.nonBlank("Tmdb")
+        if (imdb == null && tmdbId != null) nativeTmdb[id] = tmdbId
+        idAliases[id] = setOfNotNull(imdb, tmdbId?.let { "tmdb:$it" }, nativeId(server, itemId))
         return MetaPreview(
             id = id,
             type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
@@ -611,6 +630,12 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     }
 
     // --- Ratings --------------------------------------------------------------------------
+
+    /** A server title's id → every id it is known by (IMDb, "tmdb:…", native), for matching. */
+    private val idAliases = mutableMapOf<String, Set<String>>()
+
+    /** Other ids of a title shown from a server (empty when unknown). */
+    fun aliasesFor(id: String): List<String> = idAliases[id]?.toList().orEmpty()
 
     /** Server-native id → the TMDB id the server stores for it (for MDBList lookups). */
     private val nativeTmdb = mutableMapOf<String, String>()

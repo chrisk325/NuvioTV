@@ -326,3 +326,31 @@ class MediaServerEpisodeMatchTest {
         assertTrue(groups.single().streams.single().url!!.contains("/Videos/e20/"))
     }
 }
+
+class MediaServerFavoriteTest {
+    private val json = headersOf("Content-Type", "application/json")
+
+    @Test
+    fun favouriteByTmdbIdWhenTheAddOnHasNoImdbId() = runTest {
+        val posted = mutableListOf<String>()
+        val http = HttpClient(MockEngine { request ->
+            val params = request.url.parameters
+            when {
+                request.url.encodedPath.startsWith("/Users/u1/FavoriteItems/") -> {
+                    posted += request.url.encodedPath
+                    respond("{}", HttpStatusCode.OK, json)
+                }
+                request.url.encodedPath == "/Users/u1/Items" && params["EnableImages"] == "false" -> respond(
+                    """{"Items":[{"Id":"s1","Type":"Series","ProviderIds":{"Tmdb":"60694"}}]}""", HttpStatusCode.OK, json
+                )
+                else -> respond("""{"Items":[]}""", HttpStatusCode.OK, json)
+            }
+        })
+        val store = InMemoryStore().apply {
+            putString("mediaservers.v1", """[{"id":"srv","kind":"jellyfin","name":"Home","address":"http://jf","userId":"u1","token":"tok"}]""")
+        }
+        val updated = MediaServerService(http, store).setFavoriteAny(listOf("tmdb:60694"), isShow = true, favorite = true)
+        assertEquals(1, updated)
+        assertEquals(listOf("/Users/u1/FavoriteItems/s1"), posted)
+    }
+}
