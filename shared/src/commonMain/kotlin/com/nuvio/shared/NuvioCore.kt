@@ -380,6 +380,8 @@ class NuvioCore(
     suspend fun tmdbPerson(personId: Int): TmdbPersonDetail? = tmdb.person(personId, settings.tmdbLanguage)
 
     private val ratingsCache = LinkedHashMap<String, List<ExternalRating>>()
+    /** Hero item id → its ratings, once found (the full lookup loads the title's details). */
+    private val heroRatingsCache = LinkedHashMap<String, List<ExternalRating>>()
 
     private suspend fun cachedRatings(imdb: String, isShow: Boolean): List<ExternalRating> {
         val key = "$imdb|$isShow"
@@ -442,9 +444,27 @@ class NuvioCore(
     @Throws(Exception::class)
     suspend fun heroRatings(preview: MetaPreview): List<ExternalRating> {
         val isShow = com.nuvio.shared.model.isSeriesLikeType(preview.apiType)
-        val mdb = if (settings.showMdbListRatings && settings.showMdbListOnHero) {
-            mdbRatings(preview.imdbId, preview.id, isShow)
-        } else emptyList()
+        val enabled = settings.showMdbListRatings && settings.showMdbListOnHero && settings.mdbListApiKey.isNotBlank()
+        if (!enabled) return fallbackRating(preview.imdbRating, preview.ratingSource)
+        heroRatingsCache[preview.id]?.let { return it }
+        var mdb = mdbRatings(preview.imdbId, preview.id, isShow)
+        if (mdb.isEmpty()) {
+            // Row items (Jellyfin / Emby titles especially) often lack the IMDb id the details page
+            // ends up with: load the title the same way the details page does (meta, then TMDB
+            // enrichment for the ids) and look its ratings up exactly as the details page does.
+            val full = runCatching { meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl) }
+                .onFailure { if (it is CancellationException) throw it }.getOrNull()
+            if (full != null) {
+                val withIds = if (full.imdbId == null) {
+                    runCatching { details(full).meta }.onFailure { if (it is CancellationException) throw it }.getOrNull() ?: full
+                } else full
+                mdb = mdbRatings(withIds.imdbId, withIds.id, withIds.isSeriesLike)
+            }
+        }
+        if (mdb.isNotEmpty()) {
+            heroRatingsCache[preview.id] = mdb
+            if (heroRatingsCache.size > 200) heroRatingsCache.remove(heroRatingsCache.keys.first())
+        }
         return mdb.ifEmpty { fallbackRating(preview.imdbRating, preview.ratingSource) }
     }
 
