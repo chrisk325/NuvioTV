@@ -659,6 +659,9 @@
     <string name="settings_cache_max_storage_hint" formatted="false">Shared by posters (35%), background artwork (55%) and metadata (10%). When a cache is full, the least recently used items are removed.</string>
     <string name="settings_cache_size_calculating">Size: calculating…</string>
     <string name="settings_cache_cleared">Cache cleared</string>
+    <string name="settings_cache_shared_size">Other cached images and data: %1$s</string>
+    <string name="settings_cache_shared_size_calculating">Other cached images and data: calculating…</string>
+    <string name="settings_cache_shared_hint">Images and addon responses the app saved outside these caches, e.g. before a cache was turned on or while it is off. Clearing posters or background artwork also clears these images; clearing metadata also clears these responses.</string>
     <string name="settings_cache_clear_all">Clear all caches</string>
     <string name="settings_cache_clear_all_subtitle">Delete every cached poster, background and metadata response.</string>
     <string name="settings_cache_cleared_all">All caches cleared</string>
