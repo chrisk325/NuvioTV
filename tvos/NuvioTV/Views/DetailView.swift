@@ -487,7 +487,10 @@ struct RatingsRow: View {
         HStack(spacing: 28) {
             ForEach(ratings, id: \.source) { rating in
                 HStack(spacing: 10) {
+                    // Original colours always: inside a focusable button (the Modern Home hero)
+                    // tvOS would otherwise draw the logo as a flat tinted shape.
                     Image(rating.icon)
+                        .renderingMode(.original)
                         .resizable()
                         .interpolation(.high)
                         .scaledToFit()
@@ -495,6 +498,7 @@ struct RatingsRow: View {
                         .accessibilityLabel(rating.label)
                     Text(rating.value)
                         .font(.callout.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white)
                 }
             }
         }
