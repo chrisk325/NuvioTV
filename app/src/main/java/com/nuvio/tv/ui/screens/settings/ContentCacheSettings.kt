@@ -21,6 +21,7 @@ import com.nuvio.tv.core.cache.CacheSettingsRepository
 import com.nuvio.tv.core.cache.CacheType
 import com.nuvio.tv.core.cache.ImageCache
 import com.nuvio.tv.core.cache.MetadataCache
+import com.nuvio.tv.core.cache.SharedCaches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -37,11 +38,42 @@ private suspend fun contentCacheSizeBytes(type: CacheType): Long =
         else -> withContext(Dispatchers.IO) { ImageCache.sizeBytes(type) }
     }
 
+/**
+ * Clears [type]'s cache and the shared app cache that holds the same kind of data (see
+ * [SharedCaches]), so the space is actually freed in the system's storage settings.
+ */
 private suspend fun clearContentCache(type: CacheType, context: Context) {
     when (type) {
-        CacheType.Metadata -> MetadataCache.clear()
-        else -> ImageCache.clear(type, context)
+        CacheType.Metadata -> {
+            MetadataCache.clear()
+            SharedCaches.clearNetworkCache(context)
+        }
+        else -> {
+            ImageCache.clear(type, context)
+            SharedCaches.clearImageCache(context)
+        }
     }
+}
+
+/** Size of the app caches outside the content caches (see [SharedCaches]). */
+@Composable
+private fun SharedCacheSizeNote(sizeRefreshKey: Int) {
+    val context = LocalContext.current
+    var sharedSizeBytes by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(context, sizeRefreshKey) {
+        sharedSizeBytes = null
+        while (true) {
+            sharedSizeBytes = SharedCaches.imageCacheSizeBytes(context) +
+                SharedCaches.networkCacheSizeBytes(context)
+            delay(CacheSizeRefreshMillis)
+        }
+    }
+    SettingsNote(
+        text = sharedSizeBytes?.let { bytes ->
+            stringResource(R.string.settings_cache_shared_size, Formatter.formatShortFileSize(context, bytes))
+        } ?: stringResource(R.string.settings_cache_shared_size_calculating),
+    )
+    SettingsNote(text = stringResource(R.string.settings_cache_shared_hint))
 }
 
 /** Formats a storage size given in MB as e.g. "512 MB", "1.25 GB" or "10 GB". */
@@ -124,6 +156,7 @@ internal fun ContentCacheSettingsCard(modifier: Modifier = Modifier) {
                 onClick = { showRefreshDialog = true },
             )
         }
+        SharedCacheSizeNote(sizeRefreshKey = sizeRefreshKey)
         SettingsActionRow(
             title = stringResource(R.string.settings_cache_clear_all),
             subtitle = stringResource(R.string.settings_cache_clear_all_subtitle),
