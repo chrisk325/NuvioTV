@@ -327,6 +327,7 @@ struct DetailView: View {
 
     /// Second screen: logo on top, then episodes, cast and the rest, over blurred artwork.
     private func lowerScreen(_ meta: Meta) -> some View {
+        ScrollViewReader { proxy in
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 40) {
                 titleLogo(meta, compact: true)
@@ -367,16 +368,32 @@ struct DetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 80)
                 }
-                if let details, !details.facts.isEmpty {
-                    DetailFactsTable(title: meta.isSeriesLike ? "Show Details" : "Movie Details", facts: details.facts)
-                }
-                if let details, !details.recommendations.isEmpty || !details.collectionParts.isEmpty {
-                    RelatedTitlesSection(details: details, onMoveUp: { moveUp(from: meta) })
+                // Details table + related titles form their own "page": landing on it (the table
+                // or the tabs) scrolls its top into view, so the table is never cut in half.
+                if let details, !details.facts.isEmpty || !details.recommendations.isEmpty || !details.collectionParts.isEmpty {
+                    let hasRelated = !details.recommendations.isEmpty || !details.collectionParts.isEmpty
+                    let showPage = {
+                        withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.bottomPageId, anchor: .top) }
+                    }
+                    VStack(alignment: .leading, spacing: 40) {
+                        if !details.facts.isEmpty {
+                            DetailFactsTable(title: meta.isSeriesLike ? "Show Details" : "Movie Details", facts: details.facts,
+                                             focusable: !hasRelated, onFocus: showPage, onMoveUp: { moveUp(from: meta) })
+                        }
+                        if hasRelated {
+                            RelatedTitlesSection(details: details, onMoveUp: { moveUp(from: meta) }, onTabFocus: showPage)
+                        }
+                    }
+                    .padding(.top, 40)
+                    .id(Self.bottomPageId)
                 }
             }
             .padding(.bottom, 80)
         }
+        }
     }
+
+    private static let bottomPageId = "detailsBottomPage"
 
     @ViewBuilder
     private func hero(_ meta: Meta) -> some View {
@@ -905,8 +922,25 @@ struct ExpandableDescription: View {
 struct DetailFactsTable: View {
     let title: String
     let facts: [DetailFact]
+    /// Focusable when nothing focusable follows it (no related titles), so it can be reached.
+    var focusable = false
+    var onFocus: (() -> Void)? = nil
+    var onMoveUp: (() -> Void)? = nil
+    @FocusState private var focused: Bool
 
     var body: some View {
+        if focusable {
+            table
+                .focusable()
+                .focused($focused)
+                .onChange(of: focused) { _, isFocused in if isFocused { onFocus?() } }
+                .onMoveUp(onMoveUp)
+        } else {
+            table
+        }
+    }
+
+    private var table: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(.title3.weight(.bold)).padding(.bottom, 18)
             ForEach(Array(facts.enumerated()), id: \.offset) { index, fact in
@@ -938,6 +972,8 @@ struct DetailFactsTable: View {
 struct RelatedTitlesSection: View {
     let details: DetailContent
     var onMoveUp: (() -> Void)? = nil
+    /// A tab got focus (scrolls the details table above into view with it).
+    var onTabFocus: (() -> Void)? = nil
     @State private var tab: Tab?
 
     enum Tab: Hashable { case collection, related }
@@ -966,7 +1002,10 @@ struct RelatedTitlesSection: View {
                     }
                     Button { tab = item } label: {
                         Text(label(item))
-                            .background(FocusReporter { if tab != item { tab = item } })
+                            .background(FocusReporter {
+                                if tab != item { tab = item }
+                                onTabFocus?()
+                            })
                     }
                     .buttonStyle(RelatedTabStyle(isSelected: item == current))
                     .onMoveUp(onMoveUp)

@@ -493,9 +493,21 @@ extension Meta {
     var infoLine: String {
         var parts: [String] = []
         if let releaseInfo, !releaseInfo.isEmpty { parts.append(releaseInfo) }
-        if let runtime, !runtime.isEmpty { parts.append(runtime) }
+        if let runtime, !runtime.isEmpty { parts.append(RuntimeText.pretty(runtime)) }
         if let ageRating, !ageRating.isEmpty { parts.append(ageRating) }
         if !genres.isEmpty { parts.append(genres.prefix(3).joined(separator: ", ")) }
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// Runtimes given in minutes ("173 min", "173", "173 minutes") as hours and minutes ("2h 53m").
+enum RuntimeText {
+    static func pretty(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        let digits = text.prefix { $0.isNumber }
+        guard let minutes = Int(digits), minutes > 0 else { return raw }
+        let rest = text.dropFirst(digits.count).trimmingCharacters(in: .whitespaces)
+        guard ["", "m", "min", "mins", "minute", "minutes", "min."].contains(rest) else { return raw }
+        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
     }
 }

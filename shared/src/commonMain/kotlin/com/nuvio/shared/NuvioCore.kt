@@ -406,7 +406,11 @@ class NuvioCore(
             add("Episodes", t?.episodeCount?.toString())
             add("Network", (t?.networks?.takeIf { it.isNotEmpty() } ?: meta.networks).take(3).joinToString(", "))
         }
-        add("Runtime", t?.runtimeMinutes?.let(::formatRuntime) ?: meta.runtime)
+        add("Runtime", t?.runtimeMinutes?.let(::formatRuntime) ?: meta.runtime?.let { raw ->
+            // "173 min" / "173" from add-ons → "2h 53m".
+            Regex("""^\s*(\d+)\s*(m|min|mins|minutes?)?\.?\s*$""", RegexOption.IGNORE_CASE).find(raw)
+                ?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }?.let(::formatRuntime) ?: raw
+        })
         add("Certification", t?.certification ?: meta.ageRating)
         add("Origin Country", t?.originCountries?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: meta.country)
         add("Original Language", t?.language?.uppercase() ?: meta.language)
