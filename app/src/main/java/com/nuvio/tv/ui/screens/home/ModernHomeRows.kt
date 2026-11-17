@@ -652,10 +652,12 @@ internal fun ModernRowSection(
         val density = LocalDensity.current
         val rowStartPadding = 52.dp
         val context = LocalContext.current
-        val imageLoader = context.imageLoader
+        // Poster cache on Home (see LocalUsePosterCache), so prefetched posters land in it too.
+        val imageLoader = com.nuvio.tv.core.cache.rememberPosterImageLoader()
 
         val rowItemCount = row.items.list.size
         LaunchedEffect(
+            imageLoader,
             row.key,
             isActiveRow,
             isVerticalRowsScrollingState,
@@ -1411,6 +1413,8 @@ private fun ModernCarouselCard(
                         AsyncImage(
                             model = imageModel,
                             contentDescription = item.title,
+                            // Poster cache on Home (see LocalUsePosterCache).
+                            imageLoader = com.nuvio.tv.core.cache.rememberPosterImageLoader(),
                             modifier = Modifier.fillMaxSize(),
                             placeholder = backgroundPainter,
                             error = backgroundPainter,

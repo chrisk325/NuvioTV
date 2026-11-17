@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Build
 import android.os.StrictMode
+import coil3.ComponentRegistry
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import com.nuvio.tv.core.image.CustomPosterFallbackInterceptor
@@ -19,6 +20,9 @@ import coil3.request.allowRgb565
 import coil3.bitmapFactoryMaxParallelism
 
 import okio.Path.Companion.toOkioPath
+import com.nuvio.tv.core.cache.AppImageLoaderComponents
+import com.nuvio.tv.core.cache.CacheSettingsRepository
+import com.nuvio.tv.core.cache.ContentCacheStrategy
 import com.nuvio.tv.core.diagnostics.SentryInitializer
 import com.nuvio.tv.core.image.StaleWhileRevalidateCacheStrategy
 import com.nuvio.tv.core.runtime.PluginRuntimeHooks
@@ -85,6 +89,9 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         // Before super.onCreate(): Hilt creates injected services there, and the budget is read once.
         MemoryBudget.init(this)
+        // Device-wide content cache settings are read synchronously by the image and network
+        // pipelines, so load them before anything can make a request.
+        CacheSettingsRepository.initialize(this)
         super.onCreate()
         com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewAndroid.initialize(this)
         SentryInitializer.start(this, sentrySettingsDataStore)
@@ -139,27 +146,34 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
 
         val imageLoaderRef: () -> ImageLoader = { SingletonImageLoader.get(this) }
 
-        return ImageLoader.Builder(this)
-            .components {
-                add(CustomPosterFallbackInterceptor())
-                if (Build.VERSION.SDK_INT >= 28) {
-                    add(AnimatedImageDecoder.Factory())
-                } else {
-                    add(GifDecoder.Factory())
-                }
-                add(SvgDecoder.Factory())
-                add(
-                    imageNetworkFetcherFactory(
-                        callFactory = { imageOkHttpClient },
-                        cacheStrategy = {
-                            StaleWhileRevalidateCacheStrategy(
-                                revalidationClient = { imageOkHttpClient },
-                                imageLoaderProvider = imageLoaderRef,
-                            )
-                        },
+        // One network fetcher (and HTTP client) shared by the app loader and the content cache
+        // loaders. Requests made through a content cache loader keep their own refresh interval;
+        // every other request keeps the stale-while-revalidate behaviour.
+        val networkFetcherFactory = imageNetworkFetcherFactory(
+            callFactory = { imageOkHttpClient },
+            cacheStrategy = {
+                ContentCacheStrategy(
+                    StaleWhileRevalidateCacheStrategy(
+                        revalidationClient = { imageOkHttpClient },
+                        imageLoaderProvider = imageLoaderRef,
                     )
                 )
+            },
+        )
+        val addAppImageComponents: ComponentRegistry.Builder.() -> Unit = {
+            add(CustomPosterFallbackInterceptor())
+            if (Build.VERSION.SDK_INT >= 28) {
+                add(AnimatedImageDecoder.Factory())
+            } else {
+                add(GifDecoder.Factory())
             }
+            add(SvgDecoder.Factory())
+            add(networkFetcherFactory)
+        }
+        AppImageLoaderComponents.register(addAppImageComponents)
+
+        return ImageLoader.Builder(this)
+            .components(addAppImageComponents)
             .memoryCache {
                 val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                 val memoryInfo = ActivityManager.MemoryInfo()

@@ -241,6 +241,8 @@ fun GridContentCard(
                     AsyncImage(
                         model = imageModel,
                         contentDescription = item.name,
+                        // Poster cache on Home, Discover and Search (see LocalUsePosterCache).
+                        imageLoader = com.nuvio.tv.core.cache.rememberPosterImageLoader(),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                         placeholder = bgPainter,

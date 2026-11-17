@@ -45,6 +45,9 @@ fun DiscoverScreen(
     val uiState by viewModel.uiState.collectAsState()
     val watchedMovieIds by viewModel.watchedMovieIds.collectAsState()
     val watchedSeriesIds by viewModel.watchedSeriesIds.collectAsState()
+    // Poster cache: download every Discover poster, not just the visible ones (no-op while the
+    // poster cache is disabled).
+    com.nuvio.tv.core.cache.PosterCachePrefetchEffect(uiState.discoverResults)
     val lifecycleOwner = LocalLifecycleOwner.current
     val discoverFirstItemFocusRequester = remember { FocusRequester() }
     var discoverFocusedItemIndex by rememberSaveable { mutableStateOf(0) }

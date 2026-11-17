@@ -673,6 +673,8 @@ fun MetaDetailsScreen(
                         }
                         AsyncImage(
                             model = loadingBackdropRequest,
+                            // Background artwork cache (when it is enabled).
+                            imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,
@@ -3194,6 +3196,8 @@ private fun PlaybackHandoffBackdrop(backdropUrl: String?) {
             }
             AsyncImage(
                 model = request,
+                // Background artwork cache (when it is enabled).
+                imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -3297,6 +3301,8 @@ private fun BackdropLayer(
         if (showHeroBackdropUnderlay && heroBackdropRequest != null) {
             AsyncImage(
                 model = heroBackdropRequest,
+                // Background artwork cache (when it is enabled).
+                imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 alpha = backdropAlphaState.value,
@@ -3306,6 +3312,8 @@ private fun BackdropLayer(
         }
         AsyncImage(
             model = backdropRequest,
+            // Background artwork cache (when it is enabled).
+            imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             alpha = backdropAlphaState.value,

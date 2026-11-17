@@ -162,7 +162,8 @@ internal fun ModernHomeRowsList(
     val density = LocalDensity.current
     val context = LocalContext.current
     val layoutDirection = LocalLayoutDirection.current
-    val verticalPrefetchImageLoader = context.imageLoader
+    // Poster cache on Home (see LocalUsePosterCache), so prefetched posters land in it too.
+    val verticalPrefetchImageLoader = com.nuvio.tv.core.cache.rememberPosterImageLoader()
     val latestCarouselRowsForImagePrefetch = rememberUpdatedState(carouselRows)
 
     LaunchedEffect(

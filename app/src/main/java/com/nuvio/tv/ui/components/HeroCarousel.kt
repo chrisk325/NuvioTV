@@ -546,6 +546,8 @@ internal fun HeroCarouselBackdrop(
     ) {
         AsyncImage(
             model = backgroundModel,
+            // Background artwork cache (when it is enabled).
+            imageLoader = com.nuvio.tv.core.cache.rememberBackgroundImageLoader(),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
