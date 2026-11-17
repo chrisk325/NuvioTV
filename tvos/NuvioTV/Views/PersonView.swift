@@ -101,9 +101,20 @@ struct PersonView: View {
                             }
                         }
                         .padding(.horizontal, 80)
-                        if !person.credits.isEmpty {
-                            MetaRowView(title: "Known for", items: person.credits,
-                                        onMoveUp: (person.biography?.isEmpty == false) ? (({ bioFocused = true }) as () -> Void) : nil)
+                        // Filmography split like Fusion: movies, then TV shows (most popular first).
+                        let upToBio: (() -> Void)? = (person.biography?.isEmpty == false) ? { bioFocused = true } : nil
+                        if person.movies.isEmpty && person.shows.isEmpty {
+                            if !person.credits.isEmpty {
+                                MetaRowView(title: "Known for", items: person.credits, onMoveUp: upToBio)
+                            }
+                        } else {
+                            if !person.movies.isEmpty {
+                                MetaRowView(title: "Movies", items: person.movies, onMoveUp: upToBio)
+                            }
+                            if !person.shows.isEmpty {
+                                MetaRowView(title: "TV Shows", items: person.shows,
+                                            onMoveUp: person.movies.isEmpty ? upToBio : nil)
+                            }
                         }
                     }
                     .padding(.vertical, 60)

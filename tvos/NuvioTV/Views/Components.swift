@@ -392,6 +392,7 @@ struct MetaRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // "See all" sits right after the catalog name, not at the far edge.
+            if !title.isEmpty || seeAll != nil {
             HStack(alignment: .center, spacing: 24) {
                 Text(title).font(.headline)
                 if let seeAll {
@@ -406,6 +407,7 @@ struct MetaRowView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 60)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 40) {

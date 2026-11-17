@@ -60,8 +60,13 @@ data class DetailContent(
     val tagline: String?,
     val recommendations: List<MetaPreview>,
     val collectionName: String?,
-    val collectionParts: List<MetaPreview>
+    val collectionParts: List<MetaPreview>,
+    /** "Movie Details" / "Show Details" table at the bottom of the details page. */
+    val facts: List<DetailFact> = emptyList()
 )
+
+/** One row of the details table, e.g. "Budget" → "$260,000,000". */
+data class DetailFact(val label: String, val value: String)
 
 /** Handle returned to Swift for observations; call [cancel] when the view goes away. */
 interface CoreSubscription {
@@ -306,13 +311,17 @@ class NuvioCore(
      */
     @Throws(Exception::class)
     suspend fun details(meta: Meta): DetailContent {
-        val e = try {
-            tmdbEnrichment(meta)
+        // TMDB is fetched whenever a key exists: cast that opens actor pages, related titles,
+        // collections and the details table come from it. The master switch only decides
+        // whether TMDB also replaces the add-on's metadata (artwork, texts, episodes…).
+        val tmdbData = if (!tmdb.isConfigured) null else try {
+            tmdb.enrich(meta.id, meta.imdbId, meta.isSeriesLike, settings.tmdbLanguage)
         } catch (c: CancellationException) {
             throw c
         } catch (_: Exception) {
             null
         }
+        val e = tmdbData?.takeIf { settings.tmdbEnrichment }
         val s = settings
         var m = meta
         if (e != null && s.tmdbUseArtwork) {
@@ -361,19 +370,68 @@ class NuvioCore(
                 })
             }
         }
-        // People row: TMDB credits when enabled, otherwise the add-on's own cast (app_extras, with photos).
+        // People row: TMDB credits when enabled, otherwise the add-on's own cast (app_extras, with
+        // photos). Without enrichment, TMDB's cast is still used when the add-on's people have no
+        // TMDB ids, so every actor opens their page (filmography).
+        val addonPeople = meta.castMembers.map { com.nuvio.shared.tmdb.TmdbPerson(it.tmdbId ?: 0, it.name, it.character, it.photo) }
         val people = tmdbPeople.ifEmpty {
-            meta.castMembers.map { com.nuvio.shared.tmdb.TmdbPerson(it.tmdbId ?: 0, it.name, it.character, it.photo) }
+            val linkable = addonPeople.any { it.id > 0 }
+            if (e == null && tmdbData != null && !linkable && tmdbData.cast.isNotEmpty()) tmdbData.crew + tmdbData.cast else addonPeople
         }
+        // Related titles and collections: the group switches apply when enrichment is on; without
+        // it they still show (they only add rows, nothing of the add-on's is replaced).
+        val related = tmdbData?.takeIf { e == null || s.tmdbUseMoreLikeThis }
+        val collection = tmdbData?.takeIf { e == null || s.tmdbUseCollections }
         return DetailContent(
             meta = m,
             people = people,
             tmdbRating = if (e != null && s.tmdbUseBasicInfo) e.rating else null,
             tagline = if (e != null && s.tmdbUseBasicInfo) e.tagline else null,
-            recommendations = if (e != null && s.tmdbUseMoreLikeThis) e.recommendations else emptyList(),
-            collectionName = if (e != null && s.tmdbUseCollections) e.collectionName else null,
-            collectionParts = if (e != null && s.tmdbUseCollections) e.collectionParts else emptyList()
+            recommendations = related?.recommendations.orEmpty(),
+            collectionName = collection?.collectionName,
+            collectionParts = collection?.collectionParts.orEmpty(),
+            facts = detailFacts(m, tmdbData)
         )
+    }
+
+    /** Status, release, runtime, certification, origin, language, budget / revenue or seasons. */
+    private fun detailFacts(meta: Meta, t: com.nuvio.shared.tmdb.TmdbEnrichment?): List<DetailFact> {
+        val facts = mutableListOf<DetailFact>()
+        fun add(label: String, value: String?) { value?.trim()?.takeIf { it.isNotEmpty() }?.let { facts += DetailFact(label, it) } }
+        add("Status", t?.status ?: meta.status)
+        add(if (meta.isSeriesLike) "First Aired" else "Release Date", t?.releaseDate?.let(::formatDate) ?: meta.releaseInfo)
+        if (meta.isSeriesLike) {
+            add("Last Aired", t?.lastAirDate?.let(::formatDate))
+            add("Seasons", t?.seasonCount?.toString())
+            add("Episodes", t?.episodeCount?.toString())
+            add("Network", (t?.networks?.takeIf { it.isNotEmpty() } ?: meta.networks).take(3).joinToString(", "))
+        }
+        add("Runtime", t?.runtimeMinutes?.let(::formatRuntime) ?: meta.runtime)
+        add("Certification", t?.certification ?: meta.ageRating)
+        add("Origin Country", t?.originCountries?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: meta.country)
+        add("Original Language", t?.language?.uppercase() ?: meta.language)
+        if (!meta.isSeriesLike) {
+            add("Budget", t?.budget?.let(::formatMoney))
+            add("Revenue", t?.revenue?.let(::formatMoney))
+        }
+        add("Production", (t?.productionCompanies ?: meta.productionCompanies).take(3).joinToString(", "))
+        return facts
+    }
+
+    private fun formatRuntime(minutes: Int): String =
+        if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m"
+
+    /** 147803121 → "$147,803,121". */
+    private fun formatMoney(amount: Long): String =
+        "$" + amount.toString().reversed().chunked(3).joinToString(",").reversed()
+
+    /** "2026-03-14" → "14 Mar 2026". */
+    private fun formatDate(raw: String): String {
+        val parts = raw.take(10).split('-')
+        val months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        val month = parts.getOrNull(1)?.toIntOrNull()?.takeIf { it in 1..12 } ?: return raw
+        val day = parts.getOrNull(2)?.toIntOrNull() ?: return raw
+        return "$day ${months[month - 1]} ${parts[0]}"
     }
 
     @Throws(Exception::class)

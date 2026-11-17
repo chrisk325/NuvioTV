@@ -3,6 +3,7 @@ package com.nuvio.shared.tmdb
 import com.nuvio.shared.data.AddonJson
 import com.nuvio.shared.data.asObject
 import com.nuvio.shared.data.int
+import com.nuvio.shared.data.long
 import com.nuvio.shared.data.nonBlank
 import com.nuvio.shared.data.obj
 import com.nuvio.shared.data.objects
@@ -52,7 +53,16 @@ data class TmdbEnrichment(
     val collectionParts: List<MetaPreview>,
     val certification: String?,
     val networks: List<String>,
-    val trailerYoutubeKeys: List<String>
+    val trailerYoutubeKeys: List<String>,
+    val budget: Long? = null,
+    val revenue: Long? = null,
+    /** Movie release date / show first air date (yyyy-MM-dd). */
+    val releaseDate: String? = null,
+    val lastAirDate: String? = null,
+    val seasonCount: Int? = null,
+    val episodeCount: Int? = null,
+    /** Countries of origin (TMDB origin_country), else production countries. */
+    val originCountries: List<String> = emptyList()
 )
 
 data class TmdbEpisode(
@@ -72,7 +82,10 @@ data class TmdbPersonDetail(
     val birthday: String?,
     val placeOfBirth: String?,
     val knownFor: String?,
-    val credits: List<MetaPreview>
+    val credits: List<MetaPreview>,
+    /** Full filmography split by kind, most popular first (Fusion-style actor page). */
+    val movies: List<MetaPreview> = emptyList(),
+    val shows: List<MetaPreview> = emptyList()
 )
 
 class TmdbService(private val http: HttpClient, private val apiKey: String) {
@@ -172,7 +185,15 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             networks = body.objects("networks").mapNotNull { it.nonBlank("name") }.distinct(),
             trailerYoutubeKeys = body.obj("videos")?.objects("results").orEmpty()
                 .filter { it.str("site") == "YouTube" && it.str("type") in setOf("Trailer", "Teaser") }
-                .mapNotNull { it.nonBlank("key") }
+                .mapNotNull { it.nonBlank("key") },
+            budget = body.long("budget")?.takeIf { it > 0 },
+            revenue = body.long("revenue")?.takeIf { it > 0 },
+            releaseDate = body.nonBlank(if (isShow) "first_air_date" else "release_date"),
+            lastAirDate = body.nonBlank("last_air_date"),
+            seasonCount = body.int("number_of_seasons")?.takeIf { it > 0 },
+            episodeCount = body.int("number_of_episodes")?.takeIf { it > 0 },
+            originCountries = com.nuvio.shared.data.coerceStringList(body["origin_country"])
+                .ifEmpty { body.objects("production_countries").mapNotNull { it.nonBlank("iso_3166_1") } }
         )
         mutex.withLock {
             cache[key] = result
@@ -199,11 +220,16 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
     @Throws(Exception::class)
     suspend fun person(id: Int, language: String): TmdbPersonDetail? {
         val body = get("person/$id?language=${encodeUrlComponent(language.ifBlank { "en-US" })}&append_to_response=combined_credits") ?: return null
-        val credits = (body.obj("combined_credits")?.objects("cast").orEmpty() + body.obj("combined_credits")?.objects("crew").orEmpty())
+        val all = (body.obj("combined_credits")?.objects("cast").orEmpty() + body.obj("combined_credits")?.objects("crew").orEmpty())
             .distinctBy { it.int("id") to it.str("media_type") }
             .sortedByDescending { it.str("popularity")?.toDoubleOrNull() ?: 0.0 }
-            .take(40)
-            .mapNotNull { it.toPreview(it.str("media_type") == "tv") }
+        val credits = all.take(40).mapNotNull { it.toPreview(it.str("media_type") == "tv") }
+        // Talk / award shows the person merely appeared in are noise in a filmography.
+        val noise = setOf(10763, 10767) // News, Talk
+        val movies = all.filter { it.str("media_type") == "movie" }.take(60).mapNotNull { it.toPreview(false) }
+        val shows = all.filter { it.str("media_type") == "tv" }
+            .filter { show -> show["genre_ids"]?.let { com.nuvio.shared.data.coerceStringList(it) }.orEmpty().none { it.toIntOrNull() in noise } }
+            .take(60).mapNotNull { it.toPreview(true) }
         return TmdbPersonDetail(
             id = id,
             name = body.nonBlank("name") ?: return null,
@@ -212,7 +238,9 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             birthday = body.nonBlank("birthday"),
             placeOfBirth = body.nonBlank("place_of_birth"),
             knownFor = body.nonBlank("known_for_department"),
-            credits = credits
+            credits = credits,
+            movies = movies,
+            shows = shows
         )
     }
 

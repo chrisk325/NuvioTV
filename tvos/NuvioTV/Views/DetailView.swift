@@ -209,6 +209,7 @@ struct DetailView: View {
         hasEpisodes(meta) || !(details?.people.isEmpty ?? true) || !meta.cast.isEmpty
             || !meta.director.isEmpty || !meta.writer.isEmpty
             || !(details?.collectionParts.isEmpty ?? true) || !(details?.recommendations.isEmpty ?? true)
+            || !(details?.facts.isEmpty ?? true)
     }
 
     private static let pageAnimation = Animation.spring(response: 0.55, dampingFraction: 0.9)
@@ -366,14 +367,11 @@ struct DetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 80)
                 }
-                if let details, !details.collectionParts.isEmpty {
-                    MetaRowView(title: details.collectionName ?? "Collection", items: details.collectionParts,
-                                onMoveUp: { moveUp(from: meta) })
+                if let details, !details.facts.isEmpty {
+                    DetailFactsTable(title: meta.isSeriesLike ? "Show Details" : "Movie Details", facts: details.facts)
                 }
-                if let details, !details.recommendations.isEmpty {
-                    // With a collection row above, let the focus engine move between the two rows.
-                    MetaRowView(title: "More like this", items: details.recommendations,
-                                onMoveUp: details.collectionParts.isEmpty ? (({ moveUp(from: meta) }) as () -> Void) : nil)
+                if let details, !details.recommendations.isEmpty || !details.collectionParts.isEmpty {
+                    RelatedTitlesSection(details: details, onMoveUp: { moveUp(from: meta) })
                 }
             }
             .padding(.bottom, 80)
@@ -900,5 +898,116 @@ struct ExpandableDescription: View {
         guard !expanded else { return }
         let cut = full > folded + 2
         if truncated != cut { truncated = cut }
+    }
+}
+
+/// "Movie Details" / "Show Details": label on the left, value on the right, hairlines between rows.
+struct DetailFactsTable: View {
+    let title: String
+    let facts: [DetailFact]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title).font(.title3.weight(.bold)).padding(.bottom, 18)
+            ForEach(Array(facts.enumerated()), id: \.offset) { index, fact in
+                HStack(alignment: .firstTextBaseline, spacing: 40) {
+                    Text(fact.label)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Spacer(minLength: 20)
+                    Text(fact.value)
+                        .font(.callout)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                }
+                .padding(.vertical, 16)
+                if index < facts.count - 1 {
+                    Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                }
+            }
+        }
+        .frame(maxWidth: 1100, alignment: .leading)
+        .padding(.horizontal, 80)
+        .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
+    }
+}
+
+/// "Collection | More Like This": tabs that switch the poster row below (moving onto a tab
+/// selects it, as with the season tabs).
+struct RelatedTitlesSection: View {
+    let details: DetailContent
+    var onMoveUp: (() -> Void)? = nil
+    @State private var tab: Tab?
+
+    enum Tab: Hashable { case collection, related }
+
+    private var tabs: [Tab] {
+        var result: [Tab] = []
+        if !details.collectionParts.isEmpty { result.append(.collection) }
+        if !details.recommendations.isEmpty { result.append(.related) }
+        return result
+    }
+
+    private func label(_ tab: Tab) -> String {
+        switch tab {
+        case .collection: return "Collection"
+        case .related: return "More Like This"
+        }
+    }
+
+    var body: some View {
+        let current = tab ?? tabs.first ?? .related
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                ForEach(Array(tabs.enumerated()), id: \.element) { index, item in
+                    if index > 0 {
+                        Text("|").font(.title3).foregroundStyle(.white.opacity(0.4))
+                    }
+                    Button { tab = item } label: {
+                        Text(label(item))
+                            .background(FocusReporter { if tab != item { tab = item } })
+                    }
+                    .buttonStyle(RelatedTabStyle(isSelected: item == current))
+                    .onMoveUp(onMoveUp)
+                }
+            }
+            .padding(.horizontal, 64)
+            .focusSection()
+            if current == .collection, let name = details.collectionName {
+                Text(name).font(.callout).foregroundStyle(.secondary).padding(.horizontal, 80)
+            }
+            MetaRowView(title: "", items: current == .collection ? details.collectionParts : details.recommendations)
+                .id(current)
+        }
+    }
+}
+
+/// Tab title: big and bold; dimmed when not selected, a soft tile when focused.
+struct RelatedTabStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        TabLabel(configuration: configuration, isSelected: isSelected)
+    }
+
+    private struct TabLabel: View {
+        let configuration: ButtonStyle.Configuration
+        let isSelected: Bool
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .font(.title2.weight(.bold))
+                .foregroundStyle(isFocused ? Color.black : Color.white.opacity(isSelected ? 1 : 0.5))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isFocused ? Color.white : Color.clear)
+                )
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
     }
 }
