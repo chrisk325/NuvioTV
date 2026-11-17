@@ -115,28 +115,53 @@ struct HeroInfo: View {
     }
 }
 
-/// MDBList rating logos for a hero item; loads (cached) when the item changes.
+/// Hero rating logos, loaded exactly as the details page loads them (the title's meta, its TMDB
+/// details for the ids, then the ratings) and kept app-wide: a lookup that has started finishes
+/// even when focus moves on, and a title already looked up shows its logos at once.
+@MainActor
+final class HeroRatingsStore: ObservableObject {
+    static let shared = HeroRatingsStore()
+    @Published private(set) var ratings: [String: [ExternalRating]] = [:]
+    private var loading: Set<String> = []
+
+    func load(_ preview: MetaPreview, core: NuvioCore) {
+        let id = preview.id
+        guard ratings[id] == nil, !loading.contains(id) else { return }
+        guard core.settings.showMdbListRatings, core.settings.showMdbListOnHero else { return }
+        loading.insert(id)
+        Task { @MainActor in
+            defer { loading.remove(id) }
+            var result: [ExternalRating] = []
+            // The details page's path: meta → TMDB details (ids) → ratings.
+            if let meta = try? await core.meta(type: preview.apiType, id: id, sourceAddonBaseUrl: preview.sourceAddonBaseUrl) {
+                let merged = try? await core.details(meta: meta)
+                result = (try? await core.ratings(meta: merged?.meta ?? meta)) ?? []
+            }
+            if result.isEmpty {
+                result = (try? await core.heroRatings(preview: preview)) ?? []
+            }
+            ratings[id] = result
+        }
+    }
+}
+
+/// Rating logos of a hero item (see HeroRatingsStore).
 struct HeroRatings: View {
     @EnvironmentObject private var app: AppModel
+    @ObservedObject private var store = HeroRatingsStore.shared
     let item: MetaPreview
-    @State private var ratings: [ExternalRating] = []
-    @State private var loadedFor: String?
 
     var body: some View {
+        let ratings = store.ratings[item.id] ?? []
         Group {
-            if !ratings.isEmpty && loadedFor == item.id {
+            if !ratings.isEmpty {
                 RatingsRow(ratings: ratings, iconHeight: 28)
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: loadedFor)
-        .task(id: item.id) {
-            let id = item.id
-            let result = (try? await app.core.heroRatings(preview: item)) ?? []
-            guard !Task.isCancelled, id == item.id else { return }
-            ratings = result
-            loadedFor = id
-        }
+        .animation(.easeInOut(duration: 0.25), value: ratings.count)
+        .onAppear { store.load(item, core: app.core) }
+        .onChange(of: item.id) { _, _ in store.load(item, core: app.core) }
     }
 }
 
