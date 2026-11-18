@@ -115,6 +115,8 @@ class NuvioCore(
     val simkl = SimklService(httpClient, store, config.simklClientId, config.simklAppName.ifBlank { "nuvio" })
     val aniList = AniListService(httpClient, store, config.aniListClientId)
     val mdbList = MdbListService(httpClient)
+    /** MDBList as a tracker (OAuth sign-in): scrobbles, watched history, progress, watchlist. */
+    val mdbListTracker = com.nuvio.shared.tracking.MdbListTracker(httpClient, store, config.mdbListClientId)
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)
     val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
     val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
@@ -915,6 +917,7 @@ class NuvioCore(
                 }
                 runCatching { trakt.markWatched(media) }
                 runCatching { simkl.markWatched(media) }
+                runCatching { mdbListTracker.markWatched(media) }
                 runCatching { aniList.updateProgress(media, completedTitle = false) }
             }
         }
@@ -954,6 +957,7 @@ class NuvioCore(
         scope.launch {
             runCatching { trakt.scrobble(media, scrobble, progressPercent) }
             runCatching { simkl.scrobble(media, scrobble, progressPercent) }
+            runCatching { mdbListTracker.scrobble(media, scrobble, progressPercent) }
             if (scrobble == ScrobbleAction.STOP && cloud.isSignedIn) {
                 runCatching { cloud.pushProgress(watchProgress.entries.value.filter { it.contentId == meta.id }.take(5)) }
             }
@@ -999,6 +1003,13 @@ class NuvioCore(
             setUpNext("simkl", emptyList())
         }
         if (!trakt.isConnected && storedUpNext("trakt").isNotEmpty()) setUpNext("trakt", emptyList())
+        if (mdbListTracker.isConnected) sync("MDBList") {
+            watched.addAll(mdbListTracker.watchedKeys())
+            mdbListTracker.playbackProgress().forEach(::mergeRemoteProgress)
+            mdbListWatchlistCache = mdbListTracker.watchlist()
+        } else {
+            mdbListWatchlistCache = emptyList()
+        }
         if (aniList.isConnected) sync("AniList") {
             val state = aniList.completedItems()
             watched.addAll(state.keys)
@@ -1070,6 +1081,10 @@ class NuvioCore(
     var traktWatchlistCache: List<MetaPreview> = emptyList()
         private set
 
+    /** Last fetched MDBList watchlist (Library tab). */
+    var mdbListWatchlistCache: List<MetaPreview> = emptyList()
+        private set
+
     fun observeLibrary(onChange: (List<SavedItem>) -> Unit): CoreSubscription = observe(library.items, onChange)
 
     fun isInLibrary(id: String): Boolean = library.contains(id)
@@ -1109,6 +1124,13 @@ class NuvioCore(
             if (trakt.isConnected && imdb != null) {
                 scope.launch { runCatching { trakt.setShowInWatchlist(imdb, isShow, saved) } }
             }
+            if (mdbListTracker.isConnected) {
+                val tmdb = item.id.takeIf { it.startsWith("tmdb:") }?.split(':')?.getOrNull(1)?.toIntOrNull()
+                scope.launch {
+                    runCatching { mdbListTracker.setInWatchlist(imdb?.substringBefore(':'), tmdb, isShow, saved) }
+                    if (!saved) mdbListWatchlistCache = mdbListWatchlistCache.filterNot { it.id == item.id || (imdb != null && it.imdbId == imdb) }
+                }
+            }
             if (cloud.isSignedIn) scope.launch {
                 runCatching {
                     if (saved) cloud.pushLibrary(library.items.value.filter { it.id == item.id })
@@ -1147,6 +1169,7 @@ class NuvioCore(
         scope.launch {
             runCatching { trakt.markEpisodesWatched(show, numbers, remove = !isWatched) }
             runCatching { simkl.markEpisodesWatched(show, numbers, remove = !isWatched) }
+            runCatching { mdbListTracker.markEpisodesWatched(show, numbers, remove = !isWatched) }
             if (cloud.isSignedIn) runCatching {
                 if (isWatched) cloud.pushWatchedEpisodes(meta.id, meta.apiType, meta.name, numbers)
                 else cloud.deleteWatched(meta.id, numbers)
@@ -1170,6 +1193,7 @@ class NuvioCore(
         scope.launch {
             runCatching { trakt.markWatched(media) }
             runCatching { simkl.markWatched(media) }
+            runCatching { mdbListTracker.markWatched(media) }
             if (cloud.isSignedIn) runCatching { cloud.pushWatched(preview.id, preview.apiType, preview.name, null, null) }
         }
     }
@@ -1198,6 +1222,7 @@ class NuvioCore(
         scope.launch {
             runCatching { trakt.markWatched(media) }
             runCatching { simkl.markWatched(media) }
+            runCatching { mdbListTracker.markWatched(media) }
             if (cloud.isSignedIn) runCatching {
                 cloud.pushWatched(progress.contentId, progress.contentType, progress.name, progress.season, progress.episode)
             }
@@ -1284,7 +1309,7 @@ class NuvioCore(
         val shows = LinkedHashMap<String, String>() // id → type
         library.items.value.filter { com.nuvio.shared.model.isSeriesLikeType(it.type) }.forEach { shows[it.id] = it.type }
         watchProgress.entries.value.filter { com.nuvio.shared.model.isSeriesLikeType(it.contentType) }.forEach { shows[it.contentId] = it.contentType }
-        traktWatchlistCache.filter { it.type == com.nuvio.shared.model.ContentType.SERIES }.forEach { shows[it.id] = "series" }
+        (traktWatchlistCache + mdbListWatchlistCache).filter { it.type == com.nuvio.shared.model.ContentType.SERIES }.forEach { shows[it.id] = "series" }
         val entries = mutableListOf<CalendarEntry>()
         for ((id, type) in shows.entries.take(60)) {
             val meta = try {

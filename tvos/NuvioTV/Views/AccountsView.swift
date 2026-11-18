@@ -1,7 +1,7 @@
 import SwiftUI
 import NuvioShared
 
-/// Trakt, Simkl and AniList sign-in (device code / PIN / token), like Android's tracking settings.
+/// Trakt, Simkl, MDBList and AniList sign-in (device code / PIN / token), like Android's tracking settings.
 struct AccountsView: View {
     @EnvironmentObject private var app: AppModel
     @State private var revision = 0
@@ -84,6 +84,33 @@ struct AccountsView: View {
                     }
                 }
             }
+            Section("MDBList") {
+                if !core.mdbListTracker.isConfigured {
+                    Text("This build has no MDBList client id.").foregroundStyle(.secondary)
+                } else if core.mdbListTracker.isConnected {
+                    LabeledContent("Signed in", value: core.mdbListTracker.username ?? "MDBList")
+                    Button(isSyncing ? "Syncing…" : "Sync now") {
+                        Task { @MainActor in
+                            isSyncing = true
+                            await app.syncTrackers()
+                            isSyncing = false
+                            message = app.trackerSyncError ?? "MDBList history, progress and watchlist synced."
+                        }
+                    }
+                    .disabled(isSyncing)
+                    Button("Sign out", role: .destructive) {
+                        Task { @MainActor in
+                            try? await core.mdbListTracker.signOut()
+                            revision += 1
+                            await app.syncTrackers()
+                        }
+                    }
+                } else {
+                    Button("Sign in with MDBList") {
+                        start { try await core.mdbListTracker.startSignIn() } poll: { try await core.mdbListTracker.pollSignIn(signIn: $0).boolValue }
+                    }
+                }
+            }
             Section("AniList") {
                 if !core.aniList.isConfigured {
                     Text("This build has no AniList client id.").foregroundStyle(.secondary)
@@ -102,7 +129,7 @@ struct AccountsView: View {
         .navigationTitle("Accounts")
         .sheet(item: $signIn) { prompt in
             DeviceCodeSheet(
-                title: "Sign in to \(prompt.signIn.providerId.capitalized)",
+                title: "Sign in to \(Self.providerName(prompt.signIn.providerId))",
                 code: prompt.signIn.userCode,
                 url: prompt.signIn.verificationUrl,
                 intervalSeconds: Int(prompt.signIn.intervalSeconds),
@@ -197,6 +224,14 @@ struct AccountsView: View {
                 }
             }
             .padding(80)
+        }
+    }
+
+    private static func providerName(_ id: String) -> String {
+        switch id {
+        case "mdblist": return "MDBList"
+        case "anilist": return "AniList"
+        default: return id.capitalized
         }
     }
 

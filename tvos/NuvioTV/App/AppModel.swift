@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var failedAddonUrls: [String] = []
     @Published private(set) var watched: Set<String> = []
     @Published private(set) var traktWatchlist: [MetaPreview] = []
+    @Published private(set) var mdbListWatchlist: [MetaPreview] = []
     @Published private(set) var trackerSyncError: String?
 
     private var subscriptions: [CoreSubscription] = []
@@ -119,6 +120,7 @@ final class AppModel: ObservableObject {
     func syncTrackers() async {
         trackerSyncError = try? await core.syncTrackers()
         traktWatchlist = core.traktWatchlistCache
+        mdbListWatchlist = core.mdbListWatchlistCache
         // Fully watched shows from Trakt / Simkl / AniList: cards re-read their watched badge.
         objectWillChange.send()
     }

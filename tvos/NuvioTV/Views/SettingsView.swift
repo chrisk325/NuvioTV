@@ -62,7 +62,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .subtitles: return "Languages, style, timing"
         case .home: return "Layout, hero, catalogs"
         case .metadata: return "TMDB and MDBList"
-        case .accounts: return "Nuvio, Trakt, Simkl, AniList"
+        case .accounts: return "Nuvio, Trakt, Simkl, MDBList, AniList"
         case .debrid: return "Torbox, Premiumize, Real-Debrid"
         case .servers: return "Jellyfin and Emby"
         case .about: return "Version and credits"

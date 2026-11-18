@@ -13,21 +13,25 @@ struct LibraryView: View {
         return app.library.filter { !onServer.contains($0.id) }
     }
 
-    private var watchlistItems: [MetaPreview] {
+    private var watchlistItems: [MetaPreview] { withoutServerFavorites(app.traktWatchlist) }
+    private var mdbListItems: [MetaPreview] { withoutServerFavorites(app.mdbListWatchlist) }
+
+    private func withoutServerFavorites(_ items: [MetaPreview]) -> [MetaPreview] {
         let onServer = app.serverFavoriteIds
-        guard !onServer.isEmpty else { return app.traktWatchlist }
-        return app.traktWatchlist.filter { !onServer.contains($0.id) && !($0.imdbId.map(onServer.contains) ?? false) }
+        guard !onServer.isEmpty else { return items }
+        return items.filter { !onServer.contains($0.id) && !($0.imdbId.map(onServer.contains) ?? false) }
     }
 
     var body: some View {
         let saved = localItems
         let watchlist = watchlistItems
+        let mdbList = mdbListItems
         Group {
-        if saved.isEmpty && watchlist.isEmpty && app.serverFavorites.isEmpty {
+        if saved.isEmpty && watchlist.isEmpty && mdbList.isEmpty && app.serverFavorites.isEmpty {
             VStack(spacing: 30) {
                 MessageView(
                     title: "Your library is empty",
-                    message: "Use “Add to Library” on any title to keep it here. Connect Trakt in Settings to see your watchlist.",
+                    message: "Use “Add to Library” on any title to keep it here. Connect Trakt or MDBList in Settings to see your watchlist.",
                     systemImage: "bookmark"
                 )
                 NavigationLink("Release calendar") { CalendarView() }
@@ -52,6 +56,15 @@ struct LibraryView: View {
                         Text("Trakt watchlist").font(.headline).padding(.horizontal, 60)
                         LazyVGrid(columns: columns, spacing: 50) {
                             ForEach(watchlist, id: \.id) { item in
+                                PosterCard(item: item)
+                            }
+                        }
+                        .padding(.horizontal, 60)
+                    }
+                    if !mdbList.isEmpty {
+                        Text("MDBList watchlist").font(.headline).padding(.horizontal, 60)
+                        LazyVGrid(columns: columns, spacing: 50) {
+                            ForEach(mdbList, id: \.id) { item in
                                 PosterCard(item: item)
                             }
                         }
