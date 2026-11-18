@@ -102,7 +102,8 @@ class ServerMatcher internal constructor(
         return title.copy(season = requestedSeason, episode = requestedEpisode)
     }
 
-    private fun titleRequest(type: String, contentId: String): MatchRequest? {
+    /** A request for the movie or show itself, never one of its episodes. */
+    fun titleRequest(type: String, contentId: String): MatchRequest? {
         if (ServerItemRef.isServerId(contentId)) return null
         val kind = ServerMediaKind.fromContentType(type) ?: return null
         val parentId = contentId.split(':').take(parentSize(contentId)).joinToString(":")
@@ -138,6 +139,10 @@ class ServerMatcher internal constructor(
             match.takeIf { datesCompatible(catalogDate, it.premiereDate) }?.let { ServerItemRef(connection.id, it.itemId) }
         }
     }
+
+    /** The server items for the movie or show in [request], ignoring any season or episode it names. */
+    suspend fun matchTitle(connection: ServerConnection, request: MatchRequest, forceRefresh: Boolean): List<ServerItemRef> =
+        titleItemIds(connection, request, forceRefresh).map { ServerItemRef(connection.id, it) }
 
     private suspend fun titleItemIds(connection: ServerConnection, request: MatchRequest, forceRefresh: Boolean): List<String> {
         val ids = withConvertedIds(request)
@@ -203,7 +208,10 @@ class ServerMatcher internal constructor(
         query: ServerTitleQuery,
         libraries: List<ServerLibrary>
     ): List<String>? = coroutineScope {
-        val found = libraries.map { library ->
+        val scoped = repository.call(connection.id) { provider, session ->
+            libraries.distinctBy { provider.titleLookupScope(session, it) }
+        }
+        val found = scoped.map { library ->
             async { repository.call(connection.id) { provider, session -> provider.lookupTitle(session, library, query) } }
         }.awaitAll()
         if (found.any { it == null }) return@coroutineScope null

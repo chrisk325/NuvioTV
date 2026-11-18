@@ -48,7 +48,7 @@ internal abstract class MediaBrowserProvider(
     override val capabilities: Set<ServerCapability> = ServerCapability.entries.toSet()
 
     private val client = MediaBrowserClient(authorizationHeader, http, identity)
-    private val aioStreamsServers = ConcurrentHashMap<String, Boolean>()
+    private val serverKinds = ConcurrentHashMap<String, ServerKind>()
     private val libraryGenres = ConcurrentHashMap<String, String>()
 
     protected abstract fun viewsEndpoint(userId: String): Endpoint
@@ -60,6 +60,8 @@ internal abstract class MediaBrowserProvider(
     protected abstract fun resumeEndpoint(userId: String): Endpoint
 
     protected abstract fun playedEndpoint(userId: String, itemId: String): Endpoint
+
+    protected abstract fun favoriteEndpoint(userId: String, itemId: String): Endpoint
 
     internal open fun isSupported(info: PublicInfo): Boolean = isSupportedVersion(info.version)
 
@@ -215,17 +217,27 @@ internal abstract class MediaBrowserProvider(
         return items.mapNotNull(mapper(session)::title).distinctBy { it.preview.id }.take(limit)
     }
 
-    private suspend fun isAioStreams(session: ServerSession): Boolean {
-        aioStreamsServers[session.apiRoot]?.let { return it }
-        val detected = try {
-            publicInfo(session.connection.address).second.aioStreams != null
+    override suspend fun servesCatalogs(session: ServerSession): Boolean = isAioStreams(session)
+
+    /** AIOStreams, or AIOMetadata, which sends the same "aiostreams" extension: servers made of catalogs. */
+    private suspend fun isAioStreams(session: ServerSession): Boolean = serverKind(session) != ServerKind.PLAIN
+
+    private suspend fun serverKind(session: ServerSession): ServerKind {
+        serverKinds[session.apiRoot]?.let { return it }
+        val info = try {
+            publicInfo(session.connection.address).second
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            return false
+            return ServerKind.PLAIN
         }
-        aioStreamsServers[session.apiRoot] = detected
-        return detected
+        val kind = when {
+            info.serverName.equals(AIOMETADATA_NAME, ignoreCase = true) -> ServerKind.AIOMETADATA
+            info.aioStreams != null -> ServerKind.AIOSTREAMS
+            else -> ServerKind.PLAIN
+        }
+        serverKinds[session.apiRoot] = kind
+        return kind
     }
 
     override suspend fun resumeItems(session: ServerSession, limit: Int): List<ServerTitle> {
@@ -289,6 +301,39 @@ internal abstract class MediaBrowserProvider(
         )
     }
 
+    override suspend fun favoritesPage(session: ServerSession, start: Int, limit: Int): ServerPage<ServerTitle> {
+        val result = get(
+            session,
+            itemsEndpoint(session.userId),
+            ItemsResult.serializer(),
+            mapOf(
+                "filters" to "IsFavorite",
+                "recursive" to "true",
+                "includeItemTypes" to ServerMediaKind.MIXED.itemType(),
+                "sortBy" to "SortName",
+                "sortOrder" to "Ascending",
+                "fields" to LIST_FIELDS,
+                "imageTypeLimit" to "1",
+                "enableImageTypes" to "Primary,Backdrop,Logo",
+                "startIndex" to start.toString(),
+                "limit" to limit.toString(),
+                "enableTotalRecordCount" to "true"
+            )
+        )
+        return ServerPage(result.items.mapNotNull(mapper(session)::title), result.totalRecordCount)
+    }
+
+    override suspend fun setFavorite(session: ServerSession, itemId: String, favorite: Boolean) {
+        val endpoint = favoriteEndpoint(session.userId, itemId)
+        client.execute(
+            method = if (favorite) "POST" else "DELETE",
+            baseUrl = session.apiRoot,
+            path = endpoint.path,
+            token = session.token,
+            query = endpoint.query
+        )
+    }
+
     override suspend fun externalIdIndex(
         session: ServerSession,
         library: ServerLibrary,
@@ -323,17 +368,56 @@ internal abstract class MediaBrowserProvider(
     /** A second query to try once when the first one found nothing with [query]'s ids; null when there is none. */
     protected open fun titleRetryQuery(query: ServerTitleQuery): Map<String, String>? = null
 
+    // AIOStreams' libraries are catalogs, which hold only part of what it can play, so titles are looked up across it.
+    override suspend fun titleLookupScope(session: ServerSession, library: ServerLibrary): String =
+        if (isAioStreams(session)) "all:${library.kind.name}" else library.id
+
     override suspend fun lookupTitle(
         session: ServerSession,
         library: ServerLibrary,
         query: ServerTitleQuery
     ): List<ServerIndexEntry>? {
-        val filter = titleLookupQuery(query) ?: return null
-        val found = titleEntries(session, library, filter)
+        val filter = titleLookupQuery(query)
+        val byIds = if (filter != providerIdQuery(query)) idLookup(session, library, query) else emptyList()
+        if (verifiedTitleMatches(byIds, query).isNotEmpty()) return byIds
+        filter ?: return null
+        val found = byIds + titleEntries(session, library, filter)
         if (verifiedTitleMatches(found, query).isNotEmpty()) return found
         val retry = titleRetryQuery(query) ?: return found
         return found + titleEntries(session, library, retry)
     }
+
+    /**
+     * AIOMetadata finds titles by IMDb, TMDB and TVDB ids directly, which also matches titles whose name differs
+     * from the catalog's. Anything going wrong leaves the name search to find them.
+     */
+    private suspend fun idLookup(
+        session: ServerSession,
+        library: ServerLibrary,
+        query: ServerTitleQuery
+    ): List<ServerIndexEntry> {
+        val filter = providerIdQuery(query) ?: return emptyList()
+        if (serverKind(session) != ServerKind.AIOMETADATA) return emptyList()
+        return try {
+            titleEntries(session, library, filter)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** "imdb.tt0111161,tmdb.278": the AnyProviderIdEquals filter Emby and AIOMetadata understand. */
+    protected fun providerIdQuery(query: ServerTitleQuery): Map<String, String>? {
+        val ids = listOfNotNull(
+            query.ids.imdb?.let { "imdb.$it" },
+            query.ids.tmdb?.let { "tmdb.$it" },
+            query.ids.tvdb?.let { "tvdb.$it" }
+        )
+        return if (ids.isEmpty()) null else mapOf("anyProviderIdEquals" to ids.joinToString(","))
+    }
+
+    private enum class ServerKind { PLAIN, AIOSTREAMS, AIOMETADATA }
 
     private suspend fun titleEntries(
         session: ServerSession,
@@ -345,7 +429,7 @@ internal abstract class MediaBrowserProvider(
             itemsEndpoint(session.userId),
             ItemsResult.serializer(),
             mapOf(
-                "parentId" to library.id,
+                "parentId" to library.id.takeUnless { isAioStreams(session) },
                 "recursive" to "true",
                 "includeItemTypes" to library.kind.itemType(),
                 "fields" to "ProviderIds,ProductionYear",
@@ -633,6 +717,7 @@ internal abstract class MediaBrowserProvider(
 
     private companion object {
         const val API_KEY = "api_key"
+        const val AIOMETADATA_NAME = "AIOMetadata"
         const val MAX_STREAMING_BITRATE = 1_000_000_000L
         const val TITLE_LOOKUP_LIMIT = 20
         const val LIST_FIELDS = "Overview,Genres,ProviderIds,PremiereDate"

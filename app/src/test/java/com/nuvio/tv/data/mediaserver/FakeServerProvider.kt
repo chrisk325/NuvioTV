@@ -11,7 +11,9 @@ import kotlinx.coroutines.Dispatchers
 internal class FakeServerProvider(
     private val movieCount: Int = 120,
     private val transcodes: Boolean = false,
-    override val id: String = "fake"
+    override val id: String = "fake",
+    favorites: Boolean = false,
+    private val catalogs: Boolean = false
 ) : ServerProvider {
     override val displayName: String = "Fake"
     override val minimumVersion: String = "1.0"
@@ -20,7 +22,7 @@ internal class FakeServerProvider(
         ServerCapability.EXTERNAL_ID_LOOKUP,
         ServerCapability.USER_STATE_READ,
         ServerCapability.USER_STATE_WRITE
-    )
+    ) + if (favorites) setOf(ServerCapability.FAVORITES) else emptySet()
 
     val indexedIds = mutableMapOf<String, TrackingExternalIds>()
     val episodes = mutableMapOf<Pair<Int, Int>, ServerEpisode>()
@@ -29,6 +31,9 @@ internal class FakeServerProvider(
     val searches = mutableListOf<Pair<ServerMediaKind, List<String>>>()
     val playedChanges = mutableListOf<Pair<String, Boolean>>()
     val failingPlayed = mutableSetOf<String>()
+    val favoriteIds = linkedSetOf<String>()
+    val favoriteChanges = mutableListOf<Pair<String, Boolean>>()
+    val failingFavorites = mutableSetOf<String>()
     val failingLibraries = mutableSetOf<String>()
     val userStates = mutableMapOf<String, List<ServerUserState>>()
     var titleLookup: (suspend (ServerLibrary, ServerTitleQuery) -> List<ServerIndexEntry>?)? = null
@@ -136,6 +141,22 @@ internal class FakeServerProvider(
     override suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean) {
         synchronized(playedChanges) { playedChanges += itemId to played }
         if (itemId in failingPlayed) throw ServerException(ServerFailure.FORBIDDEN)
+    }
+
+    override suspend fun servesCatalogs(session: ServerSession): Boolean = catalogs
+
+    override suspend fun favoritesPage(session: ServerSession, start: Int, limit: Int): ServerPage<ServerTitle> {
+        val ids = synchronized(favoriteIds) { favoriteIds.toList() }
+        val titles = ids.map { itemId ->
+            title(session, itemId, if (itemId == SHOW_ID) ServerMediaKind.SERIES else ServerMediaKind.MOVIE)
+        }
+        return ServerPage(titles.drop(start).take(limit), titles.size)
+    }
+
+    override suspend fun setFavorite(session: ServerSession, itemId: String, favorite: Boolean) {
+        synchronized(favoriteChanges) { favoriteChanges += itemId to favorite }
+        if (itemId in failingFavorites) throw ServerException(ServerFailure.FORBIDDEN)
+        synchronized(favoriteIds) { if (favorite) favoriteIds += itemId else favoriteIds -= itemId }
     }
 
     override suspend fun report(session: ServerSession, playback: ServerPlaybackSession, event: ServerPlaybackEvent) {

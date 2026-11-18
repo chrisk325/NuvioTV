@@ -59,7 +59,8 @@ fun PosterOptionsDialog(
     onDismiss: () -> Unit,
     onDetails: () -> Unit,
     onToggleLibrary: () -> Unit,
-    onToggleWatched: () -> Unit
+    onToggleWatched: () -> Unit,
+    extraOptions: @Composable () -> Unit = {}
 ) {
     val primaryFocusRequester = remember { FocusRequester() }
 
@@ -124,6 +125,8 @@ fun PosterOptionsDialog(
                 }
             )
         }
+
+        extraOptions()
     }
 }
 
@@ -258,6 +261,13 @@ fun PosterOptionsHost(
                     controller.toggleMovieWatched()
                 }
                 controller.dismiss()
+            },
+            extraOptions = {
+                ServerFavoriteOption(
+                    item = target,
+                    aliases = listOf(state.originalItemId),
+                    onSelected = { controller.dismiss() }
+                )
             }
         )
     }

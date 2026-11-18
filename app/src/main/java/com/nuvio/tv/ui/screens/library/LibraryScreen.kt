@@ -151,6 +151,7 @@ fun LibraryScreen(
     var selectedViewMode by rememberSaveable { mutableStateOf(LibraryViewMode.Saved) }
     val servers by serversViewModel.servers.collectAsState()
     val serverShelves by serversViewModel.shelves.collectAsState()
+    val serverFavorites by serversViewModel.favoritesState.collectAsState()
     val hasServers = servers.enabledConnections.isNotEmpty()
     val viewModes = LibraryViewMode.entries.filter { it != LibraryViewMode.Servers || hasServers }
     val viewMode = selectedViewMode.takeIf { it in viewModes } ?: LibraryViewMode.Saved
@@ -210,7 +211,7 @@ fun LibraryScreen(
         }
     }
 
-    LaunchedEffect(viewMode, servers.revision) {
+    LaunchedEffect(viewMode, servers.revision, serverFavorites.writes) {
         if (viewMode == LibraryViewMode.Servers) serversViewModel.load()
     }
 

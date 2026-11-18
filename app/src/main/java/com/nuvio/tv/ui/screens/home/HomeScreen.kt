@@ -50,6 +50,7 @@ import com.nuvio.tv.ui.components.LoadingIndicator
 import com.nuvio.tv.ui.components.LocalStartupLoadingState
 import com.nuvio.tv.ui.components.LocalStartupSplashEnabled
 import com.nuvio.tv.ui.components.shouldShowHomeStartupLoader
+import com.nuvio.tv.ui.components.posteroptions.ServerFavoriteOption
 import com.nuvio.tv.ui.components.NuvioDialog
 import com.nuvio.tv.ui.components.PosterCardDefaults
 import com.nuvio.tv.ui.components.PosterCardStyle
@@ -504,6 +505,9 @@ fun HomeScreen(
                     viewModel.togglePosterMovieWatched(item)
                 }
                 posterOptionsTarget = null
+            },
+            extraOptions = {
+                ServerFavoriteOption(item = item, onSelected = { posterOptionsTarget = null })
             }
         )
     }
@@ -753,7 +757,8 @@ private fun HomePosterOptionsDialog(
     onDismiss: () -> Unit,
     onDetails: () -> Unit,
     onToggleLibrary: () -> Unit,
-    onToggleWatched: () -> Unit
+    onToggleWatched: () -> Unit,
+    extraOptions: @Composable () -> Unit = {}
 ) {
     val primaryFocusRequester = remember { FocusRequester() }
 
@@ -818,6 +823,8 @@ private fun HomePosterOptionsDialog(
                 }
             )
         }
+
+        extraOptions()
     }
 }
 

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.data.mediaserver.ServerCatalog
 import com.nuvio.tv.data.mediaserver.ServerFailure
+import com.nuvio.tv.data.mediaserver.ServerFavorites
+import com.nuvio.tv.data.mediaserver.ServerFavoritesState
 import com.nuvio.tv.data.mediaserver.ServerLibraryRef
 import com.nuvio.tv.data.mediaserver.ServerRepository
 import com.nuvio.tv.data.mediaserver.ServersUiState
@@ -31,13 +33,16 @@ data class LibraryServerShelf(
 @HiltViewModel
 class LibraryServersViewModel @Inject constructor(
     private val serverCatalog: ServerCatalog,
+    private val favorites: ServerFavorites,
     repository: ServerRepository
 ) : ViewModel() {
     val servers: StateFlow<ServersUiState> = repository.uiState
+    val favoritesState: StateFlow<ServerFavoritesState> = favorites.state
     private val _shelves = MutableStateFlow<List<LibraryServerShelf>?>(null)
     val shelves: StateFlow<List<LibraryServerShelf>?> = _shelves.asStateFlow()
     private var loadJob: Job? = null
     private var loadedRevision: Int? = null
+    private var loadedWrites: Int? = null
     var focusedShelfKey: String? = null
         private set
     val focusedIndexes = mutableMapOf<String, Int>()
@@ -47,14 +52,18 @@ class LibraryServersViewModel @Inject constructor(
         focusedIndexes[shelfKey] = index
     }
 
+    /** Loads the shelves again when the servers changed or a favourite was written since the last load. */
     fun load() {
         val revision = servers.value.revision
-        if (loadedRevision == revision && _shelves.value != null) return
+        val writes = favorites.state.value.writes
+        if (loadedRevision == revision && loadedWrites == writes && _shelves.value != null) return
         loadedRevision = revision
+        loadedWrites = writes
+        favorites.ensureFresh()
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _shelves.value = coroutineScope {
-                serverCatalog.libraries().map { ref -> async { shelf(ref) } }.awaitAll()
+                serverCatalog.libraryShelves().map { ref -> async { shelf(ref) } }.awaitAll()
             }
         }
     }

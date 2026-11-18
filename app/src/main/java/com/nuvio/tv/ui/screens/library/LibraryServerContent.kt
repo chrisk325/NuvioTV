@@ -50,6 +50,15 @@ internal fun LazyGridScope.libraryServerContent(
             )
         }
 
+        shelves.none { it.failure != null || it.row?.items?.isNotEmpty() == true } -> item(span = { GridItemSpan(maxLineSpan) }) {
+            EmptyScreenState(
+                title = stringResource(R.string.library_servers_no_favorites_title),
+                subtitle = stringResource(R.string.library_servers_no_favorites_message),
+                icon = Icons.Default.Dns,
+                height = 260.dp
+            )
+        }
+
         else -> shelves.forEach { shelf ->
             val row = shelf.row
             val failure = shelf.failure

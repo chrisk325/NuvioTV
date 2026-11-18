@@ -13,6 +13,7 @@ import com.nuvio.tv.core.tracking.TrackingProviderId
 import com.nuvio.tv.core.tracking.TrackingRefreshIntent
 import com.nuvio.tv.data.local.LibraryPreferences
 import com.nuvio.tv.data.local.TraktSettingsDataStore
+import com.nuvio.tv.data.mediaserver.ServerFavorites
 import com.nuvio.tv.domain.model.LibraryEntry
 import com.nuvio.tv.domain.model.LibraryEntryInput
 import com.nuvio.tv.domain.model.LibraryListTab
@@ -209,7 +210,8 @@ class LibraryRepositoryTrackingTest {
             metaRepository = mockk<MetaRepository>(relaxed = true),
             trackingProviders = TrackingLibraryProviderRegistry(providers),
             profileManager = mockk<ProfileManager> { every { activeProfileId } returns MutableStateFlow(1) },
-            addonEventDispatcher = mockk(relaxed = true)
+            addonEventDispatcher = mockk(relaxed = true),
+            serverFavorites = { mockk<ServerFavorites>(relaxed = true) }
         )
     }
 
