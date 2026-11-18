@@ -39,6 +39,18 @@ class WatchProgressRepository(private val store: KeyValueStore) {
 
     fun remove(contentId: String) = save(_entries.value.filterNot { it.contentId == contentId })
 
+    /**
+     * Several changes in one write (and one Continue Watching refresh): [updates] replace entries
+     * with the same video id, [removedVideoIds] are dropped. Nothing is written when nothing changes.
+     */
+    fun apply(updates: List<WatchProgress>, removedVideoIds: Set<String>) {
+        if (updates.isEmpty() && removedVideoIds.isEmpty()) return
+        val replaced = updates.map { it.videoId }.toSet()
+        val next = updates + _entries.value.filterNot { it.videoId in replaced || it.videoId in removedVideoIds }
+        if (next.sortedByDescending { it.updatedAtMs }.take(MAX_ENTRIES) == _entries.value) return
+        save(next)
+    }
+
     /** One card per title: its most recent unfinished video. */
     fun continueWatching(): List<WatchProgress> =
         _entries.value

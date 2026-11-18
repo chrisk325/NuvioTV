@@ -51,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -80,6 +81,9 @@ interface CoreSubscription {
 private class JobCancellable(private val job: Job) : CoreSubscription {
     override fun cancel() = job.cancel()
 }
+
+/** What the media servers last reported as in progress (video id → their update time). */
+private const val SERVER_RESUME_KEY = "mediaserver.resume.v1"
 
 /** Longest wait for a media server to describe a title before TMDB is used instead. */
 private const val SERVER_LOOKUP_MS = 8_000L
@@ -726,9 +730,11 @@ class NuvioCore(
     // --- Progress & library ----------------------------------------------------------------
 
     fun observeContinueWatching(onChange: (List<WatchProgress>) -> Unit): CoreSubscription =
-        observe(kotlinx.coroutines.flow.combine(watchProgress.entries, upNext, watched.watched) { _, _, _ -> Unit }) {
-            onChange(continueWatching())
-        }
+        // Only real changes reach the screen: a sync that brings nothing new doesn't redraw the row.
+        observe(
+            kotlinx.coroutines.flow.combine(watchProgress.entries, upNext, watched.watched) { _, _, _ -> continueWatching() }
+                .distinctUntilChanged()
+        ) { onChange(it) }
 
     /**
      * Continue Watching: titles in progress, plus "up next" episodes from trackers (Trakt watched
@@ -777,9 +783,11 @@ class NuvioCore(
             .groupBy { it.contentId }
             .mapNotNull { (_, list) -> list.maxByOrNull { it.updatedAtMs } }
 
-    /** Replaces one tracker's up next list. */
+    /** Replaces one tracker's up next list (nothing is written when it is unchanged). */
     private fun setUpNext(source: String, list: List<WatchProgress>) {
-        store.putString("upnext.$source", progressJson.encodeToString(progressListSerializer, list))
+        val encoded = progressJson.encodeToString(progressListSerializer, list)
+        if (store.getString("upnext.$source") == encoded) return
+        store.putString("upnext.$source", encoded)
         upNext.value = loadUpNext()
     }
 
@@ -805,6 +813,43 @@ class NuvioCore(
             )
         }
     }
+
+    /**
+     * Jellyfin / Emby Continue Watching, applied as a diff against what the servers reported last
+     * time (kept on the device): new or changed entries are merged, entries the server dropped
+     * (finished or removed there) leave Continue Watching unless they were watched here since,
+     * and nothing is written when the server's list is unchanged. An unreachable server changes
+     * nothing.
+     */
+    private suspend fun syncServerResume() {
+        val current = mediaServers.resumeSnapshot() ?: return
+        val previous = loadServerResume()
+        val now = current.associate { it.videoId to it.updatedAtMs }
+        val updates = current.filter { remote ->
+            previous[remote.videoId] != remote.updatedAtMs &&
+                remote.updatedAtMs > (dismissedProgress[remote.contentId] ?: 0L) &&
+                (watchProgress.progressFor(remote.videoId)?.updatedAtMs ?: 0L) < remote.updatedAtMs
+        }.map { remote ->
+            watchProgress.progressFor(remote.videoId)?.let { local ->
+                remote.copy(durationMs = local.durationMs, positionMs = (local.durationMs * remote.fraction).toLong())
+            } ?: remote
+        }
+        val removed = previous.filterKeys { it !in now }.filter { (videoId, reportedAt) ->
+            // Only what the server put there, and not watched here after the server's last report.
+            val local = watchProgress.progressFor(videoId)
+            local != null && local.updatedAtMs <= reportedAt
+        }.keys
+        watchProgress.apply(updates, removed)
+        if (now != previous) {
+            store.putString(SERVER_RESUME_KEY, now.entries.joinToString("\n") { "${it.key}|${it.value}" })
+        }
+    }
+
+    private fun loadServerResume(): Map<String, Long> =
+        store.getString(SERVER_RESUME_KEY)?.split('\n')?.mapNotNull { line ->
+            val cut = line.lastIndexOf('|')
+            if (cut <= 0) null else line.substring(0, cut) to (line.substring(cut + 1).toLongOrNull() ?: return@mapNotNull null)
+        }?.toMap().orEmpty()
 
     fun progressFor(videoId: String): WatchProgress? = watchProgress.progressFor(videoId)
 
@@ -1041,7 +1086,7 @@ class NuvioCore(
         // Continue Watching (newest position wins, as with Trakt / Simkl).
         if (mediaServers.servers.isNotEmpty()) sync("Media server") {
             watched.addAll(mediaServers.playedKeys())
-            mediaServers.resumeProgress().forEach(::mergeRemoteProgress)
+            syncServerResume()
             // Next Up: the next episode of each show being watched on the server.
             setUpNext("mediaserver", mediaServers.nextUp())
         } else if (storedUpNext("mediaserver").isNotEmpty()) {

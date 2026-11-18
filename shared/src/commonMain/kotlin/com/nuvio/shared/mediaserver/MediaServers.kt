@@ -773,13 +773,27 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
      * Partly watched movies and episodes on the servers (their Continue Watching), as progress
      * entries with the same ids the app uses for those titles.
      */
-    suspend fun resumeProgress(): List<WatchProgress> = servers.flatMap { server ->
-        val items = runCatching {
-            get(server, "/Users/${server.userId}/Items/Resume?Limit=100&Recursive=true&MediaTypes=Video" +
-                "&IncludeItemTypes=Movie,Episode&Fields=ProviderIds&EnableUserData=true&EnableImages=false")
-                ?.objects("Items").orEmpty()
-        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
-        items.mapNotNull { item -> item.toResumeProgress(server) }
+    suspend fun resumeProgress(): List<WatchProgress> = resumeSnapshot() ?: emptyList()
+
+    /**
+     * Like [resumeProgress], but null when a server couldn't be read, so callers can tell "nothing
+     * in progress" (an item was finished or removed there) from "no answer".
+     */
+    suspend fun resumeSnapshot(): List<WatchProgress>? {
+        val all = mutableListOf<WatchProgress>()
+        for (server in servers) {
+            val items = try {
+                get(server, "/Users/${server.userId}/Items/Resume?Limit=100&Recursive=true&MediaTypes=Video" +
+                    "&IncludeItemTypes=Movie,Episode&Fields=ProviderIds&EnableUserData=true&EnableImages=false")
+                    ?.objects("Items") ?: return null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return null
+            }
+            items.mapNotNullTo(all) { item -> item.toResumeProgress(server) }
+        }
+        return all
     }
 
     private suspend fun JsonObject.toResumeProgress(server: MediaServer): WatchProgress? {
