@@ -75,6 +75,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = str("player.autoPlayRegex", "")
         set(value) = put("player.autoPlayRegex", value)
 
+    /** Dialogue enhancer in the mpv player: 0 off, 1 low, 2 medium, 3 high. */
+    var dialogueBoost: Int
+        get() = int("player.dialogueBoost", 0)
+        set(value) = put("player.dialogueBoost", value.coerceIn(0, 3))
+
     var skipIntroEnabled: Boolean
         get() = bool("player.skipIntro", true)
         set(value) = put("player.skipIntro", value)

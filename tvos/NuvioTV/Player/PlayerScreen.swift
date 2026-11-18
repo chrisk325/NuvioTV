@@ -258,7 +258,8 @@ struct PlayerScreen: View {
     private func panelView(_ panel: PlayerPanel) -> some View {
         switch panel {
         case .audio:
-            trackList(title: "Audio", tracks: model.audioTracks, allowOff: false) { model.selectAudio($0!) }
+            trackList(title: "Audio", tracks: model.audioTracks, allowOff: false,
+                      header: AnyView(dialogueBoostRow)) { model.selectAudio($0!) }
         case .subtitles:
             trackList(
                 title: model.isLoadingAddonSubtitles ? "Subtitles (loading add-ons…)" : "Subtitles",
@@ -289,6 +290,31 @@ struct PlayerScreen: View {
                 }
             })
         }
+    }
+
+    /// Dialogue enhancer at the top of the Audio panel: Off / Low / Medium / High.
+    private var dialogueBoostRow: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Dialogue boost", systemImage: "waveform").font(.headline)
+            HStack(spacing: 14) {
+                ForEach(Array(DialogueEnhancer.levels.enumerated()), id: \.offset) { index, name in
+                    Button {
+                        model.dialogueBoost = index
+                    } label: {
+                        HStack(spacing: 8) {
+                            if model.dialogueBoost == index { Image(systemName: "checkmark") }
+                            Text(name)
+                        }
+                    }
+                    .buttonStyle(GlassCapsuleButtonStyle())
+                }
+            }
+            Text("Lifts voices over music and effects, and evens out loud and quiet scenes.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 12)
+        .focusSection()
     }
 
     /// Subtitle brightness, 0–100 % in steps of 10, at the top of the Subtitles panel.

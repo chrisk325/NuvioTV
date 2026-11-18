@@ -251,6 +251,9 @@ private struct PlayerSettingsPane: View {
                           selection: s.bind({ $0.secondaryAudioLanguage }, { $0.secondaryAudioLanguage = $1 }))
                 NumberRow(title: "Audio delay", unit: "ms", step: 50, range: -5000...5000,
                           value: s.bind({ Int($0.audioDelayMs) }, { $0.audioDelayMs = Int32($1) }))
+                ChoiceRow(title: "Dialogue boost (mpv)",
+                          options: DialogueEnhancer.levels.enumerated().map { (String($0.offset), $0.element) },
+                          selection: s.bind({ String($0.dialogueBoost) }, { $0.dialogueBoost = Int32($1) ?? 0 }))
             } header: {
                 Text("Audio")
             } footer: {

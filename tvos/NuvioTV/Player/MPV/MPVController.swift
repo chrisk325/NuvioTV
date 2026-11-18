@@ -116,6 +116,7 @@ struct MPVSetupOptions {
     var overrideAss = false
     var subtitleDelay = 0.0        // seconds
     var audioDelay = 0.0           // seconds
+    var dialogueBoost = 0          // 0 off … 3 high
 }
 
 protocol MPVControllerDelegate: AnyObject {
@@ -225,6 +226,7 @@ final class MPVController {
         set(option: "sub-delay", String(format: "%.3f", options.subtitleDelay))
         set(option: "audio-delay", String(format: "%.3f", options.audioDelay))
         set(option: "audio-channels", "auto-safe")
+        if let filter = DialogueEnhancer.filter(level: options.dialogueBoost) { set(option: "af", filter) }
 
         guard mpv_initialize(mpv) >= 0 else {
             mpv_terminate_destroy(mpv)
@@ -314,6 +316,11 @@ final class MPVController {
     func setSubtitleDelay(_ seconds: Double) { set(property: "sub-delay", String(format: "%.3f", seconds)) }
     func setAudioDelay(_ seconds: Double) { set(property: "audio-delay", String(format: "%.3f", seconds)) }
     func setSubtitleScale(_ scale: Double) { set(property: "sub-scale", String(format: "%.2f", scale)) }
+
+    /// Dialogue enhancer on the audio (no other audio filters are used, so it owns "af").
+    func setDialogueBoost(_ level: Int) {
+        set(property: "af", DialogueEnhancer.filter(level: level) ?? "")
+    }
 
     /// Text subtitles take the dimmed colour; styled ASS subtitles get it as their main text colour
     /// (only while dimmed, so 100 % keeps them exactly as authored). Picture subtitles can't be changed.
@@ -591,5 +598,30 @@ enum SubtitleBrightness {
         }
         guard raw.count == 6, let value = Int(raw, radix: 16) else { return nil }
         return (alpha, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
+    }
+}
+
+/// Speech-focused audio filter: cuts low rumble, lifts the 1–4 kHz voice range, evens out loud and
+/// quiet passages so dialogue sits above music and effects, and a limiter stops clipping. Works on
+/// any channel layout (stereo or surround).
+enum DialogueEnhancer {
+    static let levels = ["Off", "Low", "Medium", "High"]
+
+    static func filter(level: Int) -> String? {
+        let (presence, ratio, makeup): (Int, Int, Double)
+        switch level {
+        case 1: (presence, ratio, makeup) = (4, 2, 1.4)
+        case 2: (presence, ratio, makeup) = (7, 3, 1.8)
+        case 3: (presence, ratio, makeup) = (10, 4, 2.2)
+        default: return nil
+        }
+        let chain = [
+            "highpass=f=80",
+            "equalizer=f=250:t=q:w=1.0:g=-2",
+            "equalizer=f=2500:t=q:w=0.9:g=\(presence)",
+            "acompressor=threshold=-24dB:ratio=\(ratio):attack=10:release=200:makeup=\(makeup)",
+            "alimiter=limit=0.95",
+        ]
+        return "@dialogue:lavfi=[" + chain.joined(separator: ",") + "]"
     }
 }

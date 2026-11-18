@@ -56,6 +56,13 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         }
     }
     private var subtitleColor = "#FFFFFF"
+    /// Dialogue enhancer level (0 off … 3 high), applied at once and kept as the default.
+    @Published var dialogueBoost: Int = 0 {
+        didSet {
+            controller.setDialogueBoost(dialogueBoost)
+            settings?.dialogueBoost = Int32(dialogueBoost)
+        }
+    }
     @Published private(set) var nextVideo: Video?
     @Published private(set) var isResolvingNext = false
     @Published var nextPromptDismissed = false { didSet { updateDerivedState() } }
@@ -175,11 +182,13 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             subtitlePosition: 100 - Int(s.subtitleVerticalOffset),
             overrideAss: s.overrideAssStyle,
             subtitleDelay: Double(s.subtitleDelayMs) / 1000.0,
-            audioDelay: Double(s.audioDelayMs) / 1000.0
+            audioDelay: Double(s.audioDelayMs) / 1000.0,
+            dialogueBoost: Int(s.dialogueBoost)
         )
         subtitleScale = options.subtitleScale
         subtitleColor = options.subtitleColor
         subtitleBrightness = options.subtitleBrightness
+        dialogueBoost = options.dialogueBoost
         subtitleDelay = options.subtitleDelay
         audioDelay = options.audioDelay
         controller.delegate = self
