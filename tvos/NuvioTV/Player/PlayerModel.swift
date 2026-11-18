@@ -26,7 +26,18 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     private(set) var position: Double = 0
     private(set) var duration: Double = 0
     @Published private(set) var hasDuration = false
-    @Published private(set) var isPaused = false
+    /// Kept in step with the screensaver: mpv draws into its own layer, so tvOS can't tell that a
+    /// video is playing (as it can with AVPlayer) and would start the screensaver mid-film.
+    @Published private(set) var isPaused = false { didSet { updateIdleTimer() } }
+    private var isActive = false { didSet { updateIdleTimer() } }
+
+    /// No screensaver while a video plays; paused or closed, the normal timeout applies again.
+    private func updateIdleTimer() {
+        let keepAwake = isActive && !isPaused
+        if UIApplication.shared.isIdleTimerDisabled != keepAwake {
+            UIApplication.shared.isIdleTimerDisabled = keepAwake
+        }
+    }
     @Published private(set) var isBuffering = true
     @Published private(set) var speed: Double = 1
     @Published private(set) var audioTracks: [MPVTrack] = []
@@ -134,6 +145,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     // MARK: Lifecycle
 
     func start(_ request: PlaybackRequest, core: NuvioCore) {
+        isActive = true
         guard !started else { return }
         started = true
         self.core = core
@@ -225,6 +237,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     func stop() {
+        isActive = false
         saveProgress(force: true)
         if let request { scrobble("stop", for: request) }
         streamSubscription?.cancel()
