@@ -79,6 +79,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("player.skipIntro", true)
         set(value) = put("player.skipIntro", value)
 
+    /** Skip intros and recaps automatically instead of showing the Skip button for them. */
+    var autoSkipIntro: Boolean
+        get() = bool("player.autoSkipIntro", false)
+        set(value) = put("player.autoSkipIntro", value)
+
     // --- Subtitles ------------------------------------------------------------------------
 
     var subtitleLanguage: String

@@ -92,6 +92,23 @@ struct PlayerScreen: View {
                 nextEpisodeCard
             }
 
+            if let notice = model.autoSkipNotice {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Label(notice, systemImage: "forward.fill")
+                            .font(.callout.weight(.semibold))
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 16)
+                            .liquidGlass(in: Capsule(), tint: .black.opacity(0.25))
+                    }
+                    Spacer()
+                }
+                .padding(60)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
+
             if let panel {
                 HStack {
                     Spacer()
@@ -113,6 +130,7 @@ struct PlayerScreen: View {
         }
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: panel)
+        .animation(.easeInOut(duration: 0.25), value: model.autoSkipNotice)
         .onAppear {
             model.start(request, core: app.core)
             showControls(focusScrubber: true)

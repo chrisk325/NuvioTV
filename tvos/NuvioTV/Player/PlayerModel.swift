@@ -60,6 +60,30 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         seek(to: segment.endSeconds)
     }
 
+    /// Segments skipped automatically in this file (once each, so seeking back into one plays it).
+    private var autoSkipped: Set<String> = []
+    /// Briefly shown after an automatic skip ("Skipped intro").
+    @Published private(set) var autoSkipNotice: String?
+    private var noticeTask: Task<Void, Never>?
+
+    /// Settings → Player → "Auto-skip intros and recaps": intro and recap segments are skipped as
+    /// soon as playback enters them; credits keep their button.
+    private func autoSkipIfNeeded(_ segment: SkipSegment?) {
+        guard let segment, settings?.autoSkipIntro == true, settings?.skipIntroEnabled == true,
+              segment.type == "intro" || segment.type == "recap" else { return }
+        let key = "\(segment.type)|\(segment.startSeconds)"
+        guard !autoSkipped.contains(key) else { return }
+        autoSkipped.insert(key)
+        skip(segment)
+        autoSkipNotice = segment.type == "recap" ? "Skipped recap" : "Skipped intro"
+        noticeTask?.cancel()
+        noticeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.autoSkipNotice = nil
+        }
+    }
+
     weak var window: UIWindow?
     /// Held strongly: by the time the player closes its view has already left the window.
     private var displayManager: AVDisplayManager?
@@ -88,7 +112,10 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     private func updateDerivedState() {
         let segment = skipSegments.first { position >= $0.startSeconds && position < $0.endSeconds - 1 }
-        if segment != activeSkipSegment { activeSkipSegment = segment }
+        if segment != activeSkipSegment {
+            activeSkipSegment = segment
+            autoSkipIfNeeded(segment)
+        }
         var prompt = false
         if let settings, nextVideo != nil, !nextPromptDismissed, duration > 60 {
             prompt = remaining <= Double(settings.nextEpisodePromptSeconds) && remaining > 0
@@ -152,6 +179,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         self.request = request
         skipSegments = []
         activeSkipSegment = nil
+        autoSkipped = []
         showNextPrompt = false
         scrobbledStart = false
         finished = false
