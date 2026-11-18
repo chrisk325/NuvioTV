@@ -22,6 +22,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -217,6 +218,7 @@ class MdbListTracker(
             }
         }
         runCatching { postJson(if (inWatchlist) "/watchlist/items/add" else "/watchlist/items/remove", payload.toString()) }
+        clearListCache(WATCHLIST_KEY)
     }
 
     // --- Reads --------------------------------------------------------------------------------
@@ -287,18 +289,211 @@ class MdbListTracker(
         }
     }
 
-    /** The MDBList watchlist, newest first, for the Library. */
+    /** The MDBList watchlist (MDBList's own order), for the Library and the release calendar. */
     @Throws(Exception::class)
-    suspend fun watchlist(): List<MetaPreview> {
-        val items = mutableListOf<MetaPreview>()
-        pages("/watchlist/items", "&unified=true&append_to_response=poster") { page ->
-            val rows = page.objects("items").ifEmpty { page.objects("movies") + page.objects("shows") }
-            rows.forEach { row -> row.toWatchlistPreview()?.let { items += it } }
-        }
-        return items.distinctBy { it.id }
+    suspend fun watchlist(): List<MetaPreview> = listItems(WATCHLIST_KEY, MdbListSort.DEFAULT)
+
+    // --- Lists (Android MdbListLibraryRemote / MdbListLibraryWriter / MdbListLibrarySorter) ------
+
+    private var accountId: Long? = null
+    private val itemCache = mutableMapOf<String, List<MdbListEntry>>()
+
+    /** Library orders, as Android offers them for MDBList lists. */
+    val sorts: List<MdbListSort> get() = MdbListSort.entries
+
+    fun sort(named: String): MdbListSort = MdbListSort.entries.firstOrNull { it.name == named } ?: MdbListSort.DEFAULT
+
+    /** Lists hidden from the Library (Settings → Accounts → MDBList). The watchlist is always shown. */
+    val hiddenListKeys: Set<String>
+        get() = store.getString(HIDDEN_KEY)?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
+
+    fun setListHidden(key: String, hidden: Boolean) {
+        if (key == WATCHLIST_KEY) return
+        val next = if (hidden) hiddenListKeys + key else hiddenListKeys - key
+        store.putString(HIDDEN_KEY, next.joinToString("\n"))
     }
 
-    private fun JsonObject.toWatchlistPreview(): MetaPreview? {
+    /**
+     * The watchlist, then the account's own lists (static, then dynamic), lists synced from other
+     * services (external) and lists of other users the account liked, as on Android.
+     */
+    @Throws(Exception::class)
+    suspend fun lists(): List<MdbListLibraryList> {
+        val result = mutableListOf(MdbListLibraryList(WATCHLIST_KEY, "Watchlist", MdbListLibraryList.WATCHLIST, false, null, null))
+        val account = account()
+        val own = getJson("/lists/user", "?unified=false&sort=ranked").asArray().orEmpty().mapNotNull { it.asObject() }
+            .filter { row -> account == null || row.long("user_id")?.let { it == account } != false }
+        own.filter { it.str("type") == "static" && it.bool("dynamic") != true }.forEach { row ->
+            val id = row.listId() ?: return@forEach
+            result += MdbListLibraryList("$LIST_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.PERSONAL,
+                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType())
+        }
+        own.filter { it.bool("dynamic") == true || it.str("type") == "dynamic" }.forEach { row ->
+            val id = row.listId() ?: return@forEach
+            result += MdbListLibraryList("$DYNAMIC_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.DYNAMIC,
+                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType())
+        }
+        // External and liked lists are extras: when MDBList can't serve them the rest still loads.
+        runCatching {
+            getJson("/external/lists/user").asArray().orEmpty().mapNotNull { it.asObject() }.forEach { row ->
+                val id = row.long("id")?.takeIf { it > 0 } ?: return@forEach
+                result += MdbListLibraryList("$EXTERNAL_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.EXTERNAL,
+                    false, row.nonBlank("source"), row.mediaType())
+            }
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        runCatching {
+            var offset = 0L
+            repeat(20) {
+                val page = getJson("/lists/liked", "?limit=100&offset=$offset").asObject() ?: return@runCatching
+                page.objects("lists").forEach { row ->
+                    if (account != null && row.long("user_id") == account) return@forEach
+                    val id = row.long("id")?.takeIf { it > 0 } ?: return@forEach
+                    result += MdbListLibraryList("$LIKED_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.LIKED,
+                        false, row.nonBlank("description"), row.mediaType())
+                }
+                val pagination = page.obj("pagination") ?: page
+                val limit = pagination.long("limit") ?: 100
+                val total = pagination.long("total")
+                val more = pagination.bool("has_more") ?: (total != null && offset + limit < total)
+                if (!more) return@runCatching
+                offset += limit
+            }
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        return result.distinctBy { it.key }
+    }
+
+    /**
+     * A list's titles in [sort] order. "Default" is the order the list's owner saved on MDBList;
+     * added / released orders come from MDBList (it knows when each title was added), title order
+     * is sorted here.
+     */
+    @Throws(Exception::class)
+    suspend fun listItems(key: String, sort: MdbListSort): List<MetaPreview> {
+        val entries = when (sort) {
+            MdbListSort.DEFAULT, MdbListSort.TITLE_ASC, MdbListSort.TITLE_DESC -> entries(key, null, "asc")
+            // MDBList returns the newest additions / releases for order=asc.
+            MdbListSort.ADDED_DESC -> entries(key, "added", "asc")
+            MdbListSort.ADDED_ASC -> entries(key, "added", "asc").asReversed()
+            MdbListSort.RELEASED_DESC, MdbListSort.RELEASED_ASC -> {
+                val newestFirst = entries(key, "released", "asc").let { list ->
+                    // The direction is undocumented: check it against the release dates.
+                    val dates = list.mapNotNull { it.releaseDate ?: it.preview.releaseInfo }
+                    if (dates.isNotEmpty() && dates.first() < dates.last()) list.asReversed() else list
+                }
+                if (sort == MdbListSort.RELEASED_DESC) newestFirst else newestFirst.asReversed()
+            }
+        }
+        val previews = entries.map { it.preview }
+        return when (sort) {
+            MdbListSort.TITLE_ASC -> previews.sortedBy { it.name.lowercase() }
+            MdbListSort.TITLE_DESC -> previews.sortedByDescending { it.name.lowercase() }
+            else -> previews
+        }
+    }
+
+    private suspend fun entries(key: String, sort: String?, order: String): List<MdbListEntry> {
+        val cacheKey = "$key|$sort|$order"
+        itemCache[cacheKey]?.let { return it }
+        val items = linkedMapOf<String, MdbListEntry>()
+        var stop = false
+        val query = buildString {
+            append("&unified=true&append_to_response=poster,description,genres")
+            if (sort != null) append("&sort=$sort&order=$order")
+        }
+        pages(itemsPath(key), query, { stop }) { page ->
+            val rows = page.objects("items").ifEmpty { page.objects("movies") + page.objects("shows") }
+            val before = items.size
+            rows.forEach { row -> row.toEntry()?.let { if (it.preview.id !in items) items[it.preview.id] = it } }
+            // A read-only list repeating earlier titles means the server is looping.
+            if (rows.isNotEmpty() && items.size == before && !isEditable(key)) stop = true
+        }
+        return items.values.toList().also { itemCache[cacheKey] = it }
+    }
+
+    /** Forgets cached list items (after changes, and on "Sync now"). */
+    fun clearListCache(key: String? = null) {
+        if (key == null) itemCache.clear() else itemCache.keys.removeAll { it.startsWith("$key|") }
+    }
+
+    @Throws(Exception::class)
+    suspend fun createList(name: String, isPrivate: Boolean) {
+        require(name.isNotBlank()) { "Enter a list name" }
+        val body = buildJsonObject { put("name", name.trim()); put("private", isPrivate) }
+        send("POST", "/lists/user/add", body.toString())
+    }
+
+    @Throws(Exception::class)
+    suspend fun updateList(key: String, name: String, isPrivate: Boolean) {
+        require(name.isNotBlank()) { "Enter a list name" }
+        val id = personalId(key)
+        val body = buildJsonObject { put("name", name.trim()); put("private", isPrivate) }
+        send("PUT", "/lists/$id", body.toString())
+    }
+
+    @Throws(Exception::class)
+    suspend fun deleteList(key: String) {
+        send("DELETE", "/lists/${personalId(key)}", null)
+        clearListCache(key)
+        setListHidden(key, false)
+    }
+
+    /** Lists a title can be added to (the watchlist and the account's own static lists) that hold it. */
+    @Throws(Exception::class)
+    suspend fun listsContaining(imdbId: String?, tmdbId: Int?, lists: List<MdbListLibraryList>): Set<String> {
+        val ids = setOfNotNull(imdbId, tmdbId?.let { "tmdb:$it" })
+        return lists.filter { it.acceptsItems }.filter { list ->
+            entries(list.key, null, "asc").any { entry -> entry.preview.id in ids || entry.preview.imdbId in ids }
+        }.map { it.key }.toSet()
+    }
+
+    /** Adds a movie or show to (or removes it from) a list it can hold. */
+    @Throws(Exception::class)
+    suspend fun setInList(key: String, imdbId: String?, tmdbId: Int?, isShow: Boolean, add: Boolean) {
+        if (imdbId == null && tmdbId == null) throw TrackerException("An IMDb or TMDB id is needed")
+        require(isEditable(key)) { "This list can't be changed" }
+        val ids = buildJsonObject {
+            imdbId?.let { put("imdb", it) }
+            tmdbId?.let { put("tmdb", it) }
+        }
+        val payload = buildJsonObject {
+            putJsonArray(if (isShow) "shows" else "movies") {
+                // The watchlist takes {"ids": {...}}, static lists the ids themselves.
+                add(if (key == WATCHLIST_KEY) buildJsonObject { put("ids", ids) } else ids)
+            }
+        }
+        send("POST", "${itemsPath(key)}/${if (add) "add" else "remove"}", payload.toString())
+        clearListCache(key)
+    }
+
+    private fun isEditable(key: String) = key == WATCHLIST_KEY || key.startsWith(LIST_PREFIX)
+
+    private fun personalId(key: String): Long =
+        key.removePrefix(LIST_PREFIX).toLongOrNull()?.takeIf { key.startsWith(LIST_PREFIX) && it > 0 }
+            ?: throw TrackerException("Only your own static lists can be changed")
+
+    private fun itemsPath(key: String): String = when {
+        key == WATCHLIST_KEY -> "/watchlist/items"
+        key.startsWith(EXTERNAL_PREFIX) -> "/external/lists/${key.removePrefix(EXTERNAL_PREFIX)}/items"
+        key.startsWith(DYNAMIC_PREFIX) -> "/lists/${key.removePrefix(DYNAMIC_PREFIX)}/items"
+        key.startsWith(LIKED_PREFIX) -> "/lists/${key.removePrefix(LIKED_PREFIX)}/items"
+        else -> "/lists/${key.removePrefix(LIST_PREFIX)}/items"
+    }
+
+    private suspend fun account(): Long? {
+        accountId?.let { return it }
+        return runCatching { getJson("/user").asObject()?.long("user_id") }.getOrNull()?.also { accountId = it }
+    }
+
+    private fun JsonObject.listId(): Long? =
+        long("id")?.takeIf { it > 0 } ?: this["ids"].asArray()?.singleOrNull()?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+
+    private fun JsonObject.mediaType(): String? = when (str("mediatype")) {
+        "movie" -> "movie"
+        "show", "series", "tv" -> "series"
+        else -> null
+    }
+
+    private fun JsonObject.toEntry(): MdbListEntry? {
         val type = str("mediatype") ?: str("type")
         val isShow = type == "show" || type == "series" || type == "tv"
         if (type != null && !isShow && type != "movie") return null
@@ -306,7 +501,7 @@ class MdbListTracker(
         val imdb = (nonBlank("imdb_id") ?: idsObj?.nonBlank("imdb"))?.takeIf { it.startsWith("tt") }
         val tmdb = idsObj?.long("tmdb") ?: long("id")
         val id = imdb ?: tmdb?.let { "tmdb:$it" } ?: return null
-        return MetaPreview(
+        val preview = MetaPreview(
             id = id,
             type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
             name = str("title") ?: str("name") ?: id,
@@ -320,6 +515,7 @@ class MdbListTracker(
             genres = emptyList(),
             imdbId = imdb
         )
+        return MdbListEntry(preview, str("release_date") ?: str("released"))
     }
 
     // --- HTTP ---------------------------------------------------------------------------------
@@ -352,12 +548,13 @@ class MdbListTracker(
     }
 
     /** Pages through a list endpoint (cursor or offset pagination, 1000 per page). */
-    private suspend fun pages(path: String, extra: String = "", onPage: (JsonObject) -> Unit) {
+    private suspend fun pages(path: String, extra: String = "", stop: () -> Boolean = { false }, onPage: (JsonObject) -> Unit) {
         var query = "?limit=1000$extra"
         repeat(50) {
             val element = getJson(path, query) ?: return
             val page = element.asObject() ?: buildJsonObject { put("items", element) }
             onPage(page)
+            if (stop()) return
             val pagination = page.obj("pagination") ?: page
             val cursor = pagination.nonBlank("next_cursor")
             val offset = pagination.long("offset")
@@ -383,14 +580,25 @@ class MdbListTracker(
         return runCatching { AddonJson.parseToJsonElement(response.bodyAsText()) }.getOrNull()
     }
 
-    private suspend fun postJson(path: String, body: String) {
-        var token = accessToken() ?: return
-        var response = http.post("$API$path") { authorized(token); setBody(TextContent(body, HttpContentType.Application.Json)) }
-        if (response.status.value == 401) {
-            token = accessToken(forceRefresh = true) ?: return
-            response = http.post("$API$path") { authorized(token); setBody(TextContent(body, HttpContentType.Application.Json)) }
+    private suspend fun postJson(path: String, body: String) = send("POST", path, body)
+
+    private suspend fun send(method: String, path: String, body: String?) {
+        suspend fun call(token: String) = http.request("$API$path") {
+            this.method = io.ktor.http.HttpMethod.parse(method)
+            authorized(token)
+            if (body != null) setBody(TextContent(body, HttpContentType.Application.Json))
         }
-        if (!response.status.isSuccess()) throw TrackerException("MDBList returned ${response.status.value}")
+        var token = accessToken() ?: throw TrackerException("Sign in to MDBList first")
+        var response = call(token)
+        if (response.status.value == 401) {
+            token = accessToken(forceRefresh = true) ?: throw TrackerException("Sign in to MDBList again")
+            response = call(token)
+        }
+        if (!response.status.isSuccess()) {
+            val error = parse(response)
+            throw TrackerException(error?.str("detail") ?: error?.str("error_description") ?: error?.str("error")
+                ?: "MDBList returned ${response.status.value}")
+        }
     }
 
     private fun io.ktor.client.request.HttpRequestBuilder.authorized(token: String) {
@@ -406,8 +614,54 @@ class MdbListTracker(
         HttpContentType.Application.FormUrlEncoded
     )
 
-    private companion object {
-        const val API = "https://api.mdblist.com"
-        const val KEY = "mdblist.token"
+    companion object {
+        private const val API = "https://api.mdblist.com"
+        private const val KEY = "mdblist.token"
+        private const val HIDDEN_KEY = "mdblist.hidden_lists"
+        const val WATCHLIST_KEY = "mdblist:watchlist"
+        private const val LIST_PREFIX = "mdblist:list:"
+        private const val DYNAMIC_PREFIX = "mdblist:dynamic:"
+        private const val EXTERNAL_PREFIX = "mdblist:external:"
+        private const val LIKED_PREFIX = "mdblist:liked:"
     }
 }
+
+/** Library list orders (Android LibrarySortOption.MdbListOptions). */
+enum class MdbListSort(val label: String) {
+    DEFAULT("MDBList order"),
+    ADDED_DESC("Recently added"),
+    ADDED_ASC("First added"),
+    RELEASED_DESC("Newest release"),
+    RELEASED_ASC("Oldest release"),
+    TITLE_ASC("Title A–Z"),
+    TITLE_DESC("Title Z–A")
+}
+
+/** One MDBList list as a Library tab. */
+data class MdbListLibraryList(
+    val key: String,
+    val name: String,
+    /** [WATCHLIST], [PERSONAL] (own static list), [DYNAMIC] (own, filter based), [EXTERNAL] or [LIKED]. */
+    val kind: String,
+    val isPrivate: Boolean,
+    val description: String?,
+    /** "movie" or "series" when the list holds only one kind, else null. */
+    val mediaType: String?
+) {
+    /** Own static lists can be renamed, made private / public and deleted. */
+    val isEditable: Boolean get() = kind == PERSONAL
+    /** Titles can be added to / removed from the watchlist and own static lists only. */
+    val acceptsItems: Boolean get() = kind == WATCHLIST || kind == PERSONAL
+
+    fun accepts(isShow: Boolean): Boolean = acceptsItems && (mediaType == null || mediaType == if (isShow) "series" else "movie")
+
+    companion object {
+        const val WATCHLIST = "watchlist"
+        const val PERSONAL = "personal"
+        const val DYNAMIC = "dynamic"
+        const val EXTERNAL = "external"
+        const val LIKED = "liked"
+    }
+}
+
+internal data class MdbListEntry(val preview: MetaPreview, val releaseDate: String?)

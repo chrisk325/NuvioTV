@@ -1006,6 +1006,7 @@ class NuvioCore(
         if (mdbListTracker.isConnected) sync("MDBList") {
             watched.addAll(mdbListTracker.watchedKeys())
             mdbListTracker.playbackProgress().forEach(::mergeRemoteProgress)
+            mdbListTracker.clearListCache()
             mdbListWatchlistCache = mdbListTracker.watchlist()
         } else {
             mdbListWatchlistCache = emptyList()

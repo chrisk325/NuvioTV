@@ -98,6 +98,7 @@ struct AccountsView: View {
                         }
                     }
                     .disabled(isSyncing)
+                    NavigationLink("Lists shown in Library") { MdbListVisibilityView() }
                     Button("Sign out", role: .destructive) {
                         Task { @MainActor in
                             try? await core.mdbListTracker.signOut()

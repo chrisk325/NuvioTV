@@ -72,3 +72,67 @@ class MdbListTrackerTest {
         assertEquals("""{"movies":[{"ids":{"imdb":"tt1"}}]}""", posted.last { it.first == "/sync/watched" }.second)
     }
 }
+
+class MdbListListsTest {
+    private val requests = mutableListOf<String>()
+    private val client = HttpClient(MockEngine { request ->
+        val path = request.url.encodedPath
+        val query = request.url.encodedQuery
+        requests += "${request.method.value} $path?$query ${(request.body as? TextContent)?.text.orEmpty()}"
+        val json = when {
+            path == "/oauth/token/" -> """{"access_token":"tok","refresh_token":"ref","expires_in":3600}"""
+            path == "/user" -> """{"user_id":7,"username":"me"}"""
+            path == "/lists/user" -> """[{"id":1,"name":"Mine","private":true,"type":"static","user_id":7,"mediatype":"movie"},
+                {"id":2,"name":"Dyn","private":false,"dynamic":true,"type":"dynamic","user_id":7},
+                {"id":3,"name":"Other","private":false,"type":"static","user_id":8}]"""
+            path == "/external/lists/user" -> """[{"id":10,"name":"Ext","source":"trakt"}]"""
+            path == "/lists/liked" -> """{"lists":[{"id":20,"name":"Liked","user_id":9},{"id":1,"name":"Mine","user_id":7}],"pagination":{"has_more":false}}"""
+            path == "/lists/1/items" && "sort=added" in query -> """{"items":[{"mediatype":"movie","imdb_id":"tt2","title":"B"},{"mediatype":"movie","imdb_id":"tt1","title":"A"}]}"""
+            path == "/lists/1/items" && "sort=released" in query -> """{"items":[{"mediatype":"movie","imdb_id":"tt1","title":"A","release_date":"2001-01-01"},{"mediatype":"movie","imdb_id":"tt2","title":"B","release_date":"2020-01-01"}]}"""
+            path == "/lists/1/items" -> """{"items":[{"mediatype":"movie","imdb_id":"tt2","title":"b"},{"mediatype":"movie","imdb_id":"tt1","title":"A"}]}"""
+            path == "/watchlist/items" -> """{"items":[]}"""
+            else -> """{"success":true}"""
+        }
+        respond(json, HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+    })
+
+    private suspend fun tracker(): MdbListTracker {
+        val store = InMemoryStore()
+        val t = MdbListTracker(client, store, "cid")
+        t.pollSignIn(com.nuvio.shared.tracking.DeviceSignIn("mdblist", "C", "u", "d", 5))
+        return t
+    }
+
+    @Test
+    fun listsSortsAndChanges() = runTest {
+        val t = tracker()
+        val lists = t.lists()
+        assertEquals(listOf("mdblist:watchlist", "mdblist:list:1", "mdblist:dynamic:2", "mdblist:external:10", "mdblist:liked:20"), lists.map { it.key })
+        assertTrue(lists[1].isEditable && lists[1].accepts(isShow = false) && !lists[1].accepts(isShow = true))
+        assertFalse(lists[2].acceptsItems)
+
+        assertEquals(listOf("tt2", "tt1"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.DEFAULT).map { it.id })
+        assertEquals(listOf("tt1", "tt2"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.TITLE_ASC).map { it.id })
+        assertEquals(listOf("tt2", "tt1"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.ADDED_DESC).map { it.id })
+        assertEquals(listOf("tt1", "tt2"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.ADDED_ASC).map { it.id })
+        assertEquals(listOf("tt2", "tt1"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.RELEASED_DESC).map { it.id })
+        assertEquals(listOf("tt1", "tt2"), t.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.RELEASED_ASC).map { it.id })
+
+        assertEquals(setOf("mdblist:list:1"), t.listsContaining("tt1", null, lists))
+
+        t.setInList("mdblist:list:1", "tt9", null, isShow = false, add = true)
+        assertTrue(requests.any { it.startsWith("POST /lists/1/items/add") && it.endsWith("""{"movies":[{"imdb":"tt9"}]}""") })
+        t.setInList("mdblist:watchlist", null, 5, isShow = true, add = false)
+        assertTrue(requests.any { it.startsWith("POST /watchlist/items/remove") && it.endsWith("""{"shows":[{"ids":{"tmdb":5}}]}""") })
+
+        t.createList("New", isPrivate = true)
+        assertTrue(requests.any { it.startsWith("POST /lists/user/add") && it.endsWith("""{"name":"New","private":true}""") })
+        t.updateList("mdblist:list:1", "Renamed", isPrivate = false)
+        assertTrue(requests.any { it.startsWith("PUT /lists/1") })
+        t.deleteList("mdblist:list:1")
+        assertTrue(requests.any { it.startsWith("DELETE /lists/1") })
+
+        t.setListHidden("mdblist:liked:20", true)
+        assertEquals(setOf("mdblist:liked:20"), t.hiddenListKeys)
+    }
+}

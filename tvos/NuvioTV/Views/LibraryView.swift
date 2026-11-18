@@ -14,7 +14,6 @@ struct LibraryView: View {
     }
 
     private var watchlistItems: [MetaPreview] { withoutServerFavorites(app.traktWatchlist) }
-    private var mdbListItems: [MetaPreview] { withoutServerFavorites(app.mdbListWatchlist) }
 
     private func withoutServerFavorites(_ items: [MetaPreview]) -> [MetaPreview] {
         let onServer = app.serverFavoriteIds
@@ -25,9 +24,8 @@ struct LibraryView: View {
     var body: some View {
         let saved = localItems
         let watchlist = watchlistItems
-        let mdbList = mdbListItems
         Group {
-        if saved.isEmpty && watchlist.isEmpty && mdbList.isEmpty && app.serverFavorites.isEmpty {
+        if saved.isEmpty && watchlist.isEmpty && !app.core.mdbListTracker.isConnected && app.serverFavorites.isEmpty {
             VStack(spacing: 30) {
                 MessageView(
                     title: "Your library is empty",
@@ -61,12 +59,9 @@ struct LibraryView: View {
                         }
                         .padding(.horizontal, 60)
                     }
-                    if !mdbList.isEmpty {
-                        Text("MDBList watchlist").font(.headline).padding(.horizontal, 60)
-                        LazyVGrid(columns: columns, spacing: 50) {
-                            ForEach(mdbList, id: \.id) { item in
-                                PosterCard(item: item)
-                            }
+                    if app.core.mdbListTracker.isConnected {
+                        MdbListLibrarySection(columns: columns)
+                    }
                         }
                         .padding(.horizontal, 60)
                     }

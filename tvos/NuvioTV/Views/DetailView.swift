@@ -69,6 +69,8 @@ struct DetailView: View {
     @Namespace private var logoSpace
     /// Episode whose full description is shown (tap and hold on an episode card).
     @State private var episodeInfo: Video?
+    /// MDBList "Lists" picker (signed in to MDBList).
+    @State private var showMdbLists = false
 
     var body: some View {
         Group {
@@ -448,6 +450,17 @@ struct DetailView: View {
                     )
                 }
                 .onMoveDown { goToLower(meta) }
+                if app.core.mdbListTracker.isConnected {
+                    Button {
+                        showMdbLists = true
+                    } label: {
+                        Label("Lists", systemImage: "list.bullet")
+                    }
+                    .onMoveDown { goToLower(meta) }
+                    .sheet(isPresented: $showMdbLists) {
+                        MdbListMembershipSheet(meta: meta) { showMdbLists = false }
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .focusSection()
