@@ -501,7 +501,8 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 .onFailure { if (it is CancellationException) throw it }
                 .getOrNull() ?: return
             for (source in info.objects("MediaSources")) {
-                val key = source.nonBlank("Id") ?: source.nonBlank("Path") ?: continue
+                // Entries without an id or path (AIOStreams statistics / info) are kept too.
+                val key = source.nonBlank("Id") ?: source.nonBlank("Path") ?: ("info|" + (source.str("Name") ?: source.toString()))
                 resolved.getOrPut(key) { source }
             }
         }
@@ -521,14 +522,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             .distinctBy { (it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString()) + "|" + it.str("Name") }
         // Drop only the item's stored stand-ins ("Streams load when played"): placeholders the
         // plugin returns with the resolved list (AIOStreams statistics / info entries) are kept.
-        // A stored placeholder that PlaybackInfo also returned (AIOMetadata keeps its statistics on the
-        // item) is an info entry too; one it didn't return is a stale stand-in once real sources exist.
-        val resolvedKeys = resolved.keys
-        val hasReal = resolved.values.any { !it.isPlaceholderSource() }
-        val real = all.filterNot { source ->
-            source.isPlaceholderSource() && (isStandIn(source) ||
-                (hasReal && source.nonBlank("Id") in storedIds && (source.nonBlank("Id") ?: "") !in resolvedKeys))
-        }
+        // Everything the server lists is shown, playable or not (statistics / info entries become
+        // text cards); only the plugin's "load when played" stand-ins are left out.
+        val real = all.filterNot { source -> source.isPlaceholderSource() && isStandIn(source) }
         val sources = real.ifEmpty { all }.ifEmpty { listOf(JsonObject(mapOf())) }
         val streams = sources.map { source -> sourceStream(server, itemId, target, source) }
         return AddonStreams(server.name, null, streams)
@@ -547,7 +543,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             ?: source.str("Container")?.substringBefore(',')?.uppercase().orEmpty()
         val sourceName = source.nonBlank("Name")
         // Info entries (AIOStreams statistics): nothing to play, shown as text only.
-        val infoOnly = remote == null && source.isPlaceholderSource()
+        // Also entries with neither their own id nor a path: there is nothing on the server to play.
+        val infoOnly = remote == null && (source.isPlaceholderSource() ||
+            (source.nonBlank("Id") == null && source.nonBlank("Path") == null && source.nonBlank("TranscodingUrl") == null))
         val url = when {
             infoOnly -> null
             remote != null && source.str("SupportsDirectPlay") != "false" -> remote

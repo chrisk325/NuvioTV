@@ -73,4 +73,27 @@ class JellyfinRelatedTest {
         assertEquals("[RD+] 1080p", streams[1].title)
         assertNull(streams.first().url)
     }
+
+    @Test
+    fun infoEntriesWithoutIdOrPathAreShown() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items/m1" -> respond("""{"Id":"m1","Name":"Movie","Type":"Movie","MediaSources":[]}""", HttpStatusCode.OK, json)
+                "/Items/m1/PlaybackInfo" -> respond(
+                    """{"MediaSources":[
+                        {"Name":"📊 Statistics\n> 3 addons"},
+                        {"Name":"ℹ️ No results from Torrentio","Type":"Placeholder"},
+                        {"Id":"a1","Name":"[RD+] 1080p","Path":"https://aio.example/a1","Protocol":"Http"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val streams = MediaServerService(http, serverStore).streams("movie", "mediaserver:srv:m1").single().streams
+        assertEquals(3, streams.size)
+        assertEquals("📊 Statistics", streams[0].name)
+        assertNull(streams[0].url)
+        assertNull(streams[1].url)
+        assertEquals("https://aio.example/a1", streams[2].url)
+    }
 }
