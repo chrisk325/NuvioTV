@@ -5,6 +5,9 @@ import com.nuvio.shared.model.Addon
 import com.nuvio.shared.model.AddonStreams
 import com.nuvio.shared.model.CatalogRow
 import com.nuvio.shared.model.Meta
+import com.nuvio.shared.model.MetaCastMember
+import com.nuvio.shared.model.ContentType
+import com.nuvio.shared.model.PosterShape
 import com.nuvio.shared.model.MetaPreview
 import com.nuvio.shared.model.SavedItem
 import com.nuvio.shared.model.Stream
@@ -264,21 +267,90 @@ class NuvioCore(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Titles from a Jellyfin / Emby server that no add-on describes: use the server's data.
-            val serverId = id.substringBefore(':').takeIf { it.startsWith("tt") } ?: id.takeIf { it.startsWith("tmdb:") }
-            if (serverId != null && mediaServers.servers.isNotEmpty()) {
-                runCatching { mediaServers.meta(type, serverId) }.getOrNull()?.let { return it }
-                if (addonRepository.currentAddons.none { it.enabled }) {
-                    throw IllegalStateException(
-                        "Couldn't find this title on ${mediaServers.servers.joinToString { it.name }}. " +
-                            "Check that the server is reachable and the title is in a Movies or Shows library."
-                    )
+            val isShow = type != "movie"
+            val tmdbId = id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(':')?.toIntOrNull()
+            val imdb = id.substringBefore(':').takeIf { it.startsWith("tt") }
+                ?: tmdbId?.let { runCatching { tmdb.imdbIdFor(it, isShow) }.getOrNull() }
+            // "tmdb:" ids (More Like This, Collection, actor pages): add-ons by the IMDb id.
+            if (imdb != null && !id.startsWith("tt")) {
+                try {
+                    return fillFromMediaServer(metaRepository.getMeta(addonRepository.currentAddons, type, imdb, null), type)
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (_: Exception) {
                 }
             }
-            val tmdbId = id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(':')?.toIntOrNull()
-            val imdb = tmdbId?.let { tmdb.imdbIdFor(it, type != "movie") } ?: throw e
-            return metaRepository.getMeta(addonRepository.currentAddons, type, imdb, null)
+            // Titles from a Jellyfin / Emby server that no add-on describes: use the server's data.
+            if (mediaServers.servers.isNotEmpty()) {
+                for (serverId in listOfNotNull(imdb, id.takeIf { it.startsWith("tmdb:") })) {
+                    runCatching { mediaServers.meta(type, serverId) }.getOrNull()?.let { return it }
+                }
+            }
+            // Last resort: the title as TMDB describes it (streams still use the IMDb id).
+            val tmdbTarget = tmdbId ?: imdb?.let { runCatching { tmdb.findByImdb(it, isShow) }.getOrNull() }
+            tmdbTarget?.let { tid ->
+                runCatching { tmdbMeta(tid, isShow, imdb) }.getOrNull()?.let { return it }
+            }
+            if (mediaServers.servers.isNotEmpty() && addonRepository.currentAddons.none { it.enabled }) {
+                throw IllegalStateException(
+                    "Couldn't find this title on ${mediaServers.servers.joinToString { it.name }}. " +
+                        "Check that the server is reachable and the title is in a Movies or Shows library."
+                )
+            }
+            throw e
         }
+    }
+
+    /** Details built from TMDB alone, for titles no add-on or media server describes. */
+    private suspend fun tmdbMeta(tmdbId: Int, isShow: Boolean, knownImdb: String?): Meta? {
+        val t = tmdb.enrich("tmdb:$tmdbId", null, isShow, settings.tmdbLanguage) ?: return null
+        val imdb = knownImdb ?: t.imdbId
+        val baseId = imdb ?: "tmdb:$tmdbId"
+        val videos = if (!isShow) emptyList() else t.seasonNumbers.take(40).flatMap { season ->
+            runCatching { tmdb.seasonEpisodes(tmdbId, season, settings.tmdbLanguage) }.getOrDefault(emptyList()).map { ep ->
+                Video(
+                    id = "$baseId:${ep.season}:${ep.episode}",
+                    title = ep.title ?: "Episode ${ep.episode}",
+                    released = null,
+                    thumbnail = ep.thumbnail,
+                    season = ep.season,
+                    episode = ep.episode,
+                    overview = ep.overview,
+                    runtimeMinutes = ep.runtimeMinutes ?: 0
+                )
+            }
+        }
+        return Meta(
+            id = baseId,
+            type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
+            name = t.localizedTitle ?: return null,
+            poster = t.poster,
+            posterShape = PosterShape.POSTER,
+            background = t.backdrop,
+            logo = t.logo,
+            description = t.overview,
+            releaseInfo = t.releaseDate?.take(4),
+            status = t.status,
+            imdbRating = t.rating,
+            genres = t.genres,
+            runtime = t.runtimeMinutes?.let { "$it min" },
+            director = t.directors,
+            writer = t.writers,
+            cast = t.cast.map { it.name },
+            castMembers = t.cast.map { MetaCastMember(it.name, it.role, it.photo, it.id) },
+            videos = videos,
+            productionCompanies = t.productionCompanies,
+            networks = t.networks,
+            ageRating = t.certification,
+            country = t.countries.takeIf { it.isNotEmpty() }?.joinToString(", "),
+            awards = null,
+            language = t.language,
+            links = emptyList(),
+            trailerYtIds = t.trailerYoutubeKeys,
+            imdbId = imdb,
+            released = t.releaseDate,
+            ratingSource = "tmdb"
+        )
     }
 
     /**

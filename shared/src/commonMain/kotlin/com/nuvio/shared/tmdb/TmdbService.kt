@@ -62,7 +62,11 @@ data class TmdbEnrichment(
     val seasonCount: Int? = null,
     val episodeCount: Int? = null,
     /** Countries of origin (TMDB origin_country), else production countries. */
-    val originCountries: List<String> = emptyList()
+    val originCountries: List<String> = emptyList(),
+    val poster: String? = null,
+    val imdbId: String? = null,
+    /** Show seasons (season 0 / specials excluded). */
+    val seasonNumbers: List<Int> = emptyList()
 )
 
 data class TmdbEpisode(
@@ -119,8 +123,8 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
         } ?: return null
         val kind = if (isShow) "tv" else "movie"
         val lang = language.ifBlank { "en-US" }
-        val append = if (isShow) "aggregate_credits,images,recommendations,content_ratings,videos"
-        else "credits,images,recommendations,release_dates,videos"
+        val append = if (isShow) "aggregate_credits,images,recommendations,content_ratings,videos,external_ids"
+        else "credits,images,recommendations,release_dates,videos,external_ids"
         val body = get(
             "$kind/$tmdbId?language=${encodeUrlComponent(lang)}&append_to_response=$append" +
                 "&include_image_language=${encodeUrlComponent(lang.substringBefore('-'))},en,null"
@@ -193,7 +197,10 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             seasonCount = body.int("number_of_seasons")?.takeIf { it > 0 },
             episodeCount = body.int("number_of_episodes")?.takeIf { it > 0 },
             originCountries = com.nuvio.shared.data.coerceStringList(body["origin_country"])
-                .ifEmpty { body.objects("production_countries").mapNotNull { it.nonBlank("iso_3166_1") } }
+                .ifEmpty { body.objects("production_countries").mapNotNull { it.nonBlank("iso_3166_1") } },
+            poster = image(body.str("poster_path"), "w500"),
+            imdbId = (body.obj("external_ids")?.nonBlank("imdb_id") ?: body.nonBlank("imdb_id"))?.takeIf { it.startsWith("tt") },
+            seasonNumbers = body.objects("seasons").mapNotNull { it.int("season_number") }.filter { it > 0 }.distinct().sorted()
         )
         mutex.withLock {
             cache[key] = result
