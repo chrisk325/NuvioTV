@@ -7,6 +7,7 @@ import com.nuvio.tv.data.mediaserver.ServerException
 import com.nuvio.tv.data.mediaserver.ServerFailure
 import com.nuvio.tv.data.mediaserver.ServerProvider
 import com.nuvio.tv.data.mediaserver.ServerRepository
+import com.nuvio.tv.data.mediaserver.ServerResumeImport
 import com.nuvio.tv.data.mediaserver.ServersUiState
 import com.nuvio.tv.data.mediaserver.serverFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -27,7 +28,8 @@ data class ServerSignInState(
 
 @HiltViewModel
 class MediaServersViewModel @Inject constructor(
-    private val repository: ServerRepository
+    private val repository: ServerRepository,
+    private val resumeImport: ServerResumeImport
 ) : ViewModel() {
     val uiState: StateFlow<ServersUiState> = repository.uiState
 
@@ -101,12 +103,19 @@ class MediaServersViewModel @Inject constructor(
 
     fun setCatalogMetadata(connectionId: String, enabled: Boolean) = repository.setCatalogMetadata(connectionId, enabled)
 
-    fun setImportWatchState(connectionId: String, enabled: Boolean) = repository.setImportWatchState(connectionId, enabled)
+    fun setImportWatchState(connectionId: String, enabled: Boolean) {
+        repository.setImportWatchState(connectionId, enabled)
+        // Turned on again later, the server's whole continue-watching list comes in again.
+        if (!enabled) resumeImport.forget(connectionId)
+    }
 
     fun setLibrarySelected(connectionId: String, libraryId: String, selected: Boolean) =
         repository.setLibrarySelected(connectionId, libraryId, selected)
 
-    fun remove(connectionId: String) = repository.remove(connectionId)
+    fun remove(connectionId: String) {
+        repository.remove(connectionId)
+        resumeImport.forget(connectionId)
+    }
 
     override fun onCleared() {
         plexSignIn.close()

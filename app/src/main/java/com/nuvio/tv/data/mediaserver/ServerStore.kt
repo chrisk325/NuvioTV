@@ -33,3 +33,22 @@ class AndroidServerPersistence @Inject constructor(
     override fun write(profileId: Int, value: String?) = preferences.write(profileId, value)
     override fun clear() = preferences.clear()
 }
+
+/** Small per-server records kept on the device, such as the last continue-watching list of each server. */
+interface ServerResumeStore {
+    fun read(key: String): String?
+    fun write(key: String, value: String?)
+}
+
+@Singleton
+class AndroidServerResumeStore @Inject constructor(
+    @ApplicationContext context: Context
+) : ServerResumeStore {
+    private val preferences = context.getSharedPreferences("media_server_resume", Context.MODE_PRIVATE)
+
+    override fun read(key: String): String? = preferences.getString(key, null)
+
+    override fun write(key: String, value: String?) {
+        preferences.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply()
+    }
+}
