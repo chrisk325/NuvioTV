@@ -7,7 +7,8 @@ enum class ServerCapability {
     EXTERNAL_ID_LOOKUP,
     USER_STATE_READ,
     USER_STATE_WRITE,
-    TRANSCODING
+    TRANSCODING,
+    FAVORITES
 }
 
 interface ServerProvider {
@@ -76,7 +77,18 @@ interface ServerProvider {
 
     suspend fun resumeItems(session: ServerSession, limit: Int): List<ServerTitle> = unsupported()
 
+    /** The server's continue-watching list with each item's position, for the app's own Continue watching. */
+    suspend fun resumeProgress(session: ServerSession, limit: Int): List<ServerResume> = unsupported()
+
     suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean): Unit = unsupported()
+
+    /** True when the server's libraries are catalogs (AIOStreams, AIOMetadata): rows for Home, not the Library. */
+    suspend fun servesCatalogs(session: ServerSession): Boolean = false
+
+    /** The movies and shows the signed-in user marked as favourites on the server. */
+    suspend fun favoritesPage(session: ServerSession, start: Int, limit: Int): ServerPage<ServerTitle> = unsupported()
+
+    suspend fun setFavorite(session: ServerSession, itemId: String, favorite: Boolean): Unit = unsupported()
 
     suspend fun externalIdIndex(
         session: ServerSession,
@@ -84,6 +96,9 @@ interface ServerProvider {
         start: Int,
         limit: Int
     ): ServerPage<ServerIndexEntry> = unsupported()
+
+    /** Libraries [lookupTitle] answers alike share a scope, so a title is looked up once per scope. */
+    suspend fun titleLookupScope(session: ServerSession, library: ServerLibrary): String = library.id
 
     /** Items of [library] that may be [query]; null when the server cannot look up a single title this way. */
     suspend fun lookupTitle(

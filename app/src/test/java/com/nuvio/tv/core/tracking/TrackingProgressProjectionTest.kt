@@ -1,5 +1,6 @@
 package com.nuvio.tv.core.tracking
 
+import com.nuvio.tv.data.mediaserver.ServerCatalog
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.model.WatchedItem
 import org.junit.Assert.assertEquals
@@ -34,6 +35,22 @@ class TrackingProgressProjectionTest {
         )
 
         assertEquals(listOf(providerEntry), result)
+    }
+
+    @Test
+    fun `projection keeps progress imported from a media server unless the provider tracks the title`() {
+        val providerEntry = progress("tt100", 1, 1, 10L, 25L)
+        val fromServer = progress("tt200", null, null, 30L, 50L).copy(addonBaseUrl = ServerCatalog.baseUrl("c1"))
+        val alsoTracked = progress("tt100", 1, 2, 40L, 50L).copy(addonBaseUrl = ServerCatalog.baseUrl("c1"))
+        val local = progress("tt300", null, null, 20L, 50L)
+
+        val result = mergeProgressProjectionWithRetainedLocal(
+            providerEntries = listOf(providerEntry),
+            localEntries = listOf(fromServer, alsoTracked, local),
+            retainsLocalProgress = { false }
+        )
+
+        assertEquals(listOf(fromServer, providerEntry), result)
     }
 
     @Test

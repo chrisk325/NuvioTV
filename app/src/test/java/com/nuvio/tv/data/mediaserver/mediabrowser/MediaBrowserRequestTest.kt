@@ -16,6 +16,7 @@ import com.nuvio.tv.data.mediaserver.ServerPlayerCapabilities
 import com.nuvio.tv.data.mediaserver.ServerSession
 import com.nuvio.tv.data.mediaserver.ServerTitleQuery
 import com.nuvio.tv.data.mediaserver.emby.EmbyProvider
+import com.nuvio.tv.data.mediaserver.verifiedTitleMatches
 import com.nuvio.tv.data.mediaserver.jellyfin.JellyfinProvider
 import org.junit.Test
 import org.junit.Assert.assertEquals
@@ -236,7 +237,7 @@ class MediaBrowserRequestTest {
         val found = emby.lookupTitle(session("emby", "https://media.example.com"), ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE), query)
 
         assertEquals(listOf(ServerIndexEntry("m1", TrackingExternalIds(imdb = "tt0078788", tmdb = 28), year = 1979)), found)
-        val request = http.requests.single()
+        val request = http.lookups.single()
         assertEquals("/emby/Users/u1/Items", request.url.encodedPath)
         assertEquals("imdb.tt0078788,tmdb.28", request.url.queryParameter("anyProviderIdEquals"))
         assertEquals("lib1", request.url.queryParameter("parentId"))
@@ -267,7 +268,7 @@ class MediaBrowserRequestTest {
         val found = jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, name = "Apocalypse Now", year = 1979))
 
         assertEquals(listOf(ServerIndexEntry("m1", ids, year = 1979)), found)
-        val request = http.requests.single()
+        val request = http.lookups.single()
         assertEquals("/Items", request.url.encodedPath)
         assertEquals("u1", request.url.queryParameter("userId"))
         assertEquals("Apocalypse Now", request.url.queryParameter("searchTerm"))
@@ -276,7 +277,7 @@ class MediaBrowserRequestTest {
         assertNull(request.url.queryParameter("anyProviderIdEquals"))
 
         assertNull(jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, name = null, year = null)))
-        assertEquals(1, http.requests.size)
+        assertEquals(1, http.lookups.size)
     }
 
     @Test
@@ -296,14 +297,14 @@ class MediaBrowserRequestTest {
         val found = jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, "The Intouchables", 2011, originalName = "Intouchables"))!!
 
         assertTrue(ServerIndexEntry("m1", ids, year = 2011) in found)
-        assertEquals(listOf("The Intouchables", "Intouchables"), http.requests.map { it.url.queryParameter("searchTerm") })
+        assertEquals(listOf("The Intouchables", "Intouchables"), http.lookups.map { it.url.queryParameter("searchTerm") })
 
         jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, "Intouchables", 2011, originalName = "The Intouchables"))
-        assertEquals(3, http.requests.size)
+        assertEquals(3, http.lookups.size)
         jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, "The Intouchables", 2011))
-        assertEquals(4, http.requests.size)
+        assertEquals(4, http.lookups.size)
         jellyfin.lookupTitle(session, library, ServerTitleQuery(ids, "The Intouchables", 2011, originalName = " the intouchables "))
-        assertEquals(5, http.requests.size)
+        assertEquals(5, http.lookups.size)
     }
 
     @Test
@@ -315,7 +316,278 @@ class MediaBrowserRequestTest {
         val found = emby.lookupTitle(session("emby", "https://media.example.com"), ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE), query)
 
         assertTrue(found!!.isEmpty())
-        assertEquals(1, http.requests.size)
+        assertEquals(1, http.lookups.size)
+    }
+
+    @Test
+    fun readsTheResumeListWithEachEpisodesShow() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/UserItems/Resume" -> """{"Items": [
+                    {"Id": "e1", "Name": "Luffy's Past!", "Type": "Episode", "SeriesId": "s1", "SeriesName": "One Piece",
+                     "ParentIndexNumber": 1, "IndexNumber": 4, "RunTimeTicks": 14400000000,
+                     "UserData": {"PlaybackPositionTicks": 6000000000, "Played": false,
+                                  "LastPlayedDate": "2026-11-18T07:00:00.0000000Z"}},
+                    {"Id": "m1", "Name": "Heat", "Type": "Movie", "RunTimeTicks": 102000000000,
+                     "ProviderIds": {"Imdb": "tt0113277"},
+                     "UserData": {"PlaybackPositionTicks": 36000000000, "Played": false}}
+                ]}"""
+                else -> """{"Items": [{"Id": "s1", "Name": "One Piece", "Type": "Series",
+                    "ProviderIds": {"Imdb": "tt0388629", "Tmdb": "37854"}}]}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val base = session("jellyfin", "https://media.example.com")
+        val session = ServerSession(
+            base.connection.copy(
+                libraries = listOf(
+                    ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE),
+                    ServerLibrary("lib2", "Shows", ServerMediaKind.SERIES)
+                )
+            ),
+            base.token
+        )
+
+        val (episode, movie) = jellyfin.resumeProgress(session, limit = 30)
+
+        assertEquals(ServerItemRef("cabc", "s1").encode(), episode.title.preview.id)
+        assertEquals("series", episode.title.preview.apiType)
+        assertEquals(TrackingExternalIds(imdb = "tt0388629", tmdb = 37854), episode.title.externalIds)
+        assertEquals(ServerItemRef("cabc", "e1").encode(), episode.state.videoId)
+        assertEquals(1 to 4, episode.state.season to episode.state.episode)
+        assertEquals(600_000L to 1_440_000L, episode.state.positionMs to episode.state.durationMs)
+        assertEquals(ServerItemRef("cabc", "m1").encode(), movie.title.preview.id)
+        assertNull(movie.state.lastPlayedEpochMs)
+        val shows = http.requests.single { it.url.encodedPath == "/Items" }
+        assertEquals("s1", shows.url.queryParameter("ids"))
+    }
+
+    @Test
+    fun leavesResumeItemsOutsideTheChosenLibraries() = runTest {
+        val http = TestHttp {
+            """{"Items": [{"Id": "e1", "Type": "Episode", "SeriesId": "s1", "SeriesName": "One Piece",
+                "ParentIndexNumber": 1, "IndexNumber": 4, "RunTimeTicks": 100, "UserData": {"PlaybackPositionTicks": 10}}]}"""
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        // The test session picks only a movie library.
+        assertTrue(jellyfin.resumeProgress(session("jellyfin", "https://media.example.com"), limit = 30).isEmpty())
+    }
+
+    @Test
+    fun jellyfinMarksAndClearsFavourites() = runTest {
+        val http = TestHttp { "{}" }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://media.example.com")
+
+        jellyfin.setFavorite(session, "m1", favorite = true)
+        jellyfin.setFavorite(session, "m1", favorite = false)
+
+        assertEquals(listOf("POST", "DELETE"), http.requests.map { it.method })
+        http.requests.forEach { request ->
+            assertEquals("/UserFavoriteItems/m1", request.url.encodedPath)
+            assertEquals("u1", request.url.queryParameter("userId"))
+        }
+    }
+
+    @Test
+    fun embyMarksFavouritesUnderTheUser() = runTest {
+        val http = TestHttp { "{}" }
+        val emby = EmbyProvider(http.client, testIdentity)
+
+        emby.setFavorite(session("emby", "https://media.example.com"), "m1", favorite = true)
+
+        val request = http.requests.single()
+        assertEquals("POST", request.method)
+        assertEquals("/emby/Users/u1/FavoriteItems/m1", request.url.encodedPath)
+    }
+
+    @Test
+    fun listsTheUsersFavouriteMoviesAndShows() = runTest {
+        val http = TestHttp {
+            """{"Items": [
+                {"Id": "m1", "Name": "Heat", "Type": "Movie", "ProviderIds": {"Imdb": "tt0113277"}},
+                {"Id": "s1", "Name": "Dark", "Type": "Series", "ProviderIds": {"Tmdb": "70523"}}
+            ], "TotalRecordCount": 2}"""
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        val page = jellyfin.favoritesPage(session("jellyfin", "https://media.example.com"), start = 0, limit = 50)
+
+        assertEquals(listOf("movie", "series"), page.items.map { it.preview.apiType })
+        assertEquals(TrackingExternalIds(imdb = "tt0113277"), page.items.first().externalIds)
+        assertEquals(2, page.totalCount)
+        val request = http.requests.single()
+        assertEquals("/Items", request.url.encodedPath)
+        assertEquals("IsFavorite", request.url.queryParameter("filters"))
+        assertEquals("Movie,Series", request.url.queryParameter("includeItemTypes"))
+        assertEquals("true", request.url.queryParameter("recursive"))
+        assertEquals("u1", request.url.queryParameter("userId"))
+        assertEquals("50", request.url.queryParameter("limit"))
+    }
+
+    @Test
+    fun looksUpTitlesAcrossAioStreamsRatherThanInOneCatalog() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/jellyfin/System/Info/Public" -> """{"ServerName": "Den", "Version": "10.10.7", "aiostreams": {"features": {}}}"""
+                else -> """{"Items": [{"Id": "m1", "ProductionYear": 1994, "ProviderIds": {"Imdb": "tt0111161"}}]}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://media.example.com/jellyfin")
+        val popular = ServerLibrary("lib1", "Popular", ServerMediaKind.MOVIE)
+        val trending = ServerLibrary("lib2", "Trending", ServerMediaKind.MOVIE)
+        val ids = TrackingExternalIds(imdb = "tt0111161")
+
+        val found = jellyfin.lookupTitle(session, popular, ServerTitleQuery(ids, name = "The Shawshank Redemption", year = 1994))
+
+        assertEquals(listOf(ServerIndexEntry("m1", ids, year = 1994)), found)
+        val lookup = http.lookups.single()
+        assertNull(lookup.url.queryParameter("parentId"))
+        assertEquals("The Shawshank Redemption", lookup.url.queryParameter("searchTerm"))
+        assertEquals(jellyfin.titleLookupScope(session, popular), jellyfin.titleLookupScope(session, trending))
+        assertTrue(
+            jellyfin.titleLookupScope(session, popular) !=
+                jellyfin.titleLookupScope(session, ServerLibrary("lib3", "Shows", ServerMediaKind.SERIES))
+        )
+    }
+
+    @Test
+    fun treatsAioMetadataLikeAioStreams() = runTest {
+        // AIOMetadata's /System/Info/Public: it names itself AIOMetadata and carries the "aiostreams" extension key.
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/jellyfin/cfg/System/Info/Public" ->
+                    """{"ServerName": "AIOMetadata", "Version": "12.1.0", "ProductName": "Jellyfin Server", "Id": "srv",
+                        "aiostreams": {"features": {"watchlistFavorites": true}}}"""
+                else -> """{"Items": []}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://meta.example.com/jellyfin/cfg")
+        val movies = ServerLibrary("cat1", "Popular", ServerMediaKind.MOVIE)
+
+        jellyfin.lookupTitle(session, movies, ServerTitleQuery(TrackingExternalIds(imdb = "tt0111161"), "Heat", 1995))
+
+        assertTrue(jellyfin.servesCatalogs(session))
+        // Its ids find nothing here, so the name search follows; neither is kept inside one catalog.
+        val (byIds, byName) = http.lookups
+        assertEquals("imdb.tt0111161", byIds.url.queryParameter("anyProviderIdEquals"))
+        assertNull(byIds.url.queryParameter("searchTerm"))
+        assertEquals("Heat", byName.url.queryParameter("searchTerm"))
+        assertNull(byName.url.queryParameter("anyProviderIdEquals"))
+        http.lookups.forEach { assertNull(it.url.queryParameter("parentId")) }
+        assertEquals(
+            jellyfin.titleLookupScope(session, movies),
+            jellyfin.titleLookupScope(session, ServerLibrary("cat2", "Trending", ServerMediaKind.MOVIE))
+        )
+    }
+
+    @Test
+    fun findsAioMetadataTitlesByTheirIdsWithoutTheName() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/jellyfin/cfg/System/Info/Public" -> """{"ServerName": "AIOMetadata", "Version": "12.1.0", "aiostreams": {}}"""
+                else -> """{"Items": [{"Id": "m1", "ProductionYear": 1974,
+                    "ProviderIds": {"Imdb": "tt0071562", "Tmdb": "240"}}], "TotalRecordCount": 1}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://meta.example.com/jellyfin/cfg")
+        val ids = TrackingExternalIds(imdb = "tt0071562", tmdb = 240)
+
+        // A name the server would not find; the ids still do.
+        val found = jellyfin.lookupTitle(
+            session,
+            ServerLibrary("cat1", "Popular", ServerMediaKind.MOVIE),
+            ServerTitleQuery(ids, name = "Der Pate – Teil II", year = 1974)
+        )
+
+        assertEquals(listOf("m1"), found?.map { it.itemId })
+        val lookup = http.lookups.single()
+        assertEquals("imdb.tt0071562,tmdb.240", lookup.url.queryParameter("anyProviderIdEquals"))
+        assertEquals("Movie", lookup.url.queryParameter("includeItemTypes"))
+        assertNull(lookup.url.queryParameter("searchTerm"))
+    }
+
+    @Test
+    fun matchesAioMetadataAnimeByItsKitsuIdThroughTheNameSearch() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/jellyfin/cfg/System/Info/Public" -> """{"ServerName": "AIOMetadata", "Version": "12.1.0", "aiostreams": {}}"""
+                else -> """{"Items": [{"Id": "a1", "ProductionYear": 1998, "ProviderIds": {"Kitsu": "1", "MyAnimeList": "1"}}]}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val query = ServerTitleQuery(TrackingExternalIds(kitsu = 1), name = "Cowboy Bebop", year = 1998)
+
+        val found = jellyfin.lookupTitle(
+            session("jellyfin", "https://meta.example.com/jellyfin/cfg"),
+            ServerLibrary("cat1", "Anime", ServerMediaKind.SERIES),
+            query
+        )!!
+
+        // AIOMetadata's id filter takes only IMDb, TMDB and TVDB, so the name search finds it and Kitsu confirms it.
+        assertEquals(listOf("a1"), verifiedTitleMatches(found, query))
+        val lookup = http.lookups.single()
+        assertNull(lookup.url.queryParameter("anyProviderIdEquals"))
+        assertEquals("Cowboy Bebop", lookup.url.queryParameter("searchTerm"))
+    }
+
+    @Test
+    fun searchesByNameWhenAioMetadatasIdLookupFails() = runTest {
+        val http = TestHttp { request ->
+            when {
+                request.url.encodedPath.endsWith("/System/Info/Public") ->
+                    """{"ServerName": "AIOMetadata", "Version": "12.1.0", "aiostreams": {}}"""
+                request.url.queryParameter("anyProviderIdEquals") != null -> "not json"
+                else -> """{"Items": [{"Id": "m1", "ProductionYear": 1994, "ProviderIds": {"Imdb": "tt0111161"}}]}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val ids = TrackingExternalIds(imdb = "tt0111161")
+
+        val found = jellyfin.lookupTitle(
+            session("jellyfin", "https://meta.example.com/jellyfin/cfg"),
+            ServerLibrary("cat1", "Popular", ServerMediaKind.MOVIE),
+            ServerTitleQuery(ids, name = "The Shawshank Redemption", year = 1994)
+        )
+
+        assertEquals(listOf(ServerIndexEntry("m1", ids, year = 1994)), found)
+        assertEquals("The Shawshank Redemption", http.lookups.last().url.queryParameter("searchTerm"))
+    }
+
+    @Test
+    fun leavesIdLookupsToAioMetadata() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/jellyfin/System/Info/Public" -> """{"ServerName": "Den", "Version": "10.10.7", "aiostreams": {}}"""
+                else -> """{"Items": []}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        jellyfin.lookupTitle(
+            session("jellyfin", "https://media.example.com/jellyfin"),
+            ServerLibrary("lib1", "Popular", ServerMediaKind.MOVIE),
+            ServerTitleQuery(TrackingExternalIds(imdb = "tt0111161"), name = "Heat", year = 1995)
+        )
+
+        assertTrue(http.lookups.none { it.url.queryParameter("anyProviderIdEquals") != null })
+    }
+
+    @Test
+    fun keepsTitleLookupsInsideEachLibraryOnAPlainJellyfin() = runTest {
+        val http = TestHttp { """{"ServerName": "Home", "Version": "10.10.7"}""" }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://media.example.com")
+
+        val first = jellyfin.titleLookupScope(session, ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE))
+        val second = jellyfin.titleLookupScope(session, ServerLibrary("lib2", "4K Movies", ServerMediaKind.MOVIE))
+
+        assertEquals(listOf("lib1", "lib2"), listOf(first, second))
+        assertFalse(jellyfin.servesCatalogs(session))
     }
 
     @Test
@@ -395,3 +667,7 @@ class MediaBrowserRequestTest {
         assertTrue(report.text.contains("\"PlaySessionId\":\"ps1\""))
     }
 }
+
+// Title lookups first ask the server whether it is AIOStreams; these are the lookups themselves.
+private val TestHttp.lookups
+    get() = requests.filter { it.url.encodedPath.endsWith("/Items") }

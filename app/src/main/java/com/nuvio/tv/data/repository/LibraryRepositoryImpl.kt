@@ -18,6 +18,7 @@ import com.nuvio.tv.core.tracking.effectiveLibrarySourceMode
 import com.nuvio.tv.core.tracking.providerId
 import com.nuvio.tv.data.local.LibraryPreferences
 import com.nuvio.tv.data.local.TraktSettingsDataStore
+import com.nuvio.tv.data.mediaserver.ServerFavorites
 import com.nuvio.tv.data.mediaserver.ServerItemRef
 import com.nuvio.tv.domain.repository.MetaRepository
 import com.nuvio.tv.domain.model.LibraryEntry
@@ -62,6 +63,7 @@ class LibraryRepositoryImpl @Inject constructor(
     private val trackingProviders: TrackingLibraryProviderRegistry,
     private val profileManager: ProfileManager,
     private val addonEventDispatcher: AddonEventDispatcher,
+    private val serverFavorites: dagger.Lazy<ServerFavorites>,
 ) : LibraryRepository {
 
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -269,21 +271,28 @@ class LibraryRepositoryImpl @Inject constructor(
         applyMembershipChangesInternal(item, changes, confirmedRemovalProviders)
     }
 
+    /** Runs [mutation], then tells library addons and connected media servers' favourites when it saved or removed the title. */
     private suspend inline fun withAddonLibraryEvent(
         item: LibraryEntryInput,
         mutation: () -> TrackingMembershipApplyResult
     ): TrackingMembershipApplyResult {
-        if (!addonEventDispatcher.hasEnabledAddonFor(ADDON_LIBRARY_RESOURCE)) return mutation()
+        val notifyAddons = addonEventDispatcher.hasEnabledAddonFor(ADDON_LIBRARY_RESOURCE)
+        val favorites = serverFavorites.get()
+        val mirrorFavorites = favorites.supportsType(item.itemType) && favorites.isAvailable()
+        if (!notifyAddons && !mirrorFavorites) return mutation()
         val wasInLibrary = isInLibrary(item.itemId, item.itemType).first()
         val result = mutation()
         if (result.requiresRemovalConfirmation) return result
         val isInLibraryNow = isInLibrary(item.itemId, item.itemType).first()
         if (wasInLibrary != isInLibraryNow) {
-            addonEventDispatcher.library(
-                type = item.itemType,
-                id = item.itemId,
-                action = if (isInLibraryNow) AddonLibraryAction.LIBRARY_ADD else AddonLibraryAction.LIBRARY_REMOVE
-            )
+            if (notifyAddons) {
+                addonEventDispatcher.library(
+                    type = item.itemType,
+                    id = item.itemId,
+                    action = if (isInLibraryNow) AddonLibraryAction.LIBRARY_ADD else AddonLibraryAction.LIBRARY_REMOVE
+                )
+            }
+            if (mirrorFavorites) favorites.mirror(item.itemId, item.itemType, favorite = isInLibraryNow, name = item.title)
         }
         return result
     }

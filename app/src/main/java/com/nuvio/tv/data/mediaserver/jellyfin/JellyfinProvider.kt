@@ -27,6 +27,9 @@ internal class JellyfinProvider(
     override fun playedEndpoint(userId: String, itemId: String) =
         Endpoint("/UserPlayedItems/${pathSegment(itemId)}", mapOf("userId" to userId))
 
+    override fun favoriteEndpoint(userId: String, itemId: String) =
+        Endpoint("/UserFavoriteItems/${pathSegment(itemId)}", mapOf("userId" to userId))
+
     override fun titleLookupQuery(query: ServerTitleQuery): Map<String, String>? =
         query.name?.trim()?.takeIf { it.isNotEmpty() }?.let { mapOf("searchTerm" to it) }
 

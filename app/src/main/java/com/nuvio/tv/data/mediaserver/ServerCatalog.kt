@@ -15,6 +15,7 @@ import com.nuvio.tv.domain.repository.AddonRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -67,6 +68,32 @@ class ServerCatalog @Inject constructor(
             connection.selectedLibraries.map { ServerLibraryRef(connection, it) }
         }
 
+    /** One "Favorites" shelf per server that keeps favourites, shown ahead of the server's own libraries. */
+    fun favoriteLibraries(): List<ServerLibraryRef> {
+        val connections = repository.favoriteConnections().filter { it.selectedLibraries.isNotEmpty() }
+        if (connections.isEmpty()) return emptyList()
+        val name = context.getString(R.string.servers_favorites_row)
+        return connections.map { ServerLibraryRef(it, ServerLibrary(FAVORITES_ID, name, ServerMediaKind.MIXED)) }
+    }
+
+    /**
+     * The shelves for Library > Servers: favourites first, then each server's libraries, except on servers whose
+     * libraries are catalogs, which already appear on Home and leave just their favourites here.
+     */
+    suspend fun libraryShelves(): List<ServerLibraryRef> {
+        val catalogServers = repository.enabledConnections().filter { servesCatalogs(it) }.map { it.id }.toSet()
+        return favoriteLibraries() + libraries().filterNot { it.connection.id in catalogServers }
+    }
+
+    private suspend fun servesCatalogs(connection: ServerConnection): Boolean =
+        try {
+            repository.call(connection.id) { provider, session -> provider.servesCatalogs(session) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+
     fun titleLibraries(): List<ServerLibraryRef> =
         libraries().filter { it.library.kind != ServerMediaKind.COLLECTION }
 
@@ -88,6 +115,12 @@ class ServerCatalog @Inject constructor(
         val query = extraArgs["search"]?.trim()?.takeIf { it.isNotEmpty() }
         val page = when {
             catalogId == RESUME_ID -> resumePage(connection, skip)
+            catalogId == FAVORITES_ID -> pageOf(connection, skip) {
+                repository.call(connection.id) { provider, session ->
+                    if (!provider.supports(ServerCapability.FAVORITES)) throw ServerException(ServerFailure.UNSUPPORTED)
+                    provider.favoritesPage(session, skip, PAGE_SIZE)
+                }
+            }
             catalogId.startsWith(COLLECTION_PREFIX) -> pageOf(connection, skip) {
                 repository.call(connection.id) { provider, session ->
                     provider.collectionPage(session, catalogId.removePrefix(COLLECTION_PREFIX), skip, PAGE_SIZE)
@@ -140,6 +173,7 @@ class ServerCatalog @Inject constructor(
     }
 
     suspend fun row(connectionId: String, catalogId: String): CatalogRow {
+        if (catalogId == FAVORITES_ID) return favoritesRow(connectionId)
         val addon = repository.connection(connectionId)?.let(::addonFor) ?: throw ServerException(ServerFailure.NOT_FOUND)
         val descriptor = addon.catalogs.firstOrNull { it.id == catalogId } ?: throw ServerException(ServerFailure.NOT_FOUND)
         val row = CatalogRow(
@@ -150,6 +184,21 @@ class ServerCatalog @Inject constructor(
             catalogName = descriptor.name,
             type = descriptor.type,
             rawType = descriptor.apiType,
+            items = emptyList()
+        )
+        return page(row, skip = 0)
+    }
+
+    private suspend fun favoritesRow(connectionId: String): CatalogRow {
+        val connection = repository.connection(connectionId) ?: throw ServerException(ServerFailure.NOT_FOUND)
+        val row = CatalogRow(
+            addonId = addonId(connection.id),
+            addonName = repository.sourceLabel(connection),
+            addonBaseUrl = baseUrl(connection.id),
+            catalogId = FAVORITES_ID,
+            catalogName = "${connection.name} · ${context.getString(R.string.servers_favorites_row)}",
+            type = ContentType.UNKNOWN,
+            rawType = ServerMediaKind.MIXED.contentType,
             items = emptyList()
         )
         return page(row, skip = 0)
@@ -172,7 +221,8 @@ class ServerCatalog @Inject constructor(
             name = "${connection.name} · ${context.getString(R.string.servers_resume_row)}",
             showInHome = true,
             hasExplicitShowInHome = true
-        ).takeIf { provider.supports(ServerCapability.USER_STATE_READ) }
+        // A server whose progress is imported shows it in the app's own Continue watching instead of a row of its own.
+        ).takeIf { !connection.importWatchState && provider.supports(ServerCapability.USER_STATE_READ) }
         val catalogs = libraries.map { library ->
             CatalogDescriptor(
                 type = library.kind.domainType(),
@@ -244,7 +294,8 @@ class ServerCatalog @Inject constructor(
         return Page(page.items.map(presenter(connection)), loaded.takeIf { hasMore })
     }
 
-    private suspend fun presenter(connection: ServerConnection): (ServerTitle) -> MetaPreview {
+    /** How [connection]'s titles are shown: as the server has them, or with addon metadata when that is on. */
+    internal suspend fun presenter(connection: ServerConnection): (ServerTitle) -> MetaPreview {
         if (!connection.useCatalogMetadata) return ServerTitle::preview
         val addons = addonRepository.getInstalledAddons().first().enabledAddons()
         return { title -> title.catalogPreview(addons) }
@@ -257,6 +308,7 @@ class ServerCatalog @Inject constructor(
         private const val SEARCH_LIMIT = 30
         private const val DETAILS_BUFFER = 16
         private const val RESUME_ID = "resume"
+        const val FAVORITES_ID = "favorites"
         private const val COLLECTION_PREFIX = "collection:"
         private const val SEARCH_PREFIX = "search."
         private val SEARCH_KINDS = listOf(ServerMediaKind.MOVIE, ServerMediaKind.SERIES)
