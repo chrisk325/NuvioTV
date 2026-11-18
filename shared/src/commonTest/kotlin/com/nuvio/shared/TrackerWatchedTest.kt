@@ -177,14 +177,14 @@ class IntroDbTest {
     }
 
     @Test
-    fun movieCreditsStopAtPostCreditsScene() {
+    fun movieIntroAndCreditsStopAtPostCreditsScene() {
         val segments = com.nuvio.shared.tracking.introDbIntervals(parse(
             """{"intro":{"start_sec":0,"end_sec":60},"outro":{"start_sec":6000,"end_sec":6300},"post_credits":{"start_sec":6200,"end_sec":6280}}"""
         ), isMovie = true)
-        assertEquals(1, segments.size)
-        assertEquals("movie-credits", segments[0].type)
-        assertEquals(6200.0, segments[0].endSeconds)
-        assertEquals("Skip to post-credits scene", segments[0].label)
+        assertEquals(listOf("intro", "movie-credits"), segments.map { it.type })
+        assertEquals(60.0, segments[0].endSeconds)
+        assertEquals(6200.0, segments[1].endSeconds)
+        assertEquals("Skip to post-credits scene", segments[1].label)
     }
 
     @Test

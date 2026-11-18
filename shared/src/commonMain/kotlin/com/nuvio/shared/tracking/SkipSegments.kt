@@ -99,8 +99,9 @@ class SkipSegmentsService(private val http: HttpClient, introDbBaseUrl: String) 
 
 /**
  * IntroDB /segments response → skip buttons, as Android IntroDbSegmentsResponse.toSkipIntervals:
- * episodes get intro / recap / outro; movies only get the end credits, cut short so they never
- * skip over a post-credits scene (the button then jumps to the scene).
+ * episodes get intro / recap / outro; movies get their intro / recap when IntroDB has one, and the
+ * end credits, cut short so they never skip over a post-credits scene (the button then jumps to
+ * the scene).
  */
 internal fun introDbIntervals(body: kotlinx.serialization.json.JsonObject, isMovie: Boolean): List<SkipSegment> {
     fun segment(key: String): Pair<Double, Double>? {
@@ -114,13 +115,17 @@ internal fun introDbIntervals(body: kotlinx.serialization.json.JsonObject, isMov
             segment(type)?.let { (start, end) -> SkipSegment(type, start, end) }
         }
     }
-    val credits = segment("outro") ?: return emptyList()
+    // Movies: an intro / recap when IntroDB has one (opening titles, "previously…"), then the credits.
+    val opening = listOf("intro", "recap").mapNotNull { type ->
+        segment(type)?.let { (start, end) -> SkipSegment(type, start, end) }
+    }
+    val credits = segment("outro") ?: return opening
     val scene = segment("post_credits")
     if (scene != null && scene.first < credits.second && scene.second > credits.first) {
-        return if (scene.first > credits.first) listOf(SkipSegment("movie-credits", credits.first, scene.first, toPostCredits = true))
+        return opening + if (scene.first > credits.first) listOf(SkipSegment("movie-credits", credits.first, scene.first, toPostCredits = true))
         else emptyList()
     }
-    return listOf(SkipSegment("movie-credits", credits.first, credits.second, toPostCredits = scene != null && scene.first >= credits.second))
+    return opening + SkipSegment("movie-credits", credits.first, credits.second, toPostCredits = scene != null && scene.first >= credits.second)
 }
 
 /**
