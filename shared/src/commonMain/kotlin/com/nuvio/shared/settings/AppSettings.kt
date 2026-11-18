@@ -134,6 +134,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = str("subs.color", "#FFFFFF")
         set(value) = put("subs.color", value)
 
+    /** Remember the subtitle picked for each series / movie and pick the same kind next time. */
+    var rememberSubtitlePerTitle: Boolean
+        get() = bool("subs.rememberPerTitle", true)
+        set(value) = put("subs.rememberPerTitle", value)
+
     /** Subtitle text brightness, 0–100 % of the text colour (dims bright subtitles, e.g. on HDR). */
     var subtitleBrightness: Int
         get() = int("subs.brightness", 100)

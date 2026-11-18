@@ -307,6 +307,13 @@ private struct SubtitleSettingsPane: View {
                 Text("Add-on subtitles in your languages are listed first in the player's Subtitles menu.")
             }
 
+            Section {
+                Toggle("Remember choice per series / movie",
+                       isOn: s.bind({ $0.rememberSubtitlePerTitle }, { $0.rememberSubtitlePerTitle = $1 }))
+            } footer: {
+                Text("The subtitle you pick (or Off) is used again for that show or movie: same language, forced, SDH and source, e.g. SDH for Breaking Bad and forced for Love Island.")
+            }
+
             Section("Style") {
                 NumberRow(title: "Subtitle size", unit: "%", step: 10, range: 50...200,
                           value: s.bind({ Int($0.subtitleSize) }, { $0.subtitleSize = Int32($1) }))

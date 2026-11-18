@@ -188,6 +188,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         skipSegments = []
         activeSkipSegment = nil
         autoSkipped = []
+        subtitleMemoryDone = false
+        addonSubtitlesSettled = false
         showNextPrompt = false
         scrobbledStart = false
         finished = false
@@ -266,6 +268,11 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             controller.addSubtitle(url: subtitle.url, title: label, lang: subtitle.lang)
         }
         addonSubtitleCount = ranked.count
+        // Give mpv a moment to list the added files, then settle the remembered choice.
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard self.request?.id == request.id else { return }
+        addonSubtitlesSettled = true
+        applyRememberedSubtitle()
     }
 
     private func rank(_ lang: String, _ preferred: [String]) -> Int {
@@ -298,7 +305,45 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     func selectAudio(_ track: MPVTrack) { controller.selectAudio(track.id) }
 
-    func selectSubtitle(_ track: MPVTrack?) { controller.selectSubtitle(track?.id) }
+    /// The viewer's pick in the Subtitles panel; remembered for this series / movie when enabled.
+    func selectSubtitle(_ track: MPVTrack?) {
+        controller.selectSubtitle(track?.id)
+        subtitleMemoryDone = true
+        guard settings?.rememberSubtitlePerTitle == true, let request, request.tracksProgress, let core else { return }
+        core.setSubtitleChoice(contentId: request.meta.id, choice: SubtitleChoice(track: track).encoded)
+    }
+
+    // MARK: Remembered subtitle per series / movie
+
+    /// Set once the remembered choice was applied (or the viewer picked one) for this file.
+    private var subtitleMemoryDone = false
+    /// Add-on subtitles have been added (or there are none), so every candidate is listed.
+    private var addonSubtitlesSettled = false
+
+    /// Picks the subtitle that best matches the one remembered for this title: at once when a
+    /// perfect match is listed, else once add-on subtitles have arrived (best acceptable match, or
+    /// mpv's own pick when nothing fits).
+    private func applyRememberedSubtitle() {
+        guard !subtitleMemoryDone, settings?.rememberSubtitlePerTitle == true,
+              let request, request.tracksProgress, let core,
+              let raw = core.subtitleChoice(contentId: request.meta.id),
+              let choice = SubtitleChoice.decode(raw) else { return }
+        if choice.off {
+            controller.selectSubtitle(nil)
+            subtitleMemoryDone = true
+            return
+        }
+        let best = subtitleTracks
+            .compactMap { track in choice.score(track).map { (track, $0) } }
+            .max { $0.1 < $1.1 }
+        if let best, best.1 >= choice.perfectScore || addonSubtitlesSettled {
+            if !best.0.isSelected { controller.selectSubtitle(best.0.id) }
+            subtitleMemoryDone = true
+        } else if addonSubtitlesSettled {
+            subtitleMemoryDone = true
+        }
+    }
+
 
     func setSpeed(_ value: Double) { controller.setSpeed(value) }
 
@@ -463,6 +508,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     func mpvTracksChanged(_ tracks: [MPVTrack]) {
         audioTracks = tracks.filter { $0.type == "audio" }
         subtitleTracks = tracks.filter { $0.type == "sub" }
+        applyRememberedSubtitle()
     }
 
     func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?, frameReady: Bool) {

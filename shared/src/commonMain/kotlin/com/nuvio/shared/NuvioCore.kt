@@ -853,6 +853,11 @@ class NuvioCore(
 
     fun progressFor(videoId: String): WatchProgress? = watchProgress.progressFor(videoId)
 
+    /** The subtitle choice remembered for a series / movie (the player's own JSON), per profile. */
+    fun subtitleChoice(contentId: String): String? = store.getString("subs.choice.$contentId")
+
+    fun setSubtitleChoice(contentId: String, choice: String?) = store.putString("subs.choice.$contentId", choice)
+
     fun latestProgressFor(contentId: String): WatchProgress? = watchProgress.latestFor(contentId)
 
     fun saveProgress(
