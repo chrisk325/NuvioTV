@@ -265,6 +265,8 @@ private struct PlayerSettingsPane: View {
                 Toggle("Skip intro / recap / credits button", isOn: s.bind({ $0.skipIntroEnabled }, { $0.skipIntroEnabled = $1 }))
                 Toggle("Auto-skip intros and recaps", isOn: s.bind({ $0.autoSkipIntro }, { $0.autoSkipIntro = $1 }))
                     .disabled(!s.settings.skipIntroEnabled)
+                Toggle("Auto-skip credits", isOn: s.bind({ $0.autoSkipCredits }, { $0.autoSkipCredits = $1 }))
+                    .disabled(!s.settings.skipIntroEnabled)
             }
 
             Section {

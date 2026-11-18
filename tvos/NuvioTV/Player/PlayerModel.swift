@@ -66,16 +66,24 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     @Published private(set) var autoSkipNotice: String?
     private var noticeTask: Task<Void, Never>?
 
-    /// Settings → Player → "Auto-skip intros and recaps": intro and recap segments are skipped as
-    /// soon as playback enters them; credits keep their button.
+    /// Settings → Player → "Auto-skip intros and recaps" / "Auto-skip credits": the segment is
+    /// skipped as soon as playback enters it. Skipping an episode's credits ends it (the next one
+    /// starts when auto-play is on); a movie's go to its post-credits scene when there is one.
     private func autoSkipIfNeeded(_ segment: SkipSegment?) {
-        guard let segment, settings?.autoSkipIntro == true, settings?.skipIntroEnabled == true,
-              segment.type == "intro" || segment.type == "recap" else { return }
+        guard let segment, let settings, settings.skipIntroEnabled else { return }
+        let isCredits = segment.type == "outro" || segment.type == "movie-credits"
+        let wanted = isCredits ? settings.autoSkipCredits : settings.autoSkipIntro
+        guard wanted else { return }
         let key = "\(segment.type)|\(segment.startSeconds)"
         guard !autoSkipped.contains(key) else { return }
         autoSkipped.insert(key)
         skip(segment)
-        autoSkipNotice = segment.type == "recap" ? "Skipped recap" : "Skipped intro"
+        switch segment.type {
+        case "recap": autoSkipNotice = "Skipped recap"
+        case "outro", "movie-credits":
+            autoSkipNotice = segment.toPostCredits ? "Skipped to post-credits scene" : "Skipped credits"
+        default: autoSkipNotice = "Skipped intro"
+        }
         noticeTask?.cancel()
         noticeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)

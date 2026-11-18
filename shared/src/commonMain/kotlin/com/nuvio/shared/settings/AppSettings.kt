@@ -84,6 +84,14 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("player.autoSkipIntro", false)
         set(value) = put("player.autoSkipIntro", value)
 
+    /**
+     * Skip end credits automatically: episodes jump to the end (the next one starts when auto-play
+     * is on), movies to their post-credits scene when there is one.
+     */
+    var autoSkipCredits: Boolean
+        get() = bool("player.autoSkipCredits", false)
+        set(value) = put("player.autoSkipCredits", value)
+
     // --- Subtitles ------------------------------------------------------------------------
 
     var subtitleLanguage: String
