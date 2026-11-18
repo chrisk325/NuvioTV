@@ -21,12 +21,20 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServerResumeImportTest {
     private var now = 5_000L
+    private val store = object : ServerResumeStore {
+        val values = mutableMapOf<String, String>()
+        override fun read(key: String): String? = values[key]
+        override fun write(key: String, value: String?) {
+            if (value == null) values.remove(key) else values[key] = value
+        }
+    }
 
     private class Harness(
         val provider: FakeServerProvider,
@@ -56,6 +64,7 @@ class ServerResumeImportTest {
             watchProgressRepository = progress,
             watchProgressPreferences = preferences,
             profileManager = profiles,
+            store = store,
             scope = CoroutineScope(Dispatchers.Unconfined),
             nowMs = { now }
         )
@@ -92,9 +101,13 @@ class ServerResumeImportTest {
         title = "Luffy's Past!"
     )
 
-    private fun ServerResumeImport.entriesFor(harness: Harness, resume: List<ServerResume>): List<WatchProgress> {
+    private fun ServerResumeImport.entriesFor(
+        harness: Harness,
+        resume: List<ServerResume>,
+        previous: ServerResumeCache = ServerResumeCache()
+    ): List<WatchProgress> {
         val connection = harness.repository.connection(harness.connection.id)!!
-        return runBlocking { entries(connection.id, harness.catalog.presenter(connection), resume) }
+        return runBlocking { entries(connection.id, harness.catalog.presenter(connection), resume, previous) }
     }
 
     @Test
@@ -158,11 +171,53 @@ class ServerResumeImportTest {
         val resume = listOf(ServerResume(show(id), episodeState(id, lastPlayed = null)))
 
         val first = harness.import.entriesFor(harness, resume).single()
+        val kept = harness.import.diff(ServerResumeCache(), listOf(first), complete = true, fetchedAtMs = now).cache
         now = 9_000L
-        val second = harness.import.entriesFor(harness, resume).single()
+        val second = harness.import.entriesFor(harness, resume, kept).single()
 
         assertEquals(5_000L, first.lastWatched)
         assertEquals(5_000L, second.lastWatched)
+    }
+
+    @Test
+    fun appliesOnlyWhatChangedSinceTheLastImport() {
+        val import = harness().import
+        val first = listOf(imported("c1", "ep1"), imported("c1", "ep2"))
+        val kept = import.diff(ServerResumeCache(), first, complete = true, fetchedAtMs = 1_000L)
+        assertEquals("the first import brings everything", listOf("ep1", "ep2"), kept.changed.map { it.videoId })
+
+        val moved = imported("c1", "ep2").copy(position = 50L, lastWatched = 2_000L)
+        val next = import.diff(kept.cache, listOf(imported("c1", "ep1"), moved, imported("c1", "ep3")), true, 3_000L)
+
+        assertEquals(listOf("ep2", "ep3"), next.changed.map { it.videoId })
+        assertTrue(next.dropped.isEmpty())
+        assertEquals(3_000L, next.cache.fetchedAtMs)
+    }
+
+    @Test
+    fun leavesContinueWatchingAloneWhenNothingChanged() {
+        val import = harness().import
+        val entries = listOf(imported("c1", "ep1"))
+        val kept = import.diff(ServerResumeCache(), entries, complete = true, fetchedAtMs = 1_000L).cache
+
+        val again = import.diff(kept, entries, complete = true, fetchedAtMs = 5_000L)
+
+        assertTrue(again.changed.isEmpty())
+        assertTrue(again.dropped.isEmpty())
+    }
+
+    @Test
+    fun dropsOnlyWhatTheServerListedBefore() {
+        val import = harness().import
+        val kept = import.diff(ServerResumeCache(), listOf(imported("c1", "ep1"), imported("c1", "ep2")), true, 1_000L).cache
+
+        val next = import.diff(kept, listOf(imported("c1", "ep2")), complete = true, fetchedAtMs = 2_000L)
+        val cutOff = import.diff(kept, listOf(imported("c1", "ep2")), complete = false, fetchedAtMs = 2_000L)
+
+        assertEquals(setOf("ep1"), next.dropped)
+        assertEquals(setOf("ep2"), next.cache.items.keys)
+        assertTrue("a full list may have cut ep1 off", cutOff.dropped.isEmpty())
+        assertEquals(setOf("ep1", "ep2"), cutOff.cache.items.keys)
     }
 
     private fun imported(connectionId: String, videoId: String, updatedAt: Long = 1_000L, season: Int? = 1, episode: Int? = 4) =
@@ -203,22 +258,55 @@ class ServerResumeImportTest {
     }
 
     @Test
-    fun importsTheServersListAndDropsWhatItFinished() {
-        val finished = imported("cfake", "gone", season = 1, episode = 2)
-        val harness = harness(stored = listOf(finished))
-        val id = harness.connection.id
+    fun importsTheServersListThenDropsOnlyWhatItStoppedListing() {
+        val id = "cfake"
+        val gone = ServerItemRef(id, "ep2").encode()
+        // Progress the server put here for the episode it stops listing, and some the server never listed.
+        val stored = listOf(
+            imported(id, gone, season = 1, episode = 2),
+            imported(id, "unrelated", season = 3, episode = 1).copy(contentId = "other")
+        )
+        val harness = harness(stored)
         harness.repository.setImportWatchState(id, true)
-        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        val connection = harness.repository.connection(id)!!
+        val second = episodeState(id).copy(videoId = gone, episode = 2)
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)), ServerResume(show(id), second))
 
-        runBlocking { harness.import.import(harness.repository.connection(id)!!) }
+        runBlocking { harness.import.import(connection) }
 
-        coVerify {
-            harness.progress.saveProgressBatch(
-                match { list -> list.single().videoId == ServerItemRef(id, "ep1").encode() },
-                syncRemote = false
-            )
+        coVerify(exactly = 1) {
+            harness.progress.saveProgressBatch(match { list -> list.size == 2 }, syncRemote = false)
         }
-        coVerify { harness.preferences.removeProgressBatch("show", listOf(1 to 2), 1) }
+        coVerify(exactly = 0) { harness.preferences.removeProgressBatch(any(), any(), any()) }
+
+        // Nothing changed: Continue watching is left alone.
+        runBlocking { harness.import.import(connection) }
+        coVerify(exactly = 1) { harness.progress.saveProgressBatch(any(), any()) }
+
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        runBlocking { harness.import.import(connection) }
+
+        coVerify(exactly = 1) { harness.preferences.removeProgressBatch("show", listOf(1 to 2), 1) }
+        coVerify(exactly = 1) { harness.progress.saveProgressBatch(any(), any()) }
+    }
+
+    @Test
+    fun keepsTheLastListAcrossRestartsUntilForgotten() {
+        now = 1_000_000L
+        val id = "cfake"
+        val first = harness()
+        first.repository.setImportWatchState(id, true)
+        first.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        runBlocking { first.import.import(first.repository.connection(id)!!) }
+
+        // A new import, as after a restart, reads the kept list: the server isn't asked again so soon.
+        val restarted = harness()
+        restarted.repository.setImportWatchState(id, true)
+        assertNull(restarted.import.refresh())
+
+        restarted.import.forget(id)
+        assertTrue(store.values.isEmpty())
+        assertNotNull(restarted.import.refresh())
     }
 
     @Test
