@@ -217,7 +217,9 @@ struct StreamsView: View {
     private func sorted(_ streams: [AddonStream]) -> [AddonStream] {
         let debrid = app.core.debrid.hasAnyProvider
         func playable(_ s: AddonStream) -> Bool {
+            // Info entries (statistics) keep the add-on's position instead of sinking to the bottom.
             s.isDirectlyPlayable || (debrid && s.needsDebridResolve && s.debridCache?.isCached != false)
+                || StreamRow.isInfo(s)
         }
         return streams.enumerated()
             .filter { debrid ? (app.core.debrid.showUncached || $0.element.debridCache?.isCached != false) : true }
@@ -293,9 +295,12 @@ struct StreamRow: View {
         stream.isDirectlyPlayable || (debridEnabled && stream.needsDebridResolve)
     }
 
-    /// Informational entries (e.g. AIOStreams statistics): nothing to play, shown as plain text.
-    private var isInfo: Bool {
-        stream.url == nil && stream.infoHash == nil && stream.ytId == nil && stream.externalUrl == nil
+    /// Informational entries (e.g. AIOStreams statistics): nothing to play here (at most an
+    /// external link), shown as plain text without the "Not playable" label.
+    private var isInfo: Bool { Self.isInfo(stream) }
+
+    static func isInfo(_ stream: AddonStream) -> Bool {
+        stream.url == nil && stream.infoHash == nil && stream.ytId == nil
     }
 
     var body: some View {
