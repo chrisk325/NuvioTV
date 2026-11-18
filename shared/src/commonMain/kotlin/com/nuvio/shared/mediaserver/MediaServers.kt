@@ -830,6 +830,57 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     }
 
     /**
+     * The servers' "Next Up": for each show being watched, the next unwatched episode. Entries
+     * carry no position (durationMs 0), like Trakt / Simkl up next, and the time the show was last
+     * played (its series' LastPlayedDate) so they sort with Continue Watching; when the server
+     * doesn't report that, they keep the server's order below everything dated.
+     */
+    suspend fun nextUp(): List<WatchProgress> = servers.flatMap { server ->
+        val items = runCatching {
+            get(server, "/Shows/NextUp?UserId=${server.userId}&Limit=50&Fields=ProviderIds" +
+                "&EnableUserData=true&EnableImages=false&EnableResumable=false&EnableRewatching=false")
+                ?.objects("Items").orEmpty()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
+        if (items.isEmpty()) return@flatMap emptyList()
+        val seriesIds = items.mapNotNull { it.nonBlank("SeriesId") }.distinct()
+        // When each show was last played (one request for all of them).
+        val lastPlayed = runCatching {
+            get(server, "/Users/${server.userId}/Items?Ids=${seriesIds.joinToString(",")}" +
+                "&Fields=ProviderIds&EnableUserData=true&EnableImages=false")
+                ?.objects("Items").orEmpty()
+                .mapNotNull { series ->
+                    val id = series.nonBlank("Id") ?: return@mapNotNull null
+                    series.obj("ProviderIds")?.let { ids -> ids.nonBlank("Imdb") ?: ids.nonBlank("IMDB") }
+                        ?.let { seriesImdb["${server.id}|$id"] = it }
+                    parseReleaseEpochMs(series.obj("UserData")?.str("LastPlayedDate"))?.let { id to it }
+                }.toMap()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyMap())
+        items.mapIndexedNotNull { index, item ->
+            val itemId = item.nonBlank("Id") ?: return@mapIndexedNotNull null
+            val seriesId = item.nonBlank("SeriesId") ?: return@mapIndexedNotNull null
+            val season = item.int("ParentIndexNumber") ?: return@mapIndexedNotNull null
+            val number = item.int("IndexNumber") ?: return@mapIndexedNotNull null
+            val imdb = seriesImdbId(server, seriesId)
+            val contentId = imdb ?: nativeId(server, seriesId)
+            WatchProgress(
+                contentId = contentId,
+                contentType = "series",
+                videoId = imdb?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
+                name = item.str("SeriesName") ?: contentId,
+                poster = "${server.address}/Items/$seriesId/Images/Primary?maxHeight=600&api_key=${server.token}",
+                background = "${server.address}/Items/$seriesId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
+                season = season,
+                episode = number,
+                episodeTitle = item.str("Name"),
+                positionMs = 0,
+                durationMs = 0,
+                updatedAtMs = lastPlayed[seriesId] ?: (items.size - index).toLong(),
+                thumbnail = "${server.address}/Items/$itemId/Images/Primary?maxWidth=640&api_key=${server.token}"
+            )
+        }
+    }
+
+    /**
      * Watched keys for everything played on the servers, in the app's format: "movie:<id>" for
      * movies, "<series imdb>:<season>:<episode>" (or the native episode id) for episodes.
      */

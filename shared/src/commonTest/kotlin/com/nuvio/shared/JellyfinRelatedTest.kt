@@ -96,4 +96,33 @@ class JellyfinRelatedTest {
         assertNull(streams[1].url)
         assertEquals("https://aio.example/a1", streams[2].url)
     }
+
+    @Test
+    fun nextUpBecomesUpNextEntries() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Shows/NextUp" -> respond(
+                    """{"Items":[
+                        {"Id":"e4","Type":"Episode","SeriesId":"s1","SeriesName":"Show One","Name":"Four","ParentIndexNumber":1,"IndexNumber":4},
+                        {"Id":"e9","Type":"Episode","SeriesId":"s2","SeriesName":"Show Two","Name":"Nine","ParentIndexNumber":2,"IndexNumber":9}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Users/u1/Items" -> respond(
+                    """{"Items":[
+                        {"Id":"s1","Type":"Series","ProviderIds":{"Imdb":"tt100"},"UserData":{"LastPlayedDate":"2026-11-01T10:00:00Z"}},
+                        {"Id":"s2","Type":"Series","ProviderIds":{},"UserData":{}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Users/u1/Items/s2" -> respond("""{"Id":"s2","Type":"Series","ProviderIds":{}}""", HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val next = MediaServerService(http, serverStore).nextUp()
+        assertEquals(listOf("tt100:1:4", "mediaserver:srv:e9"), next.map { it.videoId })
+        assertEquals(listOf("tt100", "mediaserver:srv:s2"), next.map { it.contentId })
+        assertEquals(0L, next[0].durationMs)
+        assertEquals(com.nuvio.shared.util.parseReleaseEpochMs("2026-11-01T10:00:00Z"), next[0].updatedAtMs)
+        assertEquals("Four", next[0].episodeTitle)
+        kotlin.test.assertTrue(next[1].updatedAtMs < next[0].updatedAtMs)
+    }
 }

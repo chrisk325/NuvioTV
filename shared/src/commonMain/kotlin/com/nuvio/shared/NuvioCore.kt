@@ -754,7 +754,7 @@ class NuvioCore(
     private val progressJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val progressListSerializer =
         kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
-    private val upNextSources = listOf("simkl", "trakt")
+    private val upNextSources = listOf("simkl", "trakt", "mediaserver")
     private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
     private var dismissedUpNext: Set<String> =
         store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
@@ -1042,6 +1042,10 @@ class NuvioCore(
         if (mediaServers.servers.isNotEmpty()) sync("Media server") {
             watched.addAll(mediaServers.playedKeys())
             mediaServers.resumeProgress().forEach(::mergeRemoteProgress)
+            // Next Up: the next episode of each show being watched on the server.
+            setUpNext("mediaserver", mediaServers.nextUp())
+        } else if (storedUpNext("mediaserver").isNotEmpty()) {
+            setUpNext("mediaserver", emptyList())
         }
         return error
     }
