@@ -164,8 +164,11 @@ jobs:
             -destination 'generic/platform=tvOS Simulator' \
             -derivedDataPath build/sim \
             -clonedSourcePackagesDirPath build/spm \
-            CODE_SIGNING_ALLOWED=NO | tee build/xcodebuild-sim.log | grep -E "error:|warning: .*NuvioTV/|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/sim/Build/Products/Debug-appletvsimulator/NuvioTV.app
+            CODE_SIGNING_ALLOWED=NO > build/xcodebuild-sim.log 2>&1 && status=0 || status=$?
+          grep -E "error:|warning: .*NuvioTV/|BUILD (SUCCEEDED|FAILED)" build/xcodebuild-sim.log || true
+          # A failed compile still leaves a NuvioTV.app folder behind: require success and the binary.
+          if [ "$status" -ne 0 ]; then echo "::error::xcodebuild (simulator) failed with exit code $status"; exit "$status"; fi
+          test -x build/sim/Build/Products/Debug-appletvsimulator/NuvioTV.app/NuvioTV
 
       - name: Build for Apple TV device (unsigned)
         if: env.BUILD_TARGET != 'simulator-only'
@@ -182,9 +185,12 @@ jobs:
             -derivedDataPath build/device \
             -clonedSourcePackagesDirPath build/spm \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            | tee build/xcodebuild-device.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+            > build/xcodebuild-device.log 2>&1 && status=0 || status=$?
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build/xcodebuild-device.log || true
+          # A failed compile still leaves a NuvioTV.app folder behind (14 KB IPA): require success and the binary.
+          if [ "$status" -ne 0 ]; then echo "::error::xcodebuild (device) failed with exit code $status"; exit "$status"; fi
           APP=build/device/Build/Products/Release-appletvos/NuvioTV.app
-          test -d "$APP"
+          test -x "$APP/NuvioTV"
           mkdir -p build/ipa/Payload
           cp -R "$APP" build/ipa/Payload/
           (cd build/ipa && zip -qry ../NuvioTV-unsigned.ipa Payload)

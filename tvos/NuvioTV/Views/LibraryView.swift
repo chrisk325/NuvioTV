@@ -62,9 +62,6 @@ struct LibraryView: View {
                     if app.core.mdbListTracker.isConnected {
                         MdbListLibrarySection(columns: columns)
                     }
-                        }
-                        .padding(.horizontal, 60)
-                    }
                     // Favourites on Jellyfin / Emby servers.
                     ForEach(app.serverFavorites) { group in
                         Text("Favourites · \(group.serverName)").font(.headline).padding(.horizontal, 60)
