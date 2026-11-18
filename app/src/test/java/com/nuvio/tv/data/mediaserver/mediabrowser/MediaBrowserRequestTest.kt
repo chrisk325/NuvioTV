@@ -320,6 +320,61 @@ class MediaBrowserRequestTest {
     }
 
     @Test
+    fun readsTheResumeListWithEachEpisodesShow() = runTest {
+        val http = TestHttp { request ->
+            when (request.url.encodedPath) {
+                "/UserItems/Resume" -> """{"Items": [
+                    {"Id": "e1", "Name": "Luffy's Past!", "Type": "Episode", "SeriesId": "s1", "SeriesName": "One Piece",
+                     "ParentIndexNumber": 1, "IndexNumber": 4, "RunTimeTicks": 14400000000,
+                     "UserData": {"PlaybackPositionTicks": 6000000000, "Played": false,
+                                  "LastPlayedDate": "2026-11-18T07:00:00.0000000Z"}},
+                    {"Id": "m1", "Name": "Heat", "Type": "Movie", "RunTimeTicks": 102000000000,
+                     "ProviderIds": {"Imdb": "tt0113277"},
+                     "UserData": {"PlaybackPositionTicks": 36000000000, "Played": false}}
+                ]}"""
+                else -> """{"Items": [{"Id": "s1", "Name": "One Piece", "Type": "Series",
+                    "ProviderIds": {"Imdb": "tt0388629", "Tmdb": "37854"}}]}"""
+            }
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val base = session("jellyfin", "https://media.example.com")
+        val session = ServerSession(
+            base.connection.copy(
+                libraries = listOf(
+                    ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE),
+                    ServerLibrary("lib2", "Shows", ServerMediaKind.SERIES)
+                )
+            ),
+            base.token
+        )
+
+        val (episode, movie) = jellyfin.resumeProgress(session, limit = 30)
+
+        assertEquals(ServerItemRef("cabc", "s1").encode(), episode.title.preview.id)
+        assertEquals("series", episode.title.preview.apiType)
+        assertEquals(TrackingExternalIds(imdb = "tt0388629", tmdb = 37854), episode.title.externalIds)
+        assertEquals(ServerItemRef("cabc", "e1").encode(), episode.state.videoId)
+        assertEquals(1 to 4, episode.state.season to episode.state.episode)
+        assertEquals(600_000L to 1_440_000L, episode.state.positionMs to episode.state.durationMs)
+        assertEquals(ServerItemRef("cabc", "m1").encode(), movie.title.preview.id)
+        assertNull(movie.state.lastPlayedEpochMs)
+        val shows = http.requests.single { it.url.encodedPath == "/Items" }
+        assertEquals("s1", shows.url.queryParameter("ids"))
+    }
+
+    @Test
+    fun leavesResumeItemsOutsideTheChosenLibraries() = runTest {
+        val http = TestHttp {
+            """{"Items": [{"Id": "e1", "Type": "Episode", "SeriesId": "s1", "SeriesName": "One Piece",
+                "ParentIndexNumber": 1, "IndexNumber": 4, "RunTimeTicks": 100, "UserData": {"PlaybackPositionTicks": 10}}]}"""
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        // The test session picks only a movie library.
+        assertTrue(jellyfin.resumeProgress(session("jellyfin", "https://media.example.com"), limit = 30).isEmpty())
+    }
+
+    @Test
     fun jellyfinMarksAndClearsFavourites() = runTest {
         val http = TestHttp { "{}" }
         val jellyfin = JellyfinProvider(http.client, testIdentity)

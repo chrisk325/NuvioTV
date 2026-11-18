@@ -77,6 +77,9 @@ interface ServerProvider {
 
     suspend fun resumeItems(session: ServerSession, limit: Int): List<ServerTitle> = unsupported()
 
+    /** The server's continue-watching list with each item's position, for the app's own Continue watching. */
+    suspend fun resumeProgress(session: ServerSession, limit: Int): List<ServerResume> = unsupported()
+
     suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean): Unit = unsupported()
 
     /** True when the server's libraries are catalogs (AIOStreams, AIOMetadata): rows for Home, not the Library. */

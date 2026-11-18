@@ -221,7 +221,8 @@ class ServerCatalog @Inject constructor(
             name = "${connection.name} · ${context.getString(R.string.servers_resume_row)}",
             showInHome = true,
             hasExplicitShowInHome = true
-        ).takeIf { provider.supports(ServerCapability.USER_STATE_READ) }
+        // A server whose progress is imported shows it in the app's own Continue watching instead of a row of its own.
+        ).takeIf { !connection.importWatchState && provider.supports(ServerCapability.USER_STATE_READ) }
         val catalogs = libraries.map { library ->
             CatalogDescriptor(
                 type = library.kind.domainType(),
@@ -293,7 +294,8 @@ class ServerCatalog @Inject constructor(
         return Page(page.items.map(presenter(connection)), loaded.takeIf { hasMore })
     }
 
-    private suspend fun presenter(connection: ServerConnection): (ServerTitle) -> MetaPreview {
+    /** How [connection]'s titles are shown: as the server has them, or with addon metadata when that is on. */
+    internal suspend fun presenter(connection: ServerConnection): (ServerTitle) -> MetaPreview {
         if (!connection.useCatalogMetadata) return ServerTitle::preview
         val addons = addonRepository.getInstalledAddons().first().enabledAddons()
         return { title -> title.catalogPreview(addons) }

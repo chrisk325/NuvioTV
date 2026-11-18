@@ -13,7 +13,8 @@ internal class FakeServerProvider(
     private val transcodes: Boolean = false,
     override val id: String = "fake",
     favorites: Boolean = false,
-    private val catalogs: Boolean = false
+    private val catalogs: Boolean = false,
+    var resume: List<ServerResume> = emptyList()
 ) : ServerProvider {
     override val displayName: String = "Fake"
     override val minimumVersion: String = "1.0"
@@ -75,6 +76,8 @@ internal class FakeServerProvider(
     }
 
     override suspend fun resumeItems(session: ServerSession, limit: Int): List<ServerTitle> = listOf(title(session, "3"))
+
+    override suspend fun resumeProgress(session: ServerSession, limit: Int): List<ServerResume> = resume
 
     override suspend fun details(session: ServerSession, itemId: String): ServerItemDetails {
         val kind = if (itemId == SHOW_ID) ServerMediaKind.SERIES else ServerMediaKind.MOVIE

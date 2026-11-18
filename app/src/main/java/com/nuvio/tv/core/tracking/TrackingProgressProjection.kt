@@ -1,5 +1,6 @@
 package com.nuvio.tv.core.tracking
 
+import com.nuvio.tv.data.mediaserver.ServerCatalog
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.model.WatchedItem
 
@@ -9,15 +10,23 @@ internal fun mergeProgressProjectionWithRetainedLocal(
     retainsLocalProgress: (String) -> Boolean
 ): List<WatchProgress> {
     val providerKeys = providerEntries.mapTo(mutableSetOf(), WatchProgress::projectionKey)
+    val tracked = providerEntries.mapTo(mutableSetOf(), WatchProgress::contentId)
     return buildList {
         addAll(providerEntries)
         localEntries.forEach { progress ->
-            if (retainsLocalProgress(progress.contentId) && progress.projectionKey() !in providerKeys) {
+            // Progress imported from a media server lives only in the app, so it stays unless the tracker has the title too.
+            val retained = retainsLocalProgress(progress.contentId) ||
+                (progress.isFromMediaServer && progress.contentId !in tracked)
+            if (retained && progress.projectionKey() !in providerKeys) {
                 add(progress)
             }
         }
     }.sortedByDescending(WatchProgress::lastWatched)
 }
+
+/** True for progress a media server put in the app (its server's continue watching, or a title opened from it). */
+internal val WatchProgress.isFromMediaServer: Boolean
+    get() = ServerCatalog.isServerAddon(addonBaseUrl)
 
 private fun WatchProgress.projectionKey() = Triple(contentId, season, episode)
 

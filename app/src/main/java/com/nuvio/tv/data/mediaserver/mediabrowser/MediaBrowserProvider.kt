@@ -17,6 +17,7 @@ import com.nuvio.tv.data.mediaserver.ServerPlaybackRequest
 import com.nuvio.tv.data.mediaserver.ServerPlaybackSession
 import com.nuvio.tv.data.mediaserver.ServerPlayerCapabilities
 import com.nuvio.tv.data.mediaserver.ServerProvider
+import com.nuvio.tv.data.mediaserver.ServerResume
 import com.nuvio.tv.data.mediaserver.ServerSession
 import com.nuvio.tv.data.mediaserver.ServerSignIn
 import com.nuvio.tv.data.mediaserver.ServerTitle
@@ -262,6 +263,59 @@ internal abstract class MediaBrowserProvider(
             }
             .distinctBy { it.preview.id }
     }
+
+    override suspend fun resumeProgress(session: ServerSession, limit: Int): List<ServerResume> {
+        val items = get(
+            session,
+            resumeEndpoint(session.userId),
+            ItemsResult.serializer(),
+            mapOf(
+                "limit" to limit.toString(),
+                "mediaTypes" to "Video",
+                "fields" to LIST_FIELDS,
+                "enableUserData" to "true",
+                "imageTypeLimit" to "1",
+                "enableImageTypes" to "Primary,Backdrop,Logo,Thumb"
+            )
+        ).items
+        val mapper = mapper(session)
+        val seriesIds = items.filter { it.isEpisode }.mapNotNull { it.seriesId }.distinct()
+        // An episode carries no ids of its show; fetching the shows lets the entry open and match the show.
+        val shows = if (seriesIds.isEmpty()) {
+            emptyMap()
+        } else {
+            try {
+                get(
+                    session,
+                    itemsEndpoint(session.userId),
+                    ItemsResult.serializer(),
+                    mapOf(
+                        "ids" to seriesIds.joinToString(","),
+                        "fields" to LIST_FIELDS,
+                        "imageTypeLimit" to "1",
+                        "enableImageTypes" to "Primary,Backdrop,Logo"
+                    )
+                ).items.associateBy { it.id }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
+        val libraries = session.connection.selectedLibraries
+        return items.mapNotNull { item ->
+            val state = mapper.userState(item) ?: return@mapNotNull null
+            val title = item.seriesId?.takeIf { item.isEpisode }?.let { shows[it] }?.let(mapper::title)
+                ?: mapper.resumeTitle(item)
+                ?: return@mapNotNull null
+            val kind = ServerMediaKind.fromContentType(title.preview.apiType) ?: return@mapNotNull null
+            if (libraries.none { it.holds(kind) }) return@mapNotNull null
+            ServerResume(title, state)
+        }
+    }
+
+    private val BaseItem.isEpisode: Boolean
+        get() = type.equals("Episode", ignoreCase = true)
 
     override suspend fun details(session: ServerSession, itemId: String): ServerItemDetails {
         val item = item(session, itemId, DETAIL_FIELDS)
