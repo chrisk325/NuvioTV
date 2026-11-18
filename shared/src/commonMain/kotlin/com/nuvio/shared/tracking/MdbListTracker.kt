@@ -29,6 +29,11 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType as HttpContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -45,7 +50,9 @@ import kotlinx.serialization.json.putJsonObject
 class MdbListTracker(
     private val http: HttpClient,
     private val store: KeyValueStore,
-    private val clientId: String
+    private val clientId: String,
+    /** Where list contents are kept between launches (tvOS: files in Caches; UserDefaults is small there). */
+    private val cacheStore: KeyValueStore = store
 ) {
     val isConfigured: Boolean get() = clientId.isNotBlank()
     val isConnected: Boolean get() = store.readToken(KEY) != null
@@ -111,6 +118,9 @@ class MdbListTracker(
     suspend fun signOut() {
         val token = store.readToken(KEY)
         store.writeToken(KEY, null)
+        clearListCache(null)
+        cacheStore.putString(LISTS_CACHE, null)
+        accountId = null
         val refresh = token?.refreshToken ?: return
         runCatching {
             http.post("$API/oauth/revoke_token/") {
@@ -296,7 +306,9 @@ class MdbListTracker(
     // --- Lists (Android MdbListLibraryRemote / MdbListLibraryWriter / MdbListLibrarySorter) ------
 
     private var accountId: Long? = null
-    private val itemCache = mutableMapOf<String, List<MdbListEntry>>()
+    /** List key → order ("sort|order") → titles; mirrored to [cacheStore], one entry per list. */
+    private val itemCache = mutableMapOf<String, MutableMap<String, List<MdbListEntry>>>()
+    private val cacheJson = Json { ignoreUnknownKeys = true }
 
     /** Library orders, as Android offers them for MDBList lists. */
     val sorts: List<MdbListSort> get() = MdbListSort.entries
@@ -318,7 +330,29 @@ class MdbListTracker(
      * services (external) and lists of other users the account liked, as on Android.
      */
     @Throws(Exception::class)
-    suspend fun lists(): List<MdbListLibraryList> {
+    suspend fun lists(refresh: Boolean): List<MdbListLibraryList> {
+        val previous = cachedLists()
+        if (!refresh && previous != null) return previous
+        val fetched = fetchLists()
+        // Lists MDBList reports as changed (or gone) are downloaded again; unchanged ones keep their
+        // cached titles. The watchlist has no update time, so a refresh always reloads it.
+        val before = previous.orEmpty().associate { it.key to it.updatedAt }
+        fetched.forEach { list ->
+            if (list.key == WATCHLIST_KEY || list.updatedAt == null || before[list.key] != list.updatedAt) dropItems(list.key)
+        }
+        before.keys.filter { key -> fetched.none { it.key == key } }.forEach(::dropItems)
+        cacheStore.putString(LISTS_CACHE, cacheJson.encodeToString(ListSerializer(CachedList.serializer()), fetched.map {
+            CachedList(it.key, it.name, it.kind, it.isPrivate, it.description, it.mediaType, it.updatedAt)
+        }))
+        return fetched
+    }
+
+    /** The lists as last downloaded, or null before the first download. */
+    fun cachedLists(): List<MdbListLibraryList>? = cacheStore.getString(LISTS_CACHE)?.let { raw ->
+        runCatching { cacheJson.decodeFromString(ListSerializer(CachedList.serializer()), raw) }.getOrNull()
+    }?.map { MdbListLibraryList(it.key, it.name, it.kind, it.isPrivate, it.description, it.mediaType, it.updatedAt) }
+
+    private suspend fun fetchLists(): List<MdbListLibraryList> {
         val result = mutableListOf(MdbListLibraryList(WATCHLIST_KEY, "Watchlist", MdbListLibraryList.WATCHLIST, false, null, null))
         val account = account()
         val own = getJson("/lists/user", "?unified=false&sort=ranked").asArray().orEmpty().mapNotNull { it.asObject() }
@@ -326,19 +360,19 @@ class MdbListTracker(
         own.filter { it.str("type") == "static" && it.bool("dynamic") != true }.forEach { row ->
             val id = row.listId() ?: return@forEach
             result += MdbListLibraryList("$LIST_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.PERSONAL,
-                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType())
+                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType(), row.updated())
         }
         own.filter { it.bool("dynamic") == true || it.str("type") == "dynamic" }.forEach { row ->
             val id = row.listId() ?: return@forEach
             result += MdbListLibraryList("$DYNAMIC_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.DYNAMIC,
-                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType())
+                row.bool("private") ?: false, row.nonBlank("description"), row.mediaType(), row.updated())
         }
         // External and liked lists are extras: when MDBList can't serve them the rest still loads.
         runCatching {
             getJson("/external/lists/user").asArray().orEmpty().mapNotNull { it.asObject() }.forEach { row ->
                 val id = row.long("id")?.takeIf { it > 0 } ?: return@forEach
                 result += MdbListLibraryList("$EXTERNAL_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.EXTERNAL,
-                    false, row.nonBlank("source"), row.mediaType())
+                    false, row.nonBlank("source"), row.mediaType(), row.updated())
             }
         }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         runCatching {
@@ -349,7 +383,7 @@ class MdbListTracker(
                     if (account != null && row.long("user_id") == account) return@forEach
                     val id = row.long("id")?.takeIf { it > 0 } ?: return@forEach
                     result += MdbListLibraryList("$LIKED_PREFIX$id", row.str("name") ?: return@forEach, MdbListLibraryList.LIKED,
-                        false, row.nonBlank("description"), row.mediaType())
+                        false, row.nonBlank("description"), row.mediaType(), row.updated())
                 }
                 val pagination = page.obj("pagination") ?: page
                 val limit = pagination.long("limit") ?: 100
@@ -392,8 +426,9 @@ class MdbListTracker(
     }
 
     private suspend fun entries(key: String, sort: String?, order: String): List<MdbListEntry> {
-        val cacheKey = "$key|$sort|$order"
-        itemCache[cacheKey]?.let { return it }
+        val cacheKey = "$sort|$order"
+        val stored = itemCache.getOrPut(key) { loadItems(key) }
+        stored[cacheKey]?.let { return it }
         val items = linkedMapOf<String, MdbListEntry>()
         var stop = false
         val query = buildString {
@@ -407,12 +442,37 @@ class MdbListTracker(
             // A read-only list repeating earlier titles means the server is looping.
             if (rows.isNotEmpty() && items.size == before && !isEditable(key)) stop = true
         }
-        return items.values.toList().also { itemCache[cacheKey] = it }
+        return items.values.toList().also {
+            stored[cacheKey] = it
+            saveItems(key, stored)
+        }
     }
 
-    /** Forgets cached list items (after changes, and on "Sync now"). */
-    fun clearListCache(key: String? = null) {
-        if (key == null) itemCache.clear() else itemCache.keys.removeAll { it.startsWith("$key|") }
+    /** Forgets cached titles of one list, or of every list (they download again when next shown). */
+    fun clearListCache(key: String?) {
+        if (key != null) return dropItems(key)
+        (itemCache.keys + cachedLists().orEmpty().map { it.key } + WATCHLIST_KEY).toSet().forEach(::dropItems)
+    }
+
+    private fun dropItems(key: String) {
+        itemCache.remove(key)
+        cacheStore.putString(itemsCacheKey(key), null)
+    }
+
+    private fun itemsCacheKey(key: String) = "mdblist.items." + key.replace(':', '_')
+
+    private fun loadItems(key: String): MutableMap<String, List<MdbListEntry>> {
+        val raw = cacheStore.getString(itemsCacheKey(key)) ?: return mutableMapOf()
+        val decoded = runCatching {
+            cacheJson.decodeFromString(MapSerializer(String.serializer(), ListSerializer(CachedEntry.serializer())), raw)
+        }.getOrNull() ?: return mutableMapOf()
+        return decoded.mapValues { (_, rows) -> rows.map { it.toEntry() } }.toMutableMap()
+    }
+
+    private fun saveItems(key: String, items: Map<String, List<MdbListEntry>>) {
+        val rows = items.mapValues { (_, list) -> list.map { CachedEntry.from(it) } }
+        cacheStore.putString(itemsCacheKey(key),
+            cacheJson.encodeToString(MapSerializer(String.serializer(), ListSerializer(CachedEntry.serializer())), rows))
     }
 
     @Throws(Exception::class)
@@ -420,6 +480,7 @@ class MdbListTracker(
         require(name.isNotBlank()) { "Enter a list name" }
         val body = buildJsonObject { put("name", name.trim()); put("private", isPrivate) }
         send("POST", "/lists/user/add", body.toString())
+        cacheStore.putString(LISTS_CACHE, null)
     }
 
     @Throws(Exception::class)
@@ -428,12 +489,14 @@ class MdbListTracker(
         val id = personalId(key)
         val body = buildJsonObject { put("name", name.trim()); put("private", isPrivate) }
         send("PUT", "/lists/$id", body.toString())
+        cacheStore.putString(LISTS_CACHE, null)
     }
 
     @Throws(Exception::class)
     suspend fun deleteList(key: String) {
         send("DELETE", "/lists/${personalId(key)}", null)
         clearListCache(key)
+        cacheStore.putString(LISTS_CACHE, null)
         setListHidden(key, false)
     }
 
@@ -486,6 +549,8 @@ class MdbListTracker(
 
     private fun JsonObject.listId(): Long? =
         long("id")?.takeIf { it > 0 } ?: this["ids"].asArray()?.singleOrNull()?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+
+    private fun JsonObject.updated(): String? = nonBlank("last_updated_at") ?: nonBlank("updated_at") ?: nonBlank("updated")
 
     private fun JsonObject.mediaType(): String? = when (str("mediatype")) {
         "movie" -> "movie"
@@ -618,6 +683,7 @@ class MdbListTracker(
         private const val API = "https://api.mdblist.com"
         private const val KEY = "mdblist.token"
         private const val HIDDEN_KEY = "mdblist.hidden_lists"
+        private const val LISTS_CACHE = "mdblist.lists.v1"
         const val WATCHLIST_KEY = "mdblist:watchlist"
         private const val LIST_PREFIX = "mdblist:list:"
         private const val DYNAMIC_PREFIX = "mdblist:dynamic:"
@@ -646,7 +712,9 @@ data class MdbListLibraryList(
     val isPrivate: Boolean,
     val description: String?,
     /** "movie" or "series" when the list holds only one kind, else null. */
-    val mediaType: String?
+    val mediaType: String?,
+    /** MDBList's last change of the list; cached titles are kept while it stays the same. */
+    val updatedAt: String? = null
 ) {
     /** Own static lists can be renamed, made private / public and deleted. */
     val isEditable: Boolean get() = kind == PERSONAL
@@ -665,3 +733,59 @@ data class MdbListLibraryList(
 }
 
 internal data class MdbListEntry(val preview: MetaPreview, val releaseDate: String?)
+
+@Serializable
+private data class CachedList(
+    val key: String,
+    val name: String,
+    val kind: String,
+    val isPrivate: Boolean,
+    val description: String? = null,
+    val mediaType: String? = null,
+    val updatedAt: String? = null
+)
+
+@Serializable
+private data class CachedEntry(
+    val id: String,
+    val isShow: Boolean,
+    val name: String,
+    val poster: String? = null,
+    val background: String? = null,
+    val description: String? = null,
+    val year: String? = null,
+    val imdbId: String? = null,
+    val releaseDate: String? = null
+) {
+    fun toEntry() = MdbListEntry(
+        MetaPreview(
+            id = id,
+            type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
+            name = name,
+            poster = poster,
+            posterShape = PosterShape.POSTER,
+            background = background,
+            logo = null,
+            description = description,
+            releaseInfo = year,
+            imdbRating = null,
+            genres = emptyList(),
+            imdbId = imdbId
+        ),
+        releaseDate
+    )
+
+    companion object {
+        fun from(entry: MdbListEntry) = CachedEntry(
+            id = entry.preview.id,
+            isShow = entry.preview.type == ContentType.SERIES,
+            name = entry.preview.name,
+            poster = entry.preview.poster,
+            background = entry.preview.background,
+            description = entry.preview.description,
+            year = entry.preview.releaseInfo,
+            imdbId = entry.preview.imdbId,
+            releaseDate = entry.releaseDate
+        )
+    }
+}

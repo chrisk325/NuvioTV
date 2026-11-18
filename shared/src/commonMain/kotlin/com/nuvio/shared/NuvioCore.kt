@@ -93,7 +93,9 @@ class NuvioCore(
     /** Active profile (1 = primary); its data lives in [store]. */
     val profileIndex: Int = 1,
     /** Device-wide store for the profile list and the shared Nuvio account session. */
-    deviceStore: KeyValueStore = store
+    deviceStore: KeyValueStore = store,
+    /** Large caches (MDBList list contents); defaults to [store]. */
+    cacheStore: KeyValueStore? = null
 ) {
     internal val store = store
     internal val http = httpClient
@@ -116,7 +118,7 @@ class NuvioCore(
     val aniList = AniListService(httpClient, store, config.aniListClientId)
     val mdbList = MdbListService(httpClient)
     /** MDBList as a tracker (OAuth sign-in): scrobbles, watched history, progress, watchlist. */
-    val mdbListTracker = com.nuvio.shared.tracking.MdbListTracker(httpClient, store, config.mdbListClientId)
+    val mdbListTracker = com.nuvio.shared.tracking.MdbListTracker(httpClient, store, config.mdbListClientId, cacheStore ?: store)
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)
     val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
     val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
@@ -1006,7 +1008,8 @@ class NuvioCore(
         if (mdbListTracker.isConnected) sync("MDBList") {
             watched.addAll(mdbListTracker.watchedKeys())
             mdbListTracker.playbackProgress().forEach(::mergeRemoteProgress)
-            mdbListTracker.clearListCache()
+            // Re-checks which lists changed on MDBList; unchanged lists keep their cached titles.
+            runCatching { mdbListTracker.lists(refresh = true) }.onFailure { if (it is CancellationException) throw it }
             mdbListWatchlistCache = mdbListTracker.watchlist()
         } else {
             mdbListWatchlistCache = emptyList()

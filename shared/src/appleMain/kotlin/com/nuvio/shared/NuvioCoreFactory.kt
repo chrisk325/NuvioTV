@@ -24,6 +24,7 @@ fun createNuvioCoreForProfile(config: NuvioConfig, profileIndex: Int): NuvioCore
         dispatcher = Dispatchers.Main,
         config = config,
         profileIndex = profileIndex,
-        deviceStore = device
+        deviceStore = device,
+        cacheStore = com.nuvio.shared.storage.CachesFileStore(if (profileIndex == 1) "nuvio-cache" else "nuvio-cache-p$profileIndex")
     )
 }

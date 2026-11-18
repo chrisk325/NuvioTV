@@ -82,7 +82,7 @@ class MdbListListsTest {
         val json = when {
             path == "/oauth/token/" -> """{"access_token":"tok","refresh_token":"ref","expires_in":3600}"""
             path == "/user" -> """{"user_id":7,"username":"me"}"""
-            path == "/lists/user" -> """[{"id":1,"name":"Mine","private":true,"type":"static","user_id":7,"mediatype":"movie"},
+            path == "/lists/user" -> """[{"id":1,"name":"Mine","private":true,"type":"static","user_id":7,"mediatype":"movie","updated_at":"2026-01-01T00:00:00Z"},
                 {"id":2,"name":"Dyn","private":false,"dynamic":true,"type":"dynamic","user_id":7},
                 {"id":3,"name":"Other","private":false,"type":"static","user_id":8}]"""
             path == "/external/lists/user" -> """[{"id":10,"name":"Ext","source":"trakt"}]"""
@@ -96,8 +96,7 @@ class MdbListListsTest {
         respond(json, HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
     })
 
-    private suspend fun tracker(): MdbListTracker {
-        val store = InMemoryStore()
+    private suspend fun tracker(store: InMemoryStore = InMemoryStore()): MdbListTracker {
         val t = MdbListTracker(client, store, "cid")
         t.pollSignIn(com.nuvio.shared.tracking.DeviceSignIn("mdblist", "C", "u", "d", 5))
         return t
@@ -106,7 +105,7 @@ class MdbListListsTest {
     @Test
     fun listsSortsAndChanges() = runTest {
         val t = tracker()
-        val lists = t.lists()
+        val lists = t.lists(refresh = true)
         assertEquals(listOf("mdblist:watchlist", "mdblist:list:1", "mdblist:dynamic:2", "mdblist:external:10", "mdblist:liked:20"), lists.map { it.key })
         assertTrue(lists[1].isEditable && lists[1].accepts(isShow = false) && !lists[1].accepts(isShow = true))
         assertFalse(lists[2].acceptsItems)
@@ -134,5 +133,29 @@ class MdbListListsTest {
 
         t.setListHidden("mdblist:liked:20", true)
         assertEquals(setOf("mdblist:liked:20"), t.hiddenListKeys)
+    }
+
+    @Test
+    fun listContentsSurviveRelaunch() = runTest {
+        val store = InMemoryStore()
+        val first = tracker(store)
+        first.lists(refresh = true)
+        first.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.DEFAULT)
+        requests.clear()
+
+        // A new tracker over the same storage (the app relaunched): no network for lists or titles.
+        val second = MdbListTracker(client, store, "cid")
+        assertEquals(5, second.lists(refresh = false).size)
+        assertEquals(listOf("tt2", "tt1"), second.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.DEFAULT).map { it.id })
+        assertTrue(requests.none { "/lists/" in it }, requests.toString())
+
+        // A refresh with unchanged update times keeps the cached titles (only the watchlist reloads).
+        second.lists(refresh = true)
+        requests.clear()
+        second.listItems("mdblist:list:1", com.nuvio.shared.tracking.MdbListSort.DEFAULT)
+        assertTrue(requests.none { "/lists/1/items" in it }, requests.toString())
+
+        second.signOut()
+        assertEquals(null, second.cachedLists())
     }
 }

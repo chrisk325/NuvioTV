@@ -21,6 +21,7 @@ struct MdbListLibrarySection: View {
     @State private var editor: MdbListEditor?
     @State private var confirmDelete = false
     @State private var reload = 0
+    @State private var isRefreshing = false
 
     private var tracker: MdbListTracker { app.core.mdbListTracker }
     private var visibleLists: [MdbListLibraryList] { lists.filter { !hidden.contains($0.key) } }
@@ -54,6 +55,10 @@ struct MdbListLibrarySection: View {
                 Button { editor = MdbListEditor(key: nil, name: "", isPrivate: true) } label: {
                     Label("New list", systemImage: "plus")
                 }
+                Button { Task { await refresh() } } label: {
+                    Label(isRefreshing ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(isRefreshing)
                 if let current, current.isEditable {
                     Button { editor = MdbListEditor(key: current.key, name: current.name, isPrivate: current.isPrivate) } label: {
                         Label("Edit list", systemImage: "pencil")
@@ -111,10 +116,8 @@ struct MdbListLibrarySection: View {
         .sheet(item: $editor) { value in
             MdbListEditorSheet(editor: value) { saved in
                 editor = nil
-                if saved {
-                    tracker.clearListCache(key: nil)
-                    reload += 1
-                }
+                // The list names are downloaded again; cached titles stay.
+                if saved { reload += 1 }
             }
         }
     }
@@ -130,13 +133,23 @@ struct MdbListLibrarySection: View {
     }
 
     @MainActor
-    private func loadLists() async {
+    private func loadLists(refresh: Bool = false) async {
         hidden = tracker.hiddenListKeys
         do {
-            lists = try await tracker.lists()
+            lists = try await tracker.lists(refresh: refresh)
         } catch {
             if lists.isEmpty { self.error = error.localizedDescription }
         }
+    }
+
+    /// Downloads the lists and the shown list again (cached copies are used otherwise).
+    @MainActor
+    private func refresh() async {
+        isRefreshing = true
+        if let key = current?.key { tracker.clearListCache(key: key) }
+        await loadLists(refresh: true)
+        await loadItems()
+        isRefreshing = false
     }
 
     @MainActor
@@ -283,7 +296,7 @@ struct MdbListMembershipSheet: View {
     private func load() async {
         isLoading = true
         do {
-            let all = try await tracker.lists().filter { $0.accepts(isShow: meta.isSeriesLike) }
+            let all = try await tracker.lists(refresh: false).filter { $0.accepts(isShow: meta.isSeriesLike) }
             lists = all
             member = try await tracker.listsContaining(imdbId: imdbId, tmdbId: tmdbId, lists: all)
             error = nil
@@ -340,7 +353,7 @@ struct MdbListVisibilityView: View {
         .task {
             hidden = app.core.mdbListTracker.hiddenListKeys
             do {
-                lists = try await app.core.mdbListTracker.lists()
+                lists = try await app.core.mdbListTracker.lists(refresh: false)
             } catch {
                 self.error = error.localizedDescription
             }
