@@ -45,3 +45,28 @@ internal fun mergeWatchedEpisodeProjection(
     }
     return merged
 }
+
+/**
+ * Adds [external] entries (a media server's continue-watching list) to [entries], one per title. One for a title
+ * already shown replaces it only when fresher, so playing it here takes over; one for a title the tracker has
+ * ([trackedContentIds]) is left out, as the tracker is the source then.
+ */
+internal fun mergeExternalProgress(
+    entries: List<WatchProgress>,
+    external: List<WatchProgress>,
+    trackedContentIds: Set<String> = emptySet()
+): List<WatchProgress> {
+    if (external.isEmpty()) return entries
+    val newestShown = entries.groupBy(WatchProgress::contentId).mapValues { (_, items) -> items.maxOf(WatchProgress::lastWatched) }
+    val replaced = mutableSetOf<String>()
+    val added = external
+        .filter { it.contentId !in trackedContentIds }
+        .groupBy(WatchProgress::contentId)
+        .mapNotNull { (_, items) -> items.maxByOrNull(WatchProgress::lastWatched) }
+        .filter { entry ->
+            val shown = newestShown[entry.contentId] ?: return@filter true
+            (entry.lastWatched > shown).also { fresher -> if (fresher) replaced += entry.contentId }
+        }
+    if (added.isEmpty()) return entries
+    return (entries.filterNot { it.contentId in replaced } + added).sortedByDescending(WatchProgress::lastWatched)
+}

@@ -10,9 +10,12 @@ import com.nuvio.tv.domain.model.PosterShape
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.WatchProgressRepository
+import com.nuvio.tv.core.tracking.mergeExternalProgress
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -171,123 +174,158 @@ class ServerResumeImportTest {
         val resume = listOf(ServerResume(show(id), episodeState(id, lastPlayed = null)))
 
         val first = harness.import.entriesFor(harness, resume).single()
-        val kept = harness.import.diff(ServerResumeCache(), listOf(first), complete = true, fetchedAtMs = now).cache
+        val kept = harness.import.next(ServerResumeCache(), listOf(first), complete = true, fetchedAtMs = now)
         now = 9_000L
         val second = harness.import.entriesFor(harness, resume, kept).single()
 
         assertEquals(5_000L, first.lastWatched)
-        assertEquals(5_000L, second.lastWatched)
+        assertEquals("an unchanged item comes back identical, so Continue watching doesn't change", first, second)
+    }
+
+    private fun imported(
+        connectionId: String,
+        videoId: String,
+        position: Long = 10L,
+        updatedAt: Long = 1_000L,
+        season: Int? = 1,
+        episode: Int? = 4
+    ) = WatchProgress(
+        contentId = "show",
+        contentType = "series",
+        name = "One Piece",
+        poster = null,
+        backdrop = null,
+        logo = null,
+        videoId = videoId,
+        season = season,
+        episode = episode,
+        episodeTitle = null,
+        position = position,
+        duration = 100L,
+        lastWatched = updatedAt,
+        addonBaseUrl = ServerCatalog.baseUrl(connectionId)
+    )
+
+    @Test
+    fun keepsTheServersListAsItIs() {
+        val import = harness().import
+        val listed = listOf(imported("c1", "ep1"), imported("c1", "ep2"))
+
+        val kept = import.next(ServerResumeCache(), listed, complete = true, fetchedAtMs = 3_000L)
+
+        assertEquals(listed, kept.shown)
+        assertEquals(3_000L, kept.fetchedAtMs)
     }
 
     @Test
-    fun appliesOnlyWhatChangedSinceTheLastImport() {
+    fun dropsWhatTheServerNoLongerListsUnlessTheListWasCutOff() {
         val import = harness().import
-        val first = listOf(imported("c1", "ep1"), imported("c1", "ep2"))
-        val kept = import.diff(ServerResumeCache(), first, complete = true, fetchedAtMs = 1_000L)
-        assertEquals("the first import brings everything", listOf("ep1", "ep2"), kept.changed.map { it.videoId })
+        val kept = import.next(ServerResumeCache(), listOf(imported("c1", "ep1"), imported("c1", "ep2")), true, 1_000L)
 
-        val moved = imported("c1", "ep2").copy(position = 50L, lastWatched = 2_000L)
-        val next = import.diff(kept.cache, listOf(imported("c1", "ep1"), moved, imported("c1", "ep3")), true, 3_000L)
+        val complete = import.next(kept, listOf(imported("c1", "ep2")), complete = true, fetchedAtMs = 2_000L)
+        val cutOff = import.next(kept, listOf(imported("c1", "ep2")), complete = false, fetchedAtMs = 2_000L)
 
-        assertEquals(listOf("ep2", "ep3"), next.changed.map { it.videoId })
-        assertTrue(next.dropped.isEmpty())
-        assertEquals(3_000L, next.cache.fetchedAtMs)
+        assertEquals(listOf("ep2"), complete.shown.map { it.videoId })
+        assertEquals(setOf("ep1", "ep2"), cutOff.shown.mapTo(mutableSetOf()) { it.videoId })
     }
 
     @Test
-    fun leavesContinueWatchingAloneWhenNothingChanged() {
+    fun aDismissedItemStaysOutUntilTheServerChangesIt() {
         val import = harness().import
-        val entries = listOf(imported("c1", "ep1"))
-        val kept = import.diff(ServerResumeCache(), entries, complete = true, fetchedAtMs = 1_000L).cache
+        val first = import.next(ServerResumeCache(), listOf(imported("c1", "ep1"), imported("c1", "ep2")), true, 1_000L)
+        val dismissed = first.copy(dismissed = setOf("ep1"))
 
-        val again = import.diff(kept, entries, complete = true, fetchedAtMs = 5_000L)
-
-        assertTrue(again.changed.isEmpty())
-        assertTrue(again.dropped.isEmpty())
-    }
-
-    @Test
-    fun dropsOnlyWhatTheServerListedBefore() {
-        val import = harness().import
-        val kept = import.diff(ServerResumeCache(), listOf(imported("c1", "ep1"), imported("c1", "ep2")), true, 1_000L).cache
-
-        val next = import.diff(kept, listOf(imported("c1", "ep2")), complete = true, fetchedAtMs = 2_000L)
-        val cutOff = import.diff(kept, listOf(imported("c1", "ep2")), complete = false, fetchedAtMs = 2_000L)
-
-        assertEquals(setOf("ep1"), next.dropped)
-        assertEquals(setOf("ep2"), next.cache.items.keys)
-        assertTrue("a full list may have cut ep1 off", cutOff.dropped.isEmpty())
-        assertEquals(setOf("ep1", "ep2"), cutOff.cache.items.keys)
-    }
-
-    private fun imported(connectionId: String, videoId: String, updatedAt: Long = 1_000L, season: Int? = 1, episode: Int? = 4) =
-        WatchProgress(
-            contentId = "show",
-            contentType = "series",
-            name = "One Piece",
-            poster = null,
-            backdrop = null,
-            logo = null,
-            videoId = videoId,
-            season = season,
-            episode = episode,
-            episodeTitle = null,
-            position = 10L,
-            duration = 100L,
-            lastWatched = updatedAt,
-            addonBaseUrl = ServerCatalog.baseUrl(connectionId)
+        val unchanged = import.next(dismissed, listOf(imported("c1", "ep1"), imported("c1", "ep2")), true, 2_000L)
+        val watchedFurther = import.next(
+            dismissed,
+            listOf(imported("c1", "ep1", position = 40L, updatedAt = 1_500L), imported("c1", "ep2")),
+            complete = true,
+            fetchedAtMs = 2_000L
         )
 
-    @Test
-    fun dropsWhatTheServerNoLongerLists() {
-        val import = harness().import
-
-        assertTrue(import.isStale(imported("c1", "ep1"), "c1", listed = setOf("ep2"), fetchedAtMs = 5_000L))
-        assertFalse(import.isStale(imported("c1", "ep2"), "c1", listed = setOf("ep2"), fetchedAtMs = 5_000L))
+        assertEquals(listOf("ep2"), unchanged.shown.map { it.videoId })
+        assertEquals(listOf("ep1", "ep2"), watchedFurther.shown.map { it.videoId })
+        assertTrue(watchedFurther.dismissed.isEmpty())
     }
 
     @Test
-    fun leavesOtherProgressAlone() {
+    fun aDismissedItemTheServerDroppedIsForgotten() {
         val import = harness().import
-        val listed = emptySet<String>()
+        val dismissed = import.next(ServerResumeCache(), listOf(imported("c1", "ep1")), true, 1_000L)
+            .copy(dismissed = setOf("ep1"))
 
-        // Another server's, one played here (saved without the server as its source), and one being played now.
-        assertFalse(import.isStale(imported("c2", "ep1"), "c1", listed, fetchedAtMs = 5_000L))
-        assertFalse(import.isStale(imported("c1", "ep1").copy(addonBaseUrl = null), "c1", listed, 5_000L))
-        assertFalse(import.isStale(imported("c1", "ep1", updatedAt = 6_000L), "c1", listed, 5_000L))
+        val next = import.next(dismissed, emptyList(), complete = true, fetchedAtMs = 2_000L)
+
+        assertTrue(next.dismissed.isEmpty())
     }
 
     @Test
-    fun importsTheServersListThenDropsOnlyWhatItStoppedListing() {
+    fun keepsTheServersListApartFromTheAppsOwnProgress() {
+        val own = imported("c1", "ep1", updatedAt = 5_000L).copy(addonBaseUrl = null)
+        val movie = imported("c1", "m1", season = null, episode = null).copy(contentId = "movie", contentType = "movie")
+        val fromServer = listOf(imported("c1", "ep1", updatedAt = 1_000L), movie)
+
+        val merged = mergeExternalProgress(listOf(own), fromServer)
+
+        // Playing the show here is newer, so it wins; the movie only the server has.
+        assertEquals(listOf(own, movie), merged)
+        assertEquals(
+            "with a tracker that has the movie, the tracker is the source for it",
+            listOf(own),
+            mergeExternalProgress(listOf(own), fromServer, trackedContentIds = setOf("movie"))
+        )
+    }
+
+    @Test
+    fun showsTheServersListWithoutStoringIt() {
+        val harness = harness()
+        val id = harness.connection.id
+        harness.repository.setImportWatchState(id, true)
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+
+        runBlocking { harness.import.import(harness.repository.connection(id)!!) }
+
+        verify { harness.progress.setExternalProgress(match { list -> list.single().videoId == ServerItemRef(id, "ep1").encode() }) }
+        coVerify(exactly = 0) { harness.progress.saveProgressBatch(any(), any()) }
+    }
+
+    @Test
+    fun aRemovedItemStaysOutOfContinueWatching() {
+        val harness = harness()
+        val id = harness.connection.id
+        harness.repository.setImportWatchState(id, true)
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        val connection = harness.repository.connection(id)!!
+        runBlocking { harness.import.import(connection) }
+        val shownEach = mutableListOf<List<WatchProgress>>()
+        verify { harness.progress.setExternalProgress(capture(shownEach)) }
+        val shown = shownEach.last()
+        assertEquals(1, shown.size)
+
+        harness.import.dismiss(shown)
+        // Asked again, the server reports it unchanged, so it stays out.
+        now += 10 * 60_000L
+        runBlocking { harness.import.import(connection) }
+
+        shownEach.clear()
+        verify { harness.progress.setExternalProgress(capture(shownEach)) }
+        assertTrue(shownEach.last().isEmpty())
+    }
+
+    @Test
+    fun takesOutWhatEarlierVersionsStoredWithTheSyncedProgress() {
         val id = "cfake"
-        val gone = ServerItemRef(id, "ep2").encode()
-        // Progress the server put here for the episode it stops listing, and some the server never listed.
         val stored = listOf(
-            imported(id, gone, season = 1, episode = 2),
-            imported(id, "unrelated", season = 3, episode = 1).copy(contentId = "other")
+            imported(id, ServerItemRef(id, "ep1").encode(), season = 1, episode = 4),
+            imported(id, "played-here", season = 1, episode = 5).copy(contentId = "other", addonBaseUrl = null)
         )
         val harness = harness(stored)
         harness.repository.setImportWatchState(id, true)
-        val connection = harness.repository.connection(id)!!
-        val second = episodeState(id).copy(videoId = gone, episode = 2)
-        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)), ServerResume(show(id), second))
 
-        runBlocking { harness.import.import(connection) }
+        harness.import.show()
 
-        coVerify(exactly = 1) {
-            harness.progress.saveProgressBatch(match { list -> list.size == 2 }, syncRemote = false)
-        }
-        coVerify(exactly = 0) { harness.preferences.removeProgressBatch(any(), any(), any()) }
-
-        // Nothing changed: Continue watching is left alone.
-        runBlocking { harness.import.import(connection) }
-        coVerify(exactly = 1) { harness.progress.saveProgressBatch(any(), any()) }
-
-        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
-        runBlocking { harness.import.import(connection) }
-
-        coVerify(exactly = 1) { harness.preferences.removeProgressBatch("show", listOf(1 to 2), 1) }
-        coVerify(exactly = 1) { harness.progress.saveProgressBatch(any(), any()) }
+        coVerify(exactly = 1) { harness.preferences.removeProgressBatch("show", listOf(1 to 4), 1) }
+        coVerify(exactly = 0) { harness.preferences.removeProgressBatch("other", any(), any()) }
     }
 
     @Test

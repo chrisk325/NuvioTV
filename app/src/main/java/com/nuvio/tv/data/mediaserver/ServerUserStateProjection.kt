@@ -2,13 +2,10 @@ package com.nuvio.tv.data.mediaserver
 
 import android.util.Log
 import com.nuvio.tv.core.profile.ProfileManager
-import com.nuvio.tv.data.local.WatchProgressPreferences
 import com.nuvio.tv.data.local.WatchedItemsPreferences
 import com.nuvio.tv.domain.model.ContentType
 import com.nuvio.tv.domain.model.Meta
-import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.model.WatchedItem
-import com.nuvio.tv.domain.repository.WatchProgressRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -22,8 +19,7 @@ import kotlinx.coroutines.launch
 class ServerUserStateProjection @Inject constructor(
     private val catalog: ServerCatalog,
     private val repository: ServerRepository,
-    private val watchProgressRepository: WatchProgressRepository,
-    private val watchProgressPreferences: WatchProgressPreferences,
+    private val resumeImport: ServerResumeImport,
     private val watchedItemsPreferences: WatchedItemsPreferences,
     private val profileManager: ProfileManager
 ) {
@@ -50,11 +46,8 @@ class ServerUserStateProjection @Inject constructor(
         val isSeries = meta.type == ContentType.SERIES
         val profileId = profileManager.activeProfileId.value
 
-        val progress = details.userStates
-            .filter { !it.played && it.positionMs > 0L && it.durationMs > 0L && it.lastPlayedEpochMs != null }
-            .map { it.toProgress(meta, isSeries, ServerCatalog.baseUrl(connection.id)) }
-            .filter { isNewer(it, isSeries, profileId) }
-        watchProgressRepository.saveProgressBatch(progress, syncRemote = false)
+        // Progress comes from the server's continue-watching list, kept apart from the app's synced progress.
+        if (details.userStates.any { !it.played && it.positionMs > 0L }) resumeImport.refreshSoon(connection.id)
 
         val states = details.userStates.filter { !isSeries || (it.season != null && it.episode != null) }
         val watchedEpisodes = if (isSeries) watchedItemsPreferences.getWatchedEpisodesForContent(meta.id, profileId).first() else emptySet()
@@ -75,32 +68,6 @@ class ServerUserStateProjection @Inject constructor(
             watchedItemsPreferences.unmarkAsWatched(meta.id, profileId = profileId)
         }
     }
-
-    private suspend fun isNewer(progress: WatchProgress, isSeries: Boolean, profileId: Int): Boolean {
-        val existing = if (isSeries) {
-            watchProgressPreferences.getEpisodeProgress(progress.contentId, progress.season ?: 0, progress.episode ?: 0, profileId).first()
-        } else {
-            watchProgressPreferences.getProgress(progress.contentId, profileId).first()
-        }
-        return existing == null || existing.lastWatched < progress.lastWatched
-    }
-
-    private fun ServerUserState.toProgress(meta: Meta, isSeries: Boolean, addonBaseUrl: String) = WatchProgress(
-        contentId = meta.id,
-        contentType = meta.apiType,
-        name = meta.name,
-        poster = meta.poster,
-        backdrop = meta.background,
-        logo = meta.logo,
-        videoId = videoId,
-        season = season.takeIf { isSeries },
-        episode = episode.takeIf { isSeries },
-        episodeTitle = title.takeIf { isSeries },
-        position = positionMs,
-        duration = durationMs,
-        lastWatched = lastPlayedEpochMs ?: 0L,
-        addonBaseUrl = addonBaseUrl
-    )
 
     private fun ServerUserState.toWatchedItem(meta: Meta, isSeries: Boolean) = WatchedItem(
         contentId = meta.id,
