@@ -84,7 +84,7 @@ struct HeroInfo: View {
     var descriptionLines = 3
     var logoMaxHeight: CGFloat = 170
     var spacing: CGFloat = 18
-    /// Off where the caller shows the ratings itself (Modern hero: outside its button).
+    /// Rating logos under the info line (off where the caller shows them itself).
     var showRatings = true
 
     var body: some View {
@@ -376,8 +376,7 @@ struct ModernHomeView: View {
                         // Focusable hero: opens the title; left / right flick through the featured titles.
                         NavigationLink(value: Route.detail(hero)) {
                             // Compact so the poster rows get more of the screen.
-                            HeroInfo(item: hero, maxWidth: 820, descriptionLines: 2, logoMaxHeight: 90, spacing: 10,
-                                     showRatings: false)
+                            HeroInfo(item: hero, maxWidth: 820, descriptionLines: 2, logoMaxHeight: 90, spacing: 10)
                                 .padding(.horizontal, 30)
                                 .padding(.vertical, 10)
                                 .frame(maxWidth: 900, alignment: .leading)
@@ -391,11 +390,6 @@ struct ModernHomeView: View {
                             default: break
                             }
                         }
-                        // Rating logos as on the details page: plain views on the page, not inside
-                        // the focusable button, with the same white-text shadow.
-                        HeroRatings(item: hero)
-                            .shadow(color: .black.opacity(0.85), radius: 6, x: 0, y: 1)
-                            .padding(.horizontal, 30)
                     }
                     .padding(.horizontal, 50)
                     .frame(maxWidth: .infinity, alignment: .leading)
