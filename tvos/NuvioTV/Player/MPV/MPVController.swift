@@ -108,6 +108,7 @@ struct MPVSetupOptions {
     var subtitleScale = 1.0
     var subtitleBold = false
     var subtitleColor = "#FFFFFF"
+    var subtitleBrightness = 100   // % of subtitleColor
     var subtitleBorderColor = "#000000"
     var subtitleBorderSize = 2.0
     var subtitleBackColor = "#00000000"
@@ -212,7 +213,10 @@ final class MPVController {
         set(option: "embeddedfonts", "yes")
         set(option: "sub-scale", String(format: "%.2f", options.subtitleScale))
         set(option: "sub-bold", options.subtitleBold ? "yes" : "no")
-        set(option: "sub-color", options.subtitleColor)
+        set(option: "sub-color", SubtitleBrightness.scaled(options.subtitleColor, options.subtitleBrightness))
+        if options.subtitleBrightness < 100 {
+            set(option: "sub-ass-style-overrides", SubtitleBrightness.assOverride(options.subtitleColor, options.subtitleBrightness))
+        }
         set(option: "sub-border-color", options.subtitleBorderColor)
         set(option: "sub-border-size", String(format: "%.1f", options.subtitleBorderSize))
         set(option: "sub-back-color", options.subtitleBackColor)
@@ -310,6 +314,13 @@ final class MPVController {
     func setSubtitleDelay(_ seconds: Double) { set(property: "sub-delay", String(format: "%.3f", seconds)) }
     func setAudioDelay(_ seconds: Double) { set(property: "audio-delay", String(format: "%.3f", seconds)) }
     func setSubtitleScale(_ scale: Double) { set(property: "sub-scale", String(format: "%.2f", scale)) }
+
+    /// Text subtitles take the dimmed colour; styled ASS subtitles get it as their main text colour
+    /// (only while dimmed, so 100 % keeps them exactly as authored). Picture subtitles can't be changed.
+    func setSubtitleBrightness(_ percent: Int, color: String) {
+        set(property: "sub-color", SubtitleBrightness.scaled(color, percent))
+        set(property: "sub-ass-style-overrides", percent < 100 ? SubtitleBrightness.assOverride(color, percent) : "")
+    }
     func setSubtitlePosition(_ pos: Int) { set(property: "sub-pos", String(pos)) }
 
     /// Fit, zoom (crop to fill), stretch or a forced aspect ratio. Each mode resets the others.
@@ -550,5 +561,35 @@ final class MPVMetalLayer: CAMetalLayer {
                 super.drawableSize = newValue
             }
         }
+    }
+}
+
+/// Subtitle brightness as a scaled text colour.
+enum SubtitleBrightness {
+    /// "#RRGGBB" / "#AARRGGBB" with the colour channels scaled to [percent] (alpha kept).
+    static func scaled(_ hex: String, _ percent: Int) -> String {
+        guard let (alpha, r, g, b) = components(hex) else { return hex }
+        let f = Double(max(0, min(100, percent))) / 100
+        let scale = { (c: Int) in Int((Double(c) * f).rounded()) }
+        return "#" + (alpha.map { String(format: "%02X", $0) } ?? "") + String(format: "%02X%02X%02X", scale(r), scale(g), scale(b))
+    }
+
+    /// libass style override for every style's main text colour (&HAABBGGRR, opaque).
+    static func assOverride(_ hex: String, _ percent: Int) -> String {
+        let dimmed = scaled(hex, percent)
+        guard let (_, r, g, b) = components(dimmed) else { return "" }
+        return String(format: "PrimaryColour=&H00%02X%02X%02X", b, g, r)
+    }
+
+    private static func components(_ hex: String) -> (Int?, Int, Int, Int)? {
+        var raw = hex.trimmingCharacters(in: .whitespaces)
+        if raw.hasPrefix("#") { raw.removeFirst() }
+        var alpha: Int?
+        if raw.count == 8, let a = Int(raw.prefix(2), radix: 16) {
+            alpha = a
+            raw = String(raw.suffix(6))
+        }
+        guard raw.count == 6, let value = Int(raw, radix: 16) else { return nil }
+        return (alpha, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
     }
 }

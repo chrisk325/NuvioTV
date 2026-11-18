@@ -311,6 +311,8 @@ private struct SubtitleSettingsPane: View {
                 Toggle("Bold", isOn: s.bind({ $0.subtitleBold }, { $0.subtitleBold = $1 }))
                 ChoiceRow(title: "Text colour", options: colorOptions,
                           selection: s.bind({ $0.subtitleTextColor }, { $0.subtitleTextColor = $1 }))
+                NumberRow(title: "Brightness", unit: "%", step: 10, range: 0...100,
+                          value: s.bind({ Int($0.subtitleBrightness) }, { $0.subtitleBrightness = Int32($1) }))
                 NumberRow(title: "Outline thickness", unit: "px", step: 1, range: 0...5,
                           value: s.bind({ Int($0.subtitleOutlineWidth) }, { $0.subtitleOutlineWidth = Int32($1) }))
                 ChoiceRow(title: "Background behind text", options: backgroundOptions,

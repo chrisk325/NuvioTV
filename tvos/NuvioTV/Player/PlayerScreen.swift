@@ -245,7 +245,8 @@ struct PlayerScreen: View {
             trackList(
                 title: model.isLoadingAddonSubtitles ? "Subtitles (loading add-ons…)" : "Subtitles",
                 tracks: model.subtitleTracks,
-                allowOff: true
+                allowOff: true,
+                header: AnyView(subtitleBrightnessRow)
             ) { model.selectSubtitle($0) }
         case .adjust:
             adjustPanel
@@ -272,7 +273,40 @@ struct PlayerScreen: View {
         }
     }
 
-    private func trackList(title: String, tracks: [MPVTrack], allowOff: Bool, select: @escaping (MPVTrack?) -> Void) -> some View {
+    /// Subtitle brightness, 0–100 % in steps of 10, at the top of the Subtitles panel.
+    private var subtitleBrightnessRow: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 24) {
+                Label("Brightness", systemImage: "sun.max").font(.headline)
+                Spacer()
+                Button {
+                    model.subtitleBrightness = max(0, model.subtitleBrightness - 10)
+                } label: {
+                    Image(systemName: "minus")
+                }
+                .buttonStyle(GlassCapsuleButtonStyle())
+                .disabled(model.subtitleBrightness <= 0)
+                Text("\(model.subtitleBrightness)%")
+                    .font(.headline.monospacedDigit())
+                    .frame(minWidth: 90)
+                Button {
+                    model.subtitleBrightness = min(100, model.subtitleBrightness + 10)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(GlassCapsuleButtonStyle())
+                .disabled(model.subtitleBrightness >= 100)
+            }
+            Text("Text and styled subtitles; picture-based ones (PGS / VobSub) keep their own brightness.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 12)
+        .focusSection()
+    }
+
+    private func trackList(title: String, tracks: [MPVTrack], allowOff: Bool, header: AnyView? = nil,
+                           select: @escaping (MPVTrack?) -> Void) -> some View {
         var options: [PanelOption] = []
         if allowOff {
             options.append(PanelOption(id: "off", title: "Off", detail: nil, isSelected: !tracks.contains(where: \.isSelected)) {
@@ -284,18 +318,19 @@ struct PlayerScreen: View {
                 select(track)
             }
         }
-        return optionPanel(title: title, options: options)
+        return optionPanel(title: title, options: options, header: header)
     }
 
     /// Spaced list of card rows: the focused row is white, the active one tinted with a check.
     /// Opening the panel focuses the active row.
-    private func optionPanel(title: String, options: [PanelOption]) -> some View {
+    private func optionPanel(title: String, options: [PanelOption], header: AnyView? = nil) -> some View {
         let focusTarget = options.first(where: \.isSelected)?.id ?? options.first?.id
         return ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 Text(title)
                     .font(.title3.bold())
                     .padding(.bottom, 8)
+                if let header { header }
                 if options.isEmpty {
                     Text("No tracks").foregroundStyle(.secondary)
                 }

@@ -121,6 +121,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = str("subs.color", "#FFFFFF")
         set(value) = put("subs.color", value)
 
+    /** Subtitle text brightness, 0–100 % of the text colour (dims bright subtitles, e.g. on HDR). */
+    var subtitleBrightness: Int
+        get() = int("subs.brightness", 100)
+        set(value) = put("subs.brightness", value.coerceIn(0, 100))
+
     var subtitleOutlineColor: String
         get() = str("subs.outlineColor", "#000000")
         set(value) = put("subs.outlineColor", value)

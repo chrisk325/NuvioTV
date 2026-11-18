@@ -37,6 +37,14 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     @Published var subtitleDelay: Double = 0 { didSet { controller.setSubtitleDelay(subtitleDelay) } }
     @Published var audioDelay: Double = 0 { didSet { controller.setAudioDelay(audioDelay) } }
     @Published var subtitleScale: Double = 1 { didSet { controller.setSubtitleScale(subtitleScale) } }
+    /// Subtitle brightness 0–100 %, applied at once and kept as the default.
+    @Published var subtitleBrightness: Int = 100 {
+        didSet {
+            controller.setSubtitleBrightness(subtitleBrightness, color: subtitleColor)
+            settings?.subtitleBrightness = Int32(subtitleBrightness)
+        }
+    }
+    private var subtitleColor = "#FFFFFF"
     @Published private(set) var nextVideo: Video?
     @Published private(set) var isResolvingNext = false
     @Published var nextPromptDismissed = false { didSet { updateDerivedState() } }
@@ -113,6 +121,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             subtitleScale: Double(s.subtitleSize) / 100.0,
             subtitleBold: s.subtitleBold,
             subtitleColor: s.subtitleTextColor,
+            subtitleBrightness: Int(s.subtitleBrightness),
             subtitleBorderColor: s.subtitleOutlineColor,
             subtitleBorderSize: Double(s.subtitleOutlineWidth) * 1.5,
             subtitleBackColor: s.subtitleBackgroundColor,
@@ -122,6 +131,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             audioDelay: Double(s.audioDelayMs) / 1000.0
         )
         subtitleScale = options.subtitleScale
+        subtitleColor = options.subtitleColor
+        subtitleBrightness = options.subtitleBrightness
         subtitleDelay = options.subtitleDelay
         audioDelay = options.audioDelay
         controller.delegate = self
