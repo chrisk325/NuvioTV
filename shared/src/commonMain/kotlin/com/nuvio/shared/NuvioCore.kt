@@ -742,7 +742,13 @@ class NuvioCore(
      * Up next entries have no position (durationMs 0).
      */
     fun continueWatching(): List<WatchProgress> {
-        val inProgress = watchProgress.continueWatching()
+        // One card per title (its latest video); finished ones (90 %, or marked watched after most
+        // of it played) leave, and their next episode shows as up next instead.
+        val inProgress = watchProgress.entries.value
+            .groupBy { it.contentId }
+            .mapNotNull { (_, list) -> effective(list.maxByOrNull { it.updatedAtMs }) }
+            .filter { it.isResumable }
+            .sortedByDescending { it.updatedAtMs }
         val busy = inProgress.map { it.contentId }.toSet()
         val now = currentTimeMillis()
         val hideUnreleased = settings.hideUnreleasedUpNext
@@ -760,7 +766,7 @@ class NuvioCore(
     private val progressJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val progressListSerializer =
         kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
-    private val upNextSources = listOf("simkl", "trakt", "mediaserver")
+    private val upNextSources = listOf("simkl", "trakt", "mediaserver", "local")
     private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
     private var dismissedUpNext: Set<String> =
         store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
@@ -782,6 +788,39 @@ class NuvioCore(
         upNextSources.flatMap(::storedUpNext)
             .groupBy { it.contentId }
             .mapNotNull { (_, list) -> list.maxByOrNull { it.updatedAtMs } }
+
+    /**
+     * Up next without a tracker (Android shows it too): when an episode is finished here, the
+     * following one (first not yet watched) waits in Continue Watching as "Next: S1 E5".
+     */
+    private fun queueNextEpisode(meta: Meta, video: Video?) {
+        if (video == null || !meta.isSeriesLike) return
+        val episodes = meta.watchableEpisodes()
+        val index = episodes.indexOfFirst { it.id == video.id }
+        if (index < 0) return
+        val next = episodes.drop(index + 1).firstOrNull { !watched.isWatched(watchedKey(meta, it)) } ?: run {
+            setUpNext("local", storedUpNext("local").filterNot { it.contentId == meta.id })
+            return
+        }
+        val entry = WatchProgress(
+            contentId = meta.id,
+            contentType = meta.apiType,
+            videoId = next.id,
+            name = meta.name,
+            poster = meta.poster,
+            background = meta.backdropUrl,
+            logo = meta.logo,
+            season = next.season,
+            episode = next.episode,
+            episodeTitle = next.title,
+            positionMs = 0,
+            durationMs = 0,
+            updatedAtMs = currentTimeMillis(),
+            releasedAtMs = com.nuvio.shared.util.parseReleaseEpochMs(next.released),
+            thumbnail = next.thumbnail
+        )
+        setUpNext("local", (listOf(entry) + storedUpNext("local").filterNot { it.contentId == meta.id }).take(100))
+    }
 
     /** Replaces one tracker's up next list (nothing is written when it is unchanged). */
     private fun setUpNext(source: String, list: List<WatchProgress>) {
@@ -851,14 +890,26 @@ class NuvioCore(
             if (cut <= 0) null else line.substring(0, cut) to (line.substring(cut + 1).toLongOrNull() ?: return@mapNotNull null)
         }?.toMap().orEmpty()
 
-    fun progressFor(videoId: String): WatchProgress? = watchProgress.progressFor(videoId)
+    fun progressFor(videoId: String): WatchProgress? = effective(watchProgress.progressFor(videoId))
+
+    /**
+     * An entry as the screens should see it: one marked watched after most of it was played (a
+     * tracker's 80 %, or "Mark watched") counts as finished, so no "Resume" is offered for it.
+     */
+    private fun effective(progress: WatchProgress?): WatchProgress? {
+        if (progress == null || progress.isCompleted || progress.durationMs <= 0) return progress
+        if (progress.fraction < WatchProgress.WATCHED_FINISHED_FRACTION) return progress
+        val watchedHere = watched.isWatched(progress.videoId) ||
+            (progress.contentType == "movie" && watched.isWatched("movie:${progress.contentId}"))
+        return if (watchedHere) progress.copy(positionMs = progress.durationMs) else progress
+    }
 
     /** The subtitle choice remembered for a series / movie (the player's own JSON), per profile. */
     fun subtitleChoice(contentId: String): String? = store.getString("subs.choice.$contentId")
 
     fun setSubtitleChoice(contentId: String, choice: String?) = store.putString("subs.choice.$contentId", choice)
 
-    fun latestProgressFor(contentId: String): WatchProgress? = watchProgress.latestFor(contentId)
+    fun latestProgressFor(contentId: String): WatchProgress? = effective(watchProgress.latestFor(contentId))
 
     fun saveProgress(
         meta: Meta,
@@ -871,7 +922,9 @@ class NuvioCore(
     ) {
         if (durationMs <= 0) return
         if (positionMs.toDouble() / durationMs >= WatchProgress.COMPLETED_THRESHOLD) {
-            watched.mark(watchedKey(meta, meta.videos.firstOrNull { it.id == videoId }), true)
+            val video = meta.videos.firstOrNull { it.id == videoId }
+            watched.mark(watchedKey(meta, video), true)
+            queueNextEpisode(meta, video)
         }
         watchProgress.update(
             WatchProgress(
@@ -974,6 +1027,11 @@ class NuvioCore(
     /** Manual watched toggle (also pushed to Trakt / Simkl / AniList when marking watched). */
     fun setWatched(meta: Meta, video: Video?, isWatched: Boolean) {
         watched.mark(watchedKey(meta, video), isWatched)
+        if (isWatched) {
+            // Watched means finished: no "Resume" for it, and the next episode is up next.
+            watchProgress.apply(emptyList(), setOf(video?.id ?: meta.defaultVideoId))
+            queueNextEpisode(meta, video)
+        }
         if (video != null) refreshSeriesWatched(meta)
         if (!meta.isSeriesLike || video != null) {
             setPlayedOnServers(meta.id, meta.imdbId, meta.isSeriesLike, video?.id ?: meta.defaultVideoId,
@@ -1031,9 +1089,10 @@ class NuvioCore(
             if (scrobble == ScrobbleAction.STOP && cloud.isSignedIn) {
                 runCatching { cloud.pushProgress(watchProgress.entries.value.filter { it.contentId == meta.id }.take(5)) }
             }
-            if (scrobble == ScrobbleAction.STOP && progressPercent >= 80.0) {
+            if (scrobble == ScrobbleAction.STOP && progressPercent >= WatchProgress.COMPLETED_THRESHOLD * 100) {
                 if (cloud.isSignedIn) runCatching { cloud.pushWatched(meta.id, meta.apiType, meta.name, video?.season, video?.episode) }
                 watched.mark(watchedKey(meta, video), true)
+                queueNextEpisode(meta, video)
                 if (video != null) refreshSeriesWatched(meta)
                 runCatching { aniList.updateProgress(media, completedTitle = false) }
             }

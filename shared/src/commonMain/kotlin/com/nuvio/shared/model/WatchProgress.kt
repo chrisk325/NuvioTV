@@ -34,7 +34,13 @@ data class WatchProgress(
         get() = positionMs >= MIN_RESUME_MS && !isCompleted
 
     companion object {
-        const val COMPLETED_THRESHOLD = 0.92
+        /** Finished (watched, no "Resume"), as on Android: 90 %. */
+        const val COMPLETED_THRESHOLD = 0.90
+        /**
+         * Marked watched (by hand or by a tracker, which may count from 80 %) after at least this
+         * much was played here: finished too, so "Resume" isn't offered for it.
+         */
+        const val WATCHED_FINISHED_FRACTION = 0.80
         const val MIN_RESUME_MS = 30_000L
     }
 }
