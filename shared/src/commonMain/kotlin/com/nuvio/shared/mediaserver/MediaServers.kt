@@ -521,7 +521,14 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             .distinctBy { (it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString()) + "|" + it.str("Name") }
         // Drop only the item's stored stand-ins ("Streams load when played"): placeholders the
         // plugin returns with the resolved list (AIOStreams statistics / info entries) are kept.
-        val real = all.filterNot { it.isPlaceholderSource() && (it.nonBlank("Id") in storedIds || isStandIn(it)) }
+        // A stored placeholder that PlaybackInfo also returned (AIOMetadata keeps its statistics on the
+        // item) is an info entry too; one it didn't return is a stale stand-in once real sources exist.
+        val resolvedKeys = resolved.keys
+        val hasReal = resolved.values.any { !it.isPlaceholderSource() }
+        val real = all.filterNot { source ->
+            source.isPlaceholderSource() && (isStandIn(source) ||
+                (hasReal && source.nonBlank("Id") in storedIds && (source.nonBlank("Id") ?: "") !in resolvedKeys))
+        }
         val sources = real.ifEmpty { all }.ifEmpty { listOf(JsonObject(mapOf())) }
         val streams = sources.map { source -> sourceStream(server, itemId, target, source) }
         return AddonStreams(server.name, null, streams)

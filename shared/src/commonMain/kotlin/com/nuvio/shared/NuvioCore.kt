@@ -52,6 +52,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class CalendarEntry(val show: MetaPreview, val video: Video, val releaseEpochMs: Long)
 
@@ -79,6 +80,9 @@ interface CoreSubscription {
 private class JobCancellable(private val job: Job) : CoreSubscription {
     override fun cancel() = job.cancel()
 }
+
+/** Longest wait for a media server to describe a title before TMDB is used instead. */
+private const val SERVER_LOOKUP_MS = 8_000L
 
 /**
  * Single entry point for platform UIs (the tvOS SwiftUI app). Everything here is plain classes,
@@ -285,10 +289,24 @@ class NuvioCore(
                 }
             }
             // Titles from a Jellyfin / Emby server that no add-on describes: use the server's data.
+            // Bounded: catalog-backed servers (AIOMetadata's Jellyfin API) can take very long to
+            // list or search, and TMDB below describes the title anyway.
             if (mediaServers.servers.isNotEmpty()) {
-                for (serverId in listOfNotNull(imdb, id.takeIf { it.startsWith("tmdb:") })) {
-                    runCatching { mediaServers.meta(type, serverId) }.getOrNull()?.let { return it }
+                val fromServer = withTimeoutOrNull(SERVER_LOOKUP_MS) {
+                    var found: Meta? = null
+                    for (serverId in listOfNotNull(imdb, id.takeIf { it.startsWith("tmdb:") })) {
+                        found = try {
+                            mediaServers.meta(type, serverId)
+                        } catch (c: CancellationException) {
+                            throw c
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (found != null) break
+                    }
+                    found
                 }
+                if (fromServer != null) return fromServer
             }
             // Last resort: the title as TMDB describes it (streams still use the IMDb id).
             val tmdbTarget = tmdbId ?: imdb?.let { runCatching { tmdb.findByImdb(it, isShow) }.getOrNull() }
