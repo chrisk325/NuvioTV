@@ -516,8 +516,12 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val refreshed = if (resolved.isEmpty() || resolved.values.all { it.isPlaceholderSource() }) {
             item(server, itemId)?.objects("MediaSources").orEmpty()
         } else emptyList()
-        val all = (resolved.values + refreshed + stored).distinctBy { it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString() }
-        val real = all.filterNot { it.isPlaceholderSource() }
+        // Same id and same name only collapse true duplicates (info entries can share an id).
+        val all = (resolved.values + refreshed + stored)
+            .distinctBy { (it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString()) + "|" + it.str("Name") }
+        // Drop only the item's stored stand-ins ("Streams load when played"): placeholders the
+        // plugin returns with the resolved list (AIOStreams statistics / info entries) are kept.
+        val real = all.filterNot { it.isPlaceholderSource() && (it.nonBlank("Id") in storedIds || isStandIn(it)) }
         val sources = real.ifEmpty { all }.ifEmpty { listOf(JsonObject(mapOf())) }
         val streams = sources.map { source -> sourceStream(server, itemId, target, source) }
         return AddonStreams(server.name, null, streams)
@@ -535,7 +539,10 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val label = video?.let { resolutionLabel(it.int("Width"), it.int("Height")) }
             ?: source.str("Container")?.substringBefore(',')?.uppercase().orEmpty()
         val sourceName = source.nonBlank("Name")
+        // Info entries (AIOStreams statistics): nothing to play, shown as text only.
+        val infoOnly = remote == null && source.isPlaceholderSource()
         val url = when {
+            infoOnly -> null
             remote != null && source.str("SupportsDirectPlay") != "false" -> remote
             source.str("SupportsDirectPlay") == "false" && source.str("SupportsDirectStream") == "false" &&
                 source.nonBlank("TranscodingUrl") != null -> {
@@ -572,6 +579,12 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
 
     private fun JsonObject.isPlaceholderSource(): Boolean =
         str("Type").equals("Placeholder", ignoreCase = true)
+
+    /** The plugin's "load when played" stand-ins, as opposed to real or informational entries. */
+    private fun isStandIn(source: JsonObject): Boolean {
+        val name = source.str("Name")?.lowercase().orEmpty()
+        return "load when played" in name || "load the stream list" in name
+    }
 
     private fun resolutionLabel(width: Int?, height: Int?): String? {
         val w = width ?: 0

@@ -293,6 +293,11 @@ struct StreamRow: View {
         stream.isDirectlyPlayable || (debridEnabled && stream.needsDebridResolve)
     }
 
+    /// Informational entries (e.g. AIOStreams statistics): nothing to play, shown as plain text.
+    private var isInfo: Bool {
+        stream.url == nil && stream.infoHash == nil && stream.ytId == nil && stream.externalUrl == nil
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 28) {
             Text(stream.getDisplayName())
@@ -311,7 +316,7 @@ struct StreamRow: View {
                 badges
             }
         }
-        .opacity(isPlayable ? 1 : 0.55)
+        .opacity(isPlayable || isInfo ? 1 : 0.55)
     }
 
     @ViewBuilder
@@ -325,7 +330,7 @@ struct StreamRow: View {
         } else if stream.needsDebridResolve {
             Label(debridEnabled ? "Torrent · via debrid" : "Torrent", systemImage: debridEnabled ? "bolt.circle" : "arrow.down.circle")
                 .font(.caption).foregroundStyle(.secondary)
-        } else if !stream.isDirectlyPlayable {
+        } else if !stream.isDirectlyPlayable && !isInfo {
             Label("Not playable on Apple TV", systemImage: "nosign").font(.caption).foregroundStyle(.secondary)
         }
     }
