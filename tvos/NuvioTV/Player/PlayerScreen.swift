@@ -19,7 +19,7 @@ struct PlayerContainer: View {
 }
 
 private enum PlayerFocus: Hashable {
-    case catcher, scrubber, playPause, audio, subtitles, adjust, speed, aspect, next, panel, skip
+    case catcher, scrubber, playPause, audio, dialogue, subtitles, adjust, speed, aspect, next, panel, skip
 }
 
 private enum PlayerPanel: Identifiable {
@@ -201,6 +201,11 @@ struct PlayerScreen: View {
                     playPauseButton
                         .padding(.trailing, 20)
                     controlButton("Audio", "speaker.wave.2", .audio) { open(.audio) }
+                    // One press steps Off → Low → Medium → High → Off.
+                    controlButton(dialogueLabel, "waveform", .dialogue) {
+                        model.dialogueBoost = (model.dialogueBoost + 1) % DialogueEnhancer.levels.count
+                        scheduleHide()
+                    }
                     controlButton("Subtitles", "captions.bubble", .subtitles) { open(.subtitles) }
                     controlButton("Sync & size", "slider.horizontal.3", .adjust) { open(.adjust) }
                     controlButton(speedLabel, "speedometer", .speed) { open(.speed) }
@@ -224,6 +229,10 @@ struct PlayerScreen: View {
             )
         }
         .ignoresSafeArea()
+    }
+
+    private var dialogueLabel: String {
+        model.dialogueBoost == 0 ? "Dialogue" : "Dialogue: \(DialogueEnhancer.levels[model.dialogueBoost])"
     }
 
     private var speedLabel: String {
