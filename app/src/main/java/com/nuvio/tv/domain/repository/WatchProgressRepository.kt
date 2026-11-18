@@ -3,6 +3,7 @@ package com.nuvio.tv.domain.repository
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.model.WatchedItem
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 
 /**
@@ -22,6 +23,16 @@ interface WatchProgressRepository {
 
     val watchedItems: Flow<List<WatchedItem>>
         get() = flowOf(emptyList())
+
+    /**
+     * Shows [entries] another source keeps for itself (a media server's continue-watching list) alongside the app's
+     * own progress. They are never stored, synced or sent to a tracker, so a sync can't wipe them.
+     */
+    fun setExternalProgress(entries: List<WatchProgress>) {}
+
+    /** The external entries that removing progress took out, so their source can leave them out too. */
+    val externalProgressRemoved: Flow<List<WatchProgress>>
+        get() = emptyFlow()
     
     /**
      * Get watch progress for a specific content item (movie or series)

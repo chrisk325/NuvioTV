@@ -23,6 +23,8 @@ import com.nuvio.tv.core.tracking.TrackingHistoryWriterRegistry
 import com.nuvio.tv.core.tracking.TrackingMediaReference
 import com.nuvio.tv.core.tracking.TrackingProgressProvider
 import com.nuvio.tv.core.tracking.TrackingProgressProviderRegistry
+import com.nuvio.tv.core.tracking.isFromMediaServer
+import com.nuvio.tv.core.tracking.mergeExternalProgress
 import com.nuvio.tv.core.tracking.mergeProgressProjectionWithRetainedLocal
 import com.nuvio.tv.core.tracking.mergeWatchedEpisodeProjection
 import com.nuvio.tv.core.tracking.TrackingProviderId
@@ -455,6 +457,10 @@ class WatchProgressRepositoryImpl @Inject constructor(
         }.distinctUntilChanged()
     }
 
+    /** A media server's continue-watching list, shown with the app's progress but never stored or synced. */
+    private val externalProgress = MutableStateFlow<List<WatchProgress>>(emptyList())
+    private val removedExternalProgress = MutableSharedFlow<List<WatchProgress>>(extraBufferCapacity = 16)
+
     override val allProgress: Flow<List<WatchProgress>>
         get() = profileManager.activeProfileId.flatMapLatest { profileId ->
             if (lastHydratedProfileId != profileId) {
@@ -489,6 +495,9 @@ class WatchProgressRepositoryImpl @Inject constructor(
                                 canAttemptMetadata(key)
                         }
                         if (needsMetadata.isNotEmpty()) hydrateMetadata(needsMetadata, profileId)
+                    }.combine(externalProgress) { items, external ->
+                        val tracked = items.filterNot { it.isFromMediaServer }.mapTo(mutableSetOf(), WatchProgress::contentId)
+                        mergeExternalProgress(items, external, tracked)
                     }
                 } else {
                     watchProgressPreferences.observeAllProgress(profileId)
@@ -503,6 +512,8 @@ class WatchProgressRepositoryImpl @Inject constructor(
                                 syncScope.launch { hydrateProgressArtwork(needsArtwork, profileId) }
                             }
                         }
+                        // Merged after artwork hydration, which saves what it finds into the stored progress.
+                        .combine(externalProgress) { items, external -> mergeExternalProgress(items, external) }
                 }
             }
         }
@@ -524,7 +535,7 @@ class WatchProgressRepositoryImpl @Inject constructor(
     override fun getProgress(contentId: String, profileId: Int): Flow<WatchProgress?> {
         return profileProgressProviderFlow(profileId)
             .flatMapLatest { provider ->
-                if (provider != null) {
+                (if (provider != null) {
                     provider.allProgress.map { items ->
                         items
                             .filter { it.contentId.equals(contentId, ignoreCase = true) }
@@ -532,9 +543,29 @@ class WatchProgressRepositoryImpl @Inject constructor(
                     }
                 } else {
                     watchProgressPreferences.getProgress(contentId, profileId)
+                }).withExternal(trackerHasIt = provider != null) { external ->
+                    external.filter { it.contentId.equals(contentId, ignoreCase = true) }.maxByOrNull(WatchProgress::lastWatched)
                 }
             }
     }
+
+    /**
+     * [found], or the external entry [pick] chooses when that is fresher. With a tracker, its progress for a title
+     * it has wins, as the tracker is the source then.
+     */
+    private fun Flow<WatchProgress?>.withExternal(
+        trackerHasIt: Boolean,
+        pick: (List<WatchProgress>) -> WatchProgress?
+    ): Flow<WatchProgress?> = combine(externalProgress) { found, external ->
+        val candidate = pick(external)
+        when {
+            candidate == null -> found
+            found == null -> candidate
+            trackerHasIt && !found.isFromMediaServer -> found
+            candidate.lastWatched > found.lastWatched -> candidate
+            else -> found
+        }
+    }.distinctUntilChanged()
 
     override fun getEpisodeProgress(contentId: String, season: Int, episode: Int): Flow<WatchProgress?> {
         return profileManager.activeProfileId.flatMapLatest { profileId ->
@@ -550,7 +581,7 @@ class WatchProgressRepositoryImpl @Inject constructor(
     ): Flow<WatchProgress?> {
         return profileProgressProviderFlow(profileId)
             .flatMapLatest { provider ->
-                if (provider != null) {
+                (if (provider != null) {
                     combine(
                         provider.episodeProgress(contentId),
                         provider.allProgress
@@ -565,6 +596,10 @@ class WatchProgressRepositoryImpl @Inject constructor(
                     }
                 } else {
                     watchProgressPreferences.getEpisodeProgress(contentId, season, episode, profileId)
+                }).withExternal(trackerHasIt = provider != null) { external ->
+                    external.firstOrNull {
+                        it.contentId.equals(contentId, ignoreCase = true) && it.season == season && it.episode == episode
+                    }
                 }
             }
     }
@@ -581,7 +616,7 @@ class WatchProgressRepositoryImpl @Inject constructor(
     ): Flow<Map<Pair<Int, Int>, WatchProgress>> {
         return profileProgressProviderFlow(profileId)
             .flatMapLatest { provider ->
-                if (provider != null) {
+                (if (provider != null) {
                     combine(
                         provider.episodeProgress(contentId).onStart { emit(emptyMap()) },
                         provider.allProgress.map { items ->
@@ -601,7 +636,17 @@ class WatchProgressRepositoryImpl @Inject constructor(
                     }.distinctUntilChanged()
                 } else {
                     watchProgressPreferences.getAllEpisodeProgress(contentId, profileId)
-                }
+                }).combine(externalProgress) { found, external ->
+                    val merged = found.toMutableMap()
+                    external.forEach { entry ->
+                        if (!entry.contentId.equals(contentId, ignoreCase = true)) return@forEach
+                        val key = (entry.season ?: return@forEach) to (entry.episode ?: return@forEach)
+                        val shown = merged[key]
+                        val trackerHasIt = provider != null && shown != null && !shown.isFromMediaServer
+                        if (!trackerHasIt && (shown == null || entry.lastWatched > shown.lastWatched)) merged[key] = entry
+                    }
+                    merged
+                }.distinctUntilChanged()
             }
     }
 
@@ -916,7 +961,33 @@ class WatchProgressRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun setExternalProgress(entries: List<WatchProgress>) {
+        externalProgress.value = entries
+    }
+
+    override val externalProgressRemoved: Flow<List<WatchProgress>>
+        get() = removedExternalProgress
+
+    /** Takes the external entries for [contentId] (one episode, when given) out of what is shown. */
+    private fun dismissExternalProgress(contentId: String, episodes: Collection<Pair<Int, Int>>? = null) {
+        var removed = emptyList<WatchProgress>()
+        externalProgress.update { current ->
+            removed = current.filter { entry ->
+                val season = entry.season
+                val episode = entry.episode
+                entry.contentId.equals(contentId, ignoreCase = true) &&
+                    (episodes == null || (season != null && episode != null && (season to episode) in episodes))
+            }
+            current - removed.toSet()
+        }
+        if (removed.isNotEmpty()) removedExternalProgress.tryEmit(removed)
+    }
+
+    private fun dismissExternalProgress(contentId: String, season: Int?, episode: Int?) =
+        dismissExternalProgress(contentId, if (season != null && episode != null) listOf(season to episode) else null)
+
     override suspend fun removeProgress(contentId: String, season: Int?, episode: Int?) {
+        dismissExternalProgress(contentId, season, episode)
         val profileId = profileManager.activeProfileId.value
         val remoteDeleteKeys = resolveRemoteDeleteKeys(contentId, season, episode, profileId = profileId)
         mutationStore.queueProgressDeletes(remoteDeleteKeys, profileId)
@@ -942,6 +1013,7 @@ class WatchProgressRepositoryImpl @Inject constructor(
     }
 
     override suspend fun removeFromHistory(contentId: String, videoId: String?, season: Int?, episode: Int?) {
+        dismissExternalProgress(contentId, season, episode)
         if (!addonEventDispatcher.hasEnabledAddonFor(ADDON_LIBRARY_RESOURCE)) {
             removeFromHistoryInternal(contentId, videoId, season, episode)
             return
@@ -1022,6 +1094,7 @@ class WatchProgressRepositoryImpl @Inject constructor(
         episodes: List<Triple<Int, Int, String?>>
     ) {
         if (episodes.isEmpty()) return
+        dismissExternalProgress(contentId, episodes.map { (season, episode, _) -> season to episode })
         if (!addonEventDispatcher.hasEnabledAddonFor(ADDON_LIBRARY_RESOURCE)) {
             removeFromHistoryBatchInternal(contentId, videoId, episodes)
             return
