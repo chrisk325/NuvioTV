@@ -79,6 +79,7 @@ struct PlayerScreen: View {
                     HStack {
                         Spacer()
                         Button(segment.label) { model.skip(segment) }
+                            .buttonStyle(GlassCapsuleButtonStyle())
                             .focused($focus, equals: .skip)
                     }
                 }
@@ -96,7 +97,10 @@ struct PlayerScreen: View {
                     Spacer()
                     panelView(panel)
                         .frame(width: 760)
-                        .background(Color.black.opacity(0.82))
+                        .frame(maxHeight: .infinity)
+                        .liquidGlass(in: RoundedRectangle(cornerRadius: 44, style: .continuous), tint: .black.opacity(0.45))
+                        .padding(.vertical, 40)
+                        .padding(.trailing, 40)
                         .focusSection()
                 }
                 .ignoresSafeArea()
@@ -137,18 +141,23 @@ struct PlayerScreen: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 0) {
-            LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
                 .frame(height: 220)
                 .overlay(alignment: .topLeading) {
-                    VStack(alignment: .leading, spacing: 8) {
+                    // Title and stream on a Liquid Glass pill.
+                    VStack(alignment: .leading, spacing: 6) {
                         Text(model.request?.title ?? request.title).font(.title3).bold().lineLimit(1)
                         if let name = model.request?.streamName, !name.isEmpty {
                             Text(name.replacingOccurrences(of: "\n", with: " · "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
-                    .padding(.horizontal, 80)
-                    .padding(.top, 60)
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 22)
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 34, style: .continuous), tint: .black.opacity(0.15))
+                    .frame(maxWidth: 1300, alignment: .leading)
+                    .padding(.horizontal, 60)
+                    .padding(.top, 50)
                 }
             Spacer()
             VStack(alignment: .leading, spacing: 44) {
@@ -158,8 +167,8 @@ struct PlayerScreen: View {
                 }) {
                     if model.request?.isLive == true && !model.hasDuration {
                         HStack(spacing: 16) {
-                            Text("LIVE").font(.caption.bold()).padding(.horizontal, 12).padding(.vertical, 4)
-                                .background(Color.red, in: Capsule())
+                            Text("LIVE").font(.caption.bold()).padding(.horizontal, 14).padding(.vertical, 6)
+                                .liquidGlass(in: Capsule(), tint: .red.opacity(0.75))
                             Text("▲ / ▼ to change channel").font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
@@ -184,10 +193,15 @@ struct PlayerScreen: View {
                 }
                 .focusSection()
             }
-            .padding(.horizontal, 80)
-            .padding(.bottom, 60)
+            // Scrubber and buttons on one Liquid Glass dock.
+            .padding(.horizontal, 44)
+            .padding(.top, 36)
+            .padding(.bottom, 40)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 44, style: .continuous), tint: .black.opacity(0.2))
+            .padding(.horizontal, 60)
+            .padding(.bottom, 50)
             .background(
-                LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
                     .ignoresSafeArea()
             )
         }
@@ -200,8 +214,9 @@ struct PlayerScreen: View {
 
     private func controlButton(_ title: String, _ icon: String, _ field: PlayerFocus, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: icon).font(.callout)
+            Label(title, systemImage: icon)
         }
+        .buttonStyle(GlassCapsuleButtonStyle())
         .focused($focus, equals: field)
     }
 
@@ -380,7 +395,7 @@ struct PlayerScreen: View {
                     }
                 }
                 .padding(40)
-                .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 24))
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 36, style: .continuous), tint: .black.opacity(0.3))
                 .frame(maxWidth: 800)
                 .focusSection()
             }
@@ -521,7 +536,7 @@ struct PanelRowStyle: ButtonStyle {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(isFocused ? Color.white : (isSelected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.07)))
+                        .fill(isFocused ? Color.white : (isSelected ? Color.accentColor.opacity(0.4) : Color.white.opacity(0.08)))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -600,9 +615,10 @@ struct RoundControlStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .foregroundStyle(isFocused ? Color.black : Color.white)
-                .background(
-                    Circle().fill(isFocused ? Color.white : Color.white.opacity(0.18))
-                )
+                .background {
+                    if isFocused { Circle().fill(Color.white) }
+                }
+                .liquidGlass(in: Circle(), interactive: true)
                 .scaleEffect(configuration.isPressed ? 0.94 : (isFocused ? 1.12 : 1))
                 .animation(.easeOut(duration: 0.15), value: isFocused)
         }
