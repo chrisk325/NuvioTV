@@ -499,9 +499,19 @@ struct RatingsRow: View {
     var iconHeight: CGFloat = 32
 
     var body: some View {
-        HStack(spacing: 28) {
+        // Narrow columns (the Classic hero) used to wrap "96%" so the % dropped
+        // to its own line: values never wrap, and the gaps tighten to fit instead.
+        ViewThatFits(in: .horizontal) {
+            row(spacing: 28, inner: 10)
+            row(spacing: 18, inner: 8)
+            row(spacing: 12, inner: 6)
+        }
+    }
+
+    private func row(spacing: CGFloat, inner: CGFloat) -> some View {
+        HStack(spacing: spacing) {
             ForEach(ratings, id: \.source) { rating in
-                HStack(spacing: 10) {
+                HStack(spacing: inner) {
                     // Original colours always: inside a focusable button (the Modern Home hero)
                     // tvOS would otherwise draw the logo as a flat tinted shape.
                     Image(rating.icon)
@@ -514,7 +524,10 @@ struct RatingsRow: View {
                     Text(rating.value)
                         .font(.callout.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
+                .fixedSize()
             }
         }
     }
