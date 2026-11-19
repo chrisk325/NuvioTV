@@ -175,4 +175,35 @@ class JellyfinRelatedTest {
         assertEquals(1, streams.size)
         assertEquals("Streams load when played", streams.single().title)
     }
+    @Test
+    fun streamListComesFromTheItemsMediaSourcesLikeAndroid() = runTest {
+        var playbackInfoAsked = false
+        val http = HttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            val androidStyle = path == "/Items/m1" && request.url.parameters["userId"] == "u1" &&
+                request.url.parameters["fields"] == "MediaSources" &&
+                request.headers["Authorization"]?.startsWith("MediaBrowser Client=\"Nuvio\"") == true &&
+                request.headers["Authorization"]?.contains("Token=\"tok\"") == true
+            when {
+                androidStyle -> respond(
+                    """{"Id":"m1","Name":"The Odyssey","Type":"Movie","MediaSources":[
+                        {"Name":"📊 Statistics\n> 42 results"},
+                        {"Id":"r1","Name":"[RD+] 2160p","Path":"https://aio.example/r1","Protocol":"Http"},
+                        {"Id":"r2","Name":"[RD+] 1080p","Path":"https://aio.example/r2","Protocol":"Http"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                path == "/Users/u1/Items/m1" -> respond(
+                    """{"Id":"m1","Name":"The Odyssey","Type":"Movie","MediaSources":[
+                        {"Id":"auto","Name":"AIOMetadata MP4 – Streams load when played","Container":"mp4","Protocol":"File"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                path == "/Items/m1/PlaybackInfo" -> { playbackInfoAsked = true; respond("", HttpStatusCode.NotFound) }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val streams = MediaServerService(http, serverStore).streams("movie", "mediaserver:srv:m1").single().streams
+        assertEquals(listOf("📊 Statistics", "[RD+] 2160p", "[RD+] 1080p"), streams.map { if (it.name == "📊 Statistics") it.name else it.title })
+        assertEquals("https://aio.example/r1", streams[1].url)
+        kotlin.test.assertFalse(playbackInfoAsked)
+    }
 }

@@ -273,8 +273,18 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     }
 
     /** One item; /Users/{id}/Items/{item} (Emby, Jellyfin ≤10.9) or /Items/{item}?userId= (newer Jellyfin). */
-    private suspend fun item(server: MediaServer, itemId: String): JsonObject? =
-        get(server, "/Users/${server.userId}/Items/$itemId") ?: get(server, "/Items/$itemId?userId=${server.userId}")
+    /**
+     * One item. Jellyfin: /Items/{item}?userId= first (10.9+, what the Android app and AIOMetadata
+     * use), then the older /Users/{id}/Items/{item}; Emby the other way round. [fields] asks for
+     * extra fields, e.g. "MediaSources" (the item's versions = its stream list).
+     */
+    private suspend fun item(server: MediaServer, itemId: String, fields: String? = null): JsonObject? {
+        val extra = fields?.let { "fields=${encodeUrlComponent(it)}" }
+        val modern = "/Items/$itemId?userId=${server.userId}" + (extra?.let { "&$it" } ?: "")
+        val legacy = "/Users/${server.userId}/Items/$itemId" + (extra?.let { "?$it" } ?: "")
+        return if (server.kind == "jellyfin") get(server, modern) ?: get(server, legacy)
+        else get(server, legacy) ?: get(server, modern)
+    }
 
     private suspend fun itemMeta(server: MediaServer, itemId: String, isShowHint: Boolean, knownImdb: String? = null): Meta? {
         val item = item(server, itemId) ?: return null
@@ -494,8 +504,13 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
      * stored source id) and lists what comes back, falling back to the stored sources.
      */
     private suspend fun itemStreams(server: MediaServer, itemId: String): AddonStreams? {
-        val target = item(server, itemId) ?: return null
+        val target = item(server, itemId, fields = "MediaSources") ?: return null
         val stored = target.objects("MediaSources")
+        // As the Android app does: the item's own versions are the stream list. Only when the
+        // server lists nothing but stand-ins ("Streams load when played", …) is PlaybackInfo asked.
+        if (stored.any { !isStandIn(it) && !it.isPlaceholderSource() && (it.nonBlank("Id") != null || it.nonBlank("Path") != null) }) {
+            return AddonStreams(server.name, null, stored.filterNot(::isStandIn).map { sourceStream(server, itemId, target, it) })
+        }
         val resolved = LinkedHashMap<String, JsonObject>()
         suspend fun ask(sourceId: String?) {
             val info = runCatching { playbackInfo(server, itemId, sourceId) }
@@ -947,6 +962,9 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     }
 
     private fun HttpRequestBuilder.auth(server: MediaServer) {
+        // Jellyfin 10.9+ (and servers that emulate it, like AIOMetadata) read the client and token
+        // from the standard Authorization header, as the Android app sends it; Emby reads X-Emby-*.
+        if (server.kind == "jellyfin") header("Authorization", authHeader(server.token))
         header("X-Emby-Authorization", authHeader(server.token))
         header("X-Emby-Token", server.token)
     }
