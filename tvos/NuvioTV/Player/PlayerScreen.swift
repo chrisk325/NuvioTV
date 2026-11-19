@@ -84,7 +84,7 @@ struct PlayerScreen: View {
                     }
                 }
                 .padding(.horizontal, 80)
-                .padding(.bottom, controlsVisible ? 260 : 80)
+                .padding(.bottom, controlsVisible ? 330 : 80)
                 .onAppear { if !controlsVisible { focus = .skip } }
             }
 
@@ -239,12 +239,14 @@ struct PlayerScreen: View {
         model.speed == 1 ? "Speed" : String(format: "%.2gx", model.speed)
     }
 
+    /// Icon-only glass button that shows its name when focused, so the row always fits on one line.
     private func controlButton(_ title: String, _ icon: String, _ field: PlayerFocus, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: icon)
+            PlayerControlLabel(title: title, icon: icon, expanded: focus == field)
         }
         .buttonStyle(GlassCapsuleButtonStyle())
         .focused($focus, equals: field)
+        .accessibilityLabel(title)
     }
 
     /// Big round play/pause button leading the controls row.
@@ -738,5 +740,25 @@ struct WindowReader: UIViewRepresentable {
             super.didMoveToWindow()
             onWindow?(window)
         }
+    }
+}
+
+/// A control's icon, plus its name on one line while focused.
+private struct PlayerControlLabel: View {
+    let title: String
+    let icon: String
+    let expanded: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+            if expanded {
+                Text(title)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: expanded)
     }
 }
