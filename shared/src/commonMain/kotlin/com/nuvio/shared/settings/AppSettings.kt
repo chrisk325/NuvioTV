@@ -202,6 +202,14 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("home.hideUnairedNextUp", false)
         set(value) = put("home.hideUnairedNextUp", value)
 
+    /**
+     * Android's "Separate Upcoming Row" (Continue Watching sort SPLIT_UPCOMING): next episodes
+     * that haven't aired yet move to their own Upcoming row, soonest first.
+     */
+    var separateUpcomingRow: Boolean
+        get() = bool("home.splitUpcoming", true)
+        set(value) = put("home.splitUpcoming", value)
+
     var showContinueWatching: Boolean
         get() = bool("home.continueWatching", true)
         set(value) = put("home.continueWatching", value)

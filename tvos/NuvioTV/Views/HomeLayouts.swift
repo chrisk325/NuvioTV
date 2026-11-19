@@ -197,6 +197,10 @@ struct ClassicHomeView: View {
                         ContinueWatchingRow(title: "Next Up", items: app.nextUpItems, onFocus: setFocus, focus: $homeFocus,
                                             lastFocusedId: $lastContinueWatchingId)
                     }
+                    if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
+                        ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems, onFocus: setFocus, focus: $homeFocus,
+                                            lastFocusedId: $lastContinueWatchingId)
+                    }
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                     ForEach(slots, id: \.key) { slot in
                         CatalogRowView(slot: slot, onFocus: setFocus,
@@ -219,7 +223,8 @@ struct ClassicHomeView: View {
 
     /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
     private var rowAboveCatalogs: [WatchProgress] {
-        app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+        if !app.upcomingItems.isEmpty { return app.upcomingItems }
+        return app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
     }
 
     /// First catalog right under Continue Watching: Up goes there explicitly.
@@ -305,6 +310,9 @@ struct GridHomeView: View {
                 }
                 if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
                     ContinueWatchingRow(title: "Next Up", items: app.nextUpItems)
+                }
+                if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
+                    ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems)
                 }
                 ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                 ForEach(slots, id: \.key) { slot in
@@ -438,6 +446,16 @@ struct ModernHomeView: View {
                                 onMoveUp: nextUpMoveUp
                             )
                         }
+                        if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
+                            ContinueWatchingRow(
+                                title: "Upcoming",
+                                items: app.upcomingItems,
+                                onFocus: setFocus,
+                                focus: $homeFocus,
+                                lastFocusedId: $lastContinueWatchingId,
+                                onMoveUp: upcomingMoveUp
+                            )
+                        }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                         ForEach(slots, id: \.key) { slot in
                             CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus,
@@ -469,7 +487,8 @@ struct ModernHomeView: View {
 
     /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
     private var rowAboveCatalogs: [WatchProgress] {
-        app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+        if !app.upcomingItems.isEmpty { return app.upcomingItems }
+        return app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
     }
 
     /// First catalog: Up goes to Continue Watching, or to the hero when there is none.
@@ -483,6 +502,12 @@ struct ModernHomeView: View {
             let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
             homeFocus = .continueWatching(id)
         }
+    }
+
+    /// Upcoming is the top row when nothing else is above it: Up from it goes to the hero.
+    private var upcomingMoveUp: (() -> Void)? {
+        guard app.resumeItems.isEmpty, app.nextUpItems.isEmpty else { return nil }
+        return { homeFocus = .hero }
     }
 
     /// Next Up is the top row when nothing is in progress: Up from it goes to the hero.

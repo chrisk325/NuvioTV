@@ -87,6 +87,8 @@ private const val SERVER_RESUME_KEY = "mediaserver.resume.v1"
 
 /** Longest wait for a media server to describe a title before TMDB is used instead. */
 private const val SERVER_LOOKUP_MS = 8_000L
+/** Shows looked up per sync for up next air dates the trackers don't give. */
+private const val MAX_AIR_DATE_LOOKUPS = 40
 
 /**
  * Single entry point for platform UIs (the tvOS SwiftUI app). Everything here is plain classes,
@@ -770,14 +772,20 @@ class NuvioCore(
         val busy = inProgress.map { it.contentId }.toSet()
         val now = currentTimeMillis()
         val hideUnreleased = settings.hideUnreleasedUpNext
+        // With the separate Upcoming row, unaired episodes stay (the row shows them) even when hidden here.
+        val hideUnaired = hideUnreleased && !settings.separateUpcomingRow
         val next = upNext.value.filter {
             it.contentId !in busy && upNextKey(it) !in dismissedUpNext && !watched.isWatched(it.videoId) &&
-                !(hideUnreleased && (it.releasedAtMs ?: 0L) > now)
+                !(hideUnaired && (it.releasedAtMs ?: 0L) > now)
         }
         return (inProgress + next).sortedByDescending { it.updatedAtMs }
     }
 
     fun isUpNext(progress: WatchProgress): Boolean = progress.durationMs <= 0L
+
+    /** An up next episode that hasn't aired yet (its air date is known and in the future). */
+    fun isUpcoming(progress: WatchProgress): Boolean =
+        isUpNext(progress) && (progress.releasedAtMs ?: 0L) > currentTimeMillis()
 
     // --- Up next & dismissals ------------------------------------------------------------------
 
@@ -785,6 +793,17 @@ class NuvioCore(
     private val progressListSerializer =
         kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
     private val upNextSources = listOf("simkl", "trakt", "mediaserver", "local")
+    /**
+     * Air dates of up next episodes whose tracker gives none (Jellyfin / AIOMetadata, Simkl):
+     * upNextKey → epoch ms, looked up once in the show's episode list and kept on the device.
+     */
+    private val airDates: MutableMap<String, Long> =
+        store.getString("upnext.airdates")?.split('\n')?.mapNotNull { line ->
+            val cut = line.lastIndexOf('|').takeIf { it > 0 } ?: return@mapNotNull null
+            line.substring(cut + 1).toLongOrNull()?.let { line.substring(0, cut) to it }
+        }?.toMap()?.toMutableMap() ?: mutableMapOf()
+    /** Looked up this run without a date; asked again next launch. */
+    private val airDateMisses = mutableSetOf<String>()
     private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
     private var dismissedUpNext: Set<String> =
         store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
@@ -806,6 +825,46 @@ class NuvioCore(
         upNextSources.flatMap(::storedUpNext)
             .groupBy { it.contentId }
             .mapNotNull { (_, list) -> list.maxByOrNull { it.updatedAtMs } }
+            .map { p -> if (p.releasedAtMs != null) p else airDates[upNextKey(p)]?.let { p.copy(releasedAtMs = it) } ?: p }
+
+    /**
+     * Fills in air dates the trackers don't give, from each show's episode list (one lookup per
+     * show, then kept), so unaired episodes can go to the Upcoming row and show "Airs …".
+     */
+    private suspend fun refreshAirDates() {
+        val missing = upNext.value
+            .filter { it.releasedAtMs == null && it.episode != null && upNextKey(it) !in airDateMisses }
+            .distinctBy { it.contentId }
+            .take(MAX_AIR_DATE_LOOKUPS)
+        if (missing.isEmpty()) return
+        var found = false
+        for (show in missing) {
+            val meta = try {
+                meta(show.contentType, show.contentId, null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            for (entry in upNext.value.filter { it.contentId == show.contentId && it.releasedAtMs == null }) {
+                val video = meta?.videos?.firstOrNull { it.id == entry.videoId }
+                    ?: meta?.videos?.firstOrNull { it.episode == entry.episode && (entry.season == null || it.season == entry.season) }
+                val released = video?.released?.let { com.nuvio.shared.util.parseReleaseEpochMs(it) }
+                if (released != null) {
+                    airDates[upNextKey(entry)] = released
+                    found = true
+                } else {
+                    airDateMisses += upNextKey(entry)
+                }
+            }
+        }
+        if (!found) return
+        // Only dates still in use are kept.
+        val keys = upNextSources.flatMap(::storedUpNext).map(::upNextKey).toSet()
+        airDates.keys.retainAll(keys)
+        store.putString("upnext.airdates", airDates.entries.joinToString("\n") { "${it.key}|${it.value}" })
+        upNext.value = loadUpNext()
+    }
 
     /**
      * Up next without a tracker (Android shows it too): when an episode is finished here, the
@@ -1180,6 +1239,10 @@ class NuvioCore(
             setUpNext("mediaserver", mediaServers.nextUp())
         } else if (storedUpNext("mediaserver").isNotEmpty()) {
             setUpNext("mediaserver", emptyList())
+        }
+        // Air dates for up next episodes the trackers didn't date (in the background).
+        scope.launch {
+            runCatching { refreshAirDates() }.onFailure { if (it is CancellationException) throw it }
         }
         return error
     }

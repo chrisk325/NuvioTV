@@ -136,10 +136,13 @@ struct ContinueWatchingMenu: View {
     var body: some View {
         let preview = app.core.previewFor(progress: progress)
         let inLibrary = app.isInLibrary(progress.contentId)
-        Button {
-            app.core.markProgressWatched(progress: progress)
-        } label: {
-            Label("Mark as watched", systemImage: "eye")
+        // Not before it airs (as on Android).
+        if !app.core.isUpcoming(progress: progress) {
+            Button {
+                app.core.markProgressWatched(progress: progress)
+            } label: {
+                Label("Mark as watched", systemImage: "eye")
+            }
         }
         Button {
             app.toggleLibrary(preview: preview)
@@ -151,6 +154,23 @@ struct ContinueWatchingMenu: View {
         } label: {
             Label("Remove from Continue Watching", systemImage: "xmark.circle")
         }
+    }
+}
+
+/// "Airs today", "Airs tomorrow", "Airs in 3 days", "Airs 12 Dec" (Android cw_airs_*).
+enum AirDate {
+    static func label(_ epochMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(epochMs) / 1000)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Airs today" }
+        if calendar.isDateInTomorrow(date) { return "Airs tomorrow" }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()),
+                                           to: calendar.startOfDay(for: date)).day ?? 0
+        if days > 1 && days < 7 { return "Airs in \(days) days" }
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate(
+            calendar.isDate(date, equalTo: Date(), toGranularity: .year) ? "d MMM" : "d MMM yyyy")
+        return "Airs \(formatter.string(from: date))"
     }
 }
 
@@ -240,15 +260,18 @@ struct ContinueWatchingRow: View {
     }
 
     private func subtitle(_ p: WatchProgress) -> String {
+        // Unaired: when it airs instead of "Next:".
+        let upcoming = app.core.isUpcoming(progress: p)
         // Up next (from Simkl's Watching list): the episode to start, not one to resume.
-        let prefix = app.core.isUpNext(progress: p) ? "Next: " : ""
+        let prefix = app.core.isUpNext(progress: p) && !upcoming ? "Next: " : ""
+        var text = p.name
         if let s = p.season?.int32Value, let e = p.episode?.int32Value {
-            return "\(p.name) · \(prefix)S\(s) E\(e)"
+            text = "\(p.name) · \(prefix)S\(s) E\(e)"
+        } else if let e = p.episode?.int32Value {
+            text = "\(p.name) · \(prefix)E\(e)"
         }
-        if let e = p.episode?.int32Value {
-            return "\(p.name) · \(prefix)E\(e)"
-        }
-        return p.name
+        if upcoming, let ms = p.releasedAtMs?.int64Value { text += " · " + AirDate.label(ms) }
+        return text
     }
 }
 

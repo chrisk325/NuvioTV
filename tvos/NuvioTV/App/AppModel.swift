@@ -19,14 +19,27 @@ final class AppModel: ObservableObject {
     /// Continue Watching (as on Jellyfin's home); otherwise they stay in Continue Watching.
     var splitsNextUp: Bool { !core.mediaServers.servers.isEmpty }
 
+    /// Settings > Home "Separate Upcoming row": unaired next episodes get their own row.
+    private func goesToUpcoming(_ progress: WatchProgress) -> Bool {
+        settings.separateUpcomingRow && core.isUpcoming(progress: progress)
+    }
+
     /// The Continue Watching row: everything, or only titles in progress when Next Up is split off.
     var resumeItems: [WatchProgress] {
-        splitsNextUp ? continueWatching.filter { !core.isUpNext(progress: $0) } : continueWatching
+        let list = continueWatching.filter { !goesToUpcoming($0) }
+        return splitsNextUp ? list.filter { !core.isUpNext(progress: $0) } : list
     }
 
     /// The Next Up row (empty unless split off): next episodes to start, most recently watched show first.
     var nextUpItems: [WatchProgress] {
-        splitsNextUp ? continueWatching.filter { core.isUpNext(progress: $0) } : []
+        splitsNextUp ? continueWatching.filter { core.isUpNext(progress: $0) && !goesToUpcoming($0) } : []
+    }
+
+    /// The Upcoming row (Android's separate Upcoming row): next episodes that haven't aired, soonest first.
+    var upcomingItems: [WatchProgress] {
+        guard settings.separateUpcomingRow else { return [] }
+        return continueWatching.filter { core.isUpcoming(progress: $0) }
+            .sorted { ($0.releasedAtMs?.int64Value ?? .max) < ($1.releasedAtMs?.int64Value ?? .max) }
     }
 
     /// Re-reads Continue Watching after a setting that filters it changed.
