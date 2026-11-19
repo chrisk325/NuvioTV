@@ -155,7 +155,7 @@ internal fun HomeViewModel.observeServerNextUp() {
             }
             serverNextUpCards = cards
             recomposeContinueWatchingRows()
-            val missing = cards.filter { it.entry.videoId !in serverNextUpEnriched && !it.entry.dismissed }
+            val missing = cards.filter { !serverNextUpEnriched.containsKey(it.entry.videoId) && !it.entry.dismissed }
             if (missing.isEmpty()) return@collectLatest
             val enriched = withContext(Dispatchers.IO) { enrichServerNextUp(missing) }
             if (enriched.isEmpty()) return@collectLatest
