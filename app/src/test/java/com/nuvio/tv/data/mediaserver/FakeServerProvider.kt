@@ -31,6 +31,7 @@ internal class FakeServerProvider(
     val playbackRequests = mutableListOf<ServerPlaybackRequest>()
     val searches = mutableListOf<Pair<ServerMediaKind, List<String>>>()
     val playedChanges = mutableListOf<Pair<String, Boolean>>()
+    val resumeRemovals = mutableListOf<String>()
     val failingPlayed = mutableSetOf<String>()
     val favoriteIds = linkedSetOf<String>()
     val favoriteChanges = mutableListOf<Pair<String, Boolean>>()
@@ -144,6 +145,10 @@ internal class FakeServerProvider(
     override suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean) {
         synchronized(playedChanges) { playedChanges += itemId to played }
         if (itemId in failingPlayed) throw ServerException(ServerFailure.FORBIDDEN)
+    }
+
+    override suspend fun removeFromResume(session: ServerSession, itemId: String) {
+        synchronized(resumeRemovals) { resumeRemovals += itemId }
     }
 
     override suspend fun servesCatalogs(session: ServerSession): Boolean = catalogs

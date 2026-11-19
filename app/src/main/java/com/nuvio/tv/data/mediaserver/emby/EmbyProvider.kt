@@ -34,5 +34,8 @@ internal class EmbyProvider(
     override fun favoriteEndpoint(userId: String, itemId: String) =
         Endpoint("/Users/${pathSegment(userId)}/FavoriteItems/${pathSegment(itemId)}")
 
+    override fun removeFromResumeRequest(userId: String, itemId: String) =
+        Endpoint("/Users/${pathSegment(userId)}/Items/${pathSegment(itemId)}/HideFromResume", mapOf("Hide" to "true")) to null
+
     override fun titleLookupQuery(query: ServerTitleQuery): Map<String, String>? = providerIdQuery(query)
 }

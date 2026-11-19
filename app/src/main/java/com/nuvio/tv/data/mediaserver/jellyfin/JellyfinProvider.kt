@@ -30,6 +30,10 @@ internal class JellyfinProvider(
     override fun favoriteEndpoint(userId: String, itemId: String) =
         Endpoint("/UserFavoriteItems/${pathSegment(itemId)}", mapOf("userId" to userId))
 
+    // Resume lists items with a saved position, so clearing the position takes it out; played and favourite stay.
+    override fun removeFromResumeRequest(userId: String, itemId: String) =
+        Endpoint("/UserItems/${pathSegment(itemId)}/UserData", mapOf("userId" to userId)) to """{"PlaybackPositionTicks":0}"""
+
     override fun titleLookupQuery(query: ServerTitleQuery): Map<String, String>? =
         query.name?.trim()?.takeIf { it.isNotEmpty() }?.let { mapOf("searchTerm" to it) }
 
