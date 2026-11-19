@@ -838,6 +838,23 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         }.onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
     }
 
+    /** Marks a whole show played or unplayed (all its episodes) on every server that has it. */
+    suspend fun setSeriesPlayed(contentId: String, imdbId: String?, played: Boolean) {
+        val native = parseNative(contentId)
+        val imdb = (imdbId ?: contentId).substringBefore(':').takeIf { it.startsWith("tt") }
+        val tmdb = if (contentId.startsWith("tmdb:")) contentId.split(':').getOrNull(1) else null
+        val targets = native?.let { listOf(it) } ?: servers.mapNotNull { server ->
+            runCatching { findItemId(server, imdb, tmdb, true) }
+                .onFailure { if (it is CancellationException) throw it }.getOrNull()?.let { server to it }
+        }
+        for ((server, seriesId) in targets) {
+            runCatching {
+                val url = "${server.address}/Users/${server.userId}/PlayedItems/$seriesId"
+                if (played) http.post(url) { auth(server) } else http.delete(url) { auth(server) }
+            }.onFailure { if (it is CancellationException) throw it }
+        }
+    }
+
     /** Series item id → IMDb id (null when the server has none), per server. */
     private val seriesImdb = mutableMapOf<String, String?>()
 

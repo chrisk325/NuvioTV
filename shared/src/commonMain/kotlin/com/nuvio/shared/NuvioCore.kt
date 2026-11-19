@@ -1309,6 +1309,8 @@ class NuvioCore(
         val numbers = episodes.map { it.season!! to it.episode!! }
         val show = TrackedMedia.from(meta, null)
         scope.launch {
+            if (mediaServers.servers.isNotEmpty()) runCatching { mediaServers.setSeriesPlayed(meta.id, meta.imdbId ?: preview.imdbId, isWatched) }
+                .onFailure { if (it is CancellationException) throw it }
             runCatching { trakt.markEpisodesWatched(show, numbers, remove = !isWatched) }
             runCatching { simkl.markEpisodesWatched(show, numbers, remove = !isWatched) }
             runCatching { mdbListTracker.markEpisodesWatched(show, numbers, remove = !isWatched) }
@@ -1321,6 +1323,7 @@ class NuvioCore(
 
     fun setPreviewWatched(preview: MetaPreview, isWatched: Boolean) {
         watched.mark("movie:${preview.imdbId ?: preview.id}", isWatched)
+        setPlayedOnServers(preview.id, preview.imdbId, false, preview.id, null, null, isWatched)
         if (!isWatched) return
         val media = TrackedMedia(
             isEpisode = false,
