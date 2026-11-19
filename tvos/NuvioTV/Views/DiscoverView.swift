@@ -67,6 +67,9 @@ struct DiscoverView: View {
     @State private var error: String?
     /// Changes with every new selection, so answers for an older one are dropped.
     @State private var requestId = 0
+    /// Blurred artwork of the focused title behind the grid.
+    @State private var backdrop: String?
+    @State private var backdropTask: Task<Void, Never>?
 
     private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
 
@@ -93,6 +96,20 @@ struct DiscoverView: View {
     private static let serverPageSize: Int32 = 60
 
     var body: some View {
+        ZStack {
+            // The focused title's artwork, blurred and dimmed so the filters and posters stay readable.
+            FullScreenBackdrop(url: backdrop)
+                .blur(radius: 40)
+                .scaleEffect(1.15) // hides the blur's soft edges
+                .overlay(Color.black.opacity(backdrop == nil ? 0 : 0.55).ignoresSafeArea())
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+            content
+        }
+        .onChange(of: current?.id) { _, _ in backdrop = nil }
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Discover")
@@ -123,7 +140,7 @@ struct DiscoverView: View {
                     }
                     LazyVGrid(columns: columns, spacing: 50) {
                         ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                            PosterCard(item: item)
+                            PosterCard(item: item, onFocus: { showBackdrop(for: $0) })
                                 .onAppear {
                                     if index >= items.count - 7 { Task { await loadMore() } }
                                 }
@@ -138,6 +155,17 @@ struct DiscoverView: View {
         .onChange(of: app.serverLibraries.map(\.key)) { _, _ in refreshSlots() }
         .task(id: current?.id ?? "") { await loadServerGenres() }
         .task(id: "\(current?.id ?? "")|\(genre)") { await restart() }
+    }
+
+    /// Follows focus, after a short pause so fast scrolling doesn't load every title's artwork.
+    private func showBackdrop(for item: MetaPreview) {
+        let url = item.backdropUrl
+        backdropTask?.cancel()
+        backdropTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            backdrop = url
+        }
     }
 
     /// A row of pill buttons, scrolling sideways.
