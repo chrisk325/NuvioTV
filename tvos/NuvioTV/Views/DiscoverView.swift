@@ -15,17 +15,33 @@ struct DiscoverCatalog: Identifiable {
     let name: String
     let source: Source
 
+    /// "Name - Movie · Source", like the Home row headers.
+    static func label(_ name: String, type: String, source: String) -> String {
+        "\(name) - \(typeName(type)) · \(source)"
+    }
+
+    /// Singular type name for headers: "Movie", "Series", "Anime", …
+    static func typeName(_ type: String) -> String {
+        switch type {
+        case "movie": return "Movie"
+        case "series": return "Series"
+        case "tv": return "TV"
+        default: return type.prefix(1).uppercased() + type.dropFirst()
+        }
+    }
+
     static func from(library: ServerLibrary) -> [DiscoverCatalog] {
-        let name = "\(library.name) · \(library.server.name)"
+        func entry(_ id: String, _ type: String, _ itemType: String?) -> DiscoverCatalog {
+            DiscoverCatalog(id: id, type: type, name: label(library.name, type: type, source: library.server.name),
+                            source: .server(library, itemType: itemType))
+        }
         switch library.collectionType {
-        case "movies":
-            return [DiscoverCatalog(id: "server:\(library.key)", type: "movie", name: name, source: .server(library, itemType: nil))]
-        case "tvshows":
-            return [DiscoverCatalog(id: "server:\(library.key)", type: "series", name: name, source: .server(library, itemType: nil))]
+        case "movies": return [entry("server:\(library.key)", "movie", nil)]
+        case "tvshows": return [entry("server:\(library.key)", "series", nil)]
         default:
             return [
-                DiscoverCatalog(id: "server:\(library.key):movie", type: "movie", name: name, source: .server(library, itemType: "Movie")),
-                DiscoverCatalog(id: "server:\(library.key):series", type: "series", name: name, source: .server(library, itemType: "Series")),
+                entry("server:\(library.key):movie", "movie", "Movie"),
+                entry("server:\(library.key):series", "series", "Series"),
             ]
         }
     }
@@ -157,7 +173,8 @@ struct DiscoverView: View {
     private func refreshSlots() {
         let addonCatalogs = app.core.discoverSlots().map { slot in
             DiscoverCatalog(id: slot.key, type: slot.catalog.apiType,
-                            name: "\(slot.catalog.name) · \(slot.addon.displayName)", source: .addon(slot))
+                            name: DiscoverCatalog.label(slot.catalog.name, type: slot.catalog.apiType, source: slot.addon.displayName),
+                            source: .addon(slot))
         }
         slots = addonCatalogs + app.serverLibraries.flatMap(DiscoverCatalog.from(library:))
         if !types.contains(type), let first = types.first { type = first }
