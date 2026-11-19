@@ -206,4 +206,32 @@ class JellyfinRelatedTest {
         assertEquals("https://aio.example/r1", streams[1].url)
         kotlin.test.assertFalse(playbackInfoAsked)
     }
+    @Test
+    fun removingFromContinueWatchingClearsTheJellyfinResumePoint() = runTest {
+        val cleared = mutableListOf<String>()
+        val http = HttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            when {
+                path == "/Users/u1/Items/Resume" -> respond(
+                    """{"Items":[
+                        {"Id":"m1","Name":"Movie","Type":"Movie","RunTimeTicks":72000000000,"ProviderIds":{"Imdb":"tt1"},
+                         "UserData":{"PlaybackPositionTicks":6000000000,"LastPlayedDate":"2026-11-18T10:00:00Z"}},
+                        {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"s1","SeriesName":"Show","ParentIndexNumber":1,"IndexNumber":1,
+                         "RunTimeTicks":36000000000,"UserData":{"PlaybackPositionTicks":6000000000,"LastPlayedDate":"2026-11-18T11:00:00Z"}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                path == "/Items/s1" -> respond("""{"Id":"s1","Type":"Series","ProviderIds":{"Imdb":"tt2"}}""", HttpStatusCode.OK, json)
+                path.startsWith("/UserItems/") && path.endsWith("/UserData") -> {
+                    cleared += path.removePrefix("/UserItems/").removeSuffix("/UserData")
+                    respond("{}", HttpStatusCode.OK, json)
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, serverStore)
+        assertEquals(1, service.removeFromResume("tt2"))
+        assertEquals(listOf("e1"), cleared)
+        assertEquals(1, service.removeFromResume("tt1"))
+        assertEquals(listOf("e1", "m1"), cleared)
+    }
 }

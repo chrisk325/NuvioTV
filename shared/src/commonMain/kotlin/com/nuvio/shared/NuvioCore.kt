@@ -1013,6 +1013,13 @@ class NuvioCore(
     fun removeProgress(contentId: String) {
         watchProgress.remove(contentId)
         dismissFromContinueWatching(contentId)
+        // Also out of the Jellyfin servers' Continue Watching (their resume points are cleared).
+        if (mediaServers.servers.any { it.kind == "jellyfin" }) {
+            scope.launch {
+                runCatching { mediaServers.removeFromResume(contentId) }
+                    .onFailure { if (it is CancellationException) throw it }
+            }
+        }
     }
 
     // --- Watched & trackers -----------------------------------------------------------------

@@ -788,6 +788,56 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         }
     }
 
+    /**
+     * Takes a title out of the Jellyfin servers' Continue Watching: every movie / episode of
+     * [contentId] in a server's resume list gets its saved position cleared (watched state stays
+     * as it is). Jellyfin 10.9+ takes the user data update; older servers get a playback stop at
+     * the start, which clears the resume point the same way. Returns how many items were cleared.
+     */
+    suspend fun removeFromResume(contentId: String): Int {
+        var cleared = 0
+        for (server in servers.filter { it.kind == "jellyfin" }) {
+            val items = runCatching {
+                get(server, "/Users/${server.userId}/Items/Resume?Limit=100&Recursive=true&MediaTypes=Video" +
+                    "&IncludeItemTypes=Movie,Episode&Fields=ProviderIds&EnableUserData=true&EnableImages=false")
+                    ?.objects("Items").orEmpty()
+            }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
+            val matching = items.filter { item ->
+                val progress = runCatching { item.toResumeProgress(server) }
+                    .onFailure { if (it is CancellationException) throw it }.getOrNull()
+                progress?.contentId == contentId || item.nonBlank("Id")?.let { nativeId(server, it) } == contentId ||
+                    item.nonBlank("SeriesId")?.let { nativeId(server, it) } == contentId
+            }
+            for (item in matching) {
+                val itemId = item.nonBlank("Id") ?: continue
+                if (clearResumePoint(server, itemId)) cleared++
+            }
+        }
+        return cleared
+    }
+
+    private suspend fun clearResumePoint(server: MediaServer, itemId: String): Boolean {
+        val body = """{"PlaybackPositionTicks":0}"""
+        val updated = runCatching {
+            http.post("${server.address}/UserItems/$itemId/UserData?userId=${server.userId}") {
+                auth(server)
+                setBody(TextContent(body, HttpContentType.Application.Json))
+            }.status.isSuccess()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
+        if (updated) return true
+        val stop = buildJsonObject {
+            put("ItemId", itemId)
+            put("PositionTicks", 0L)
+            put("PlayMethod", "DirectPlay")
+        }.toString()
+        return runCatching {
+            http.post("${server.address}/Sessions/Playing/Stopped") {
+                auth(server)
+                setBody(TextContent(stop, HttpContentType.Application.Json))
+            }.status.isSuccess()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
+    }
+
     /** Series item id → IMDb id (null when the server has none), per server. */
     private val seriesImdb = mutableMapOf<String, String?>()
 
