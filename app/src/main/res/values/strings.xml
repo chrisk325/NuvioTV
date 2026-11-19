@@ -1215,6 +1215,9 @@
     <string name="layout_cw_click_details_upcoming">Details for Upcoming Only</string>
     <string name="layout_cw_click_details_upcoming_desc">Open details for episodes that have not aired yet, the stream for the rest</string>
     <string name="upcoming_section_title">Upcoming</string>
+    <string name="next_up_section_title">Next Up</string>
+    <string name="layout_separate_next_up_row">Separate Next Up Row</string>
+    <string name="layout_separate_next_up_row_sub">Show the next episode of shows you\'re watching in its own row beneath Continue Watching</string>
     <string name="layout_trailer_button">Show Trailer Button</string>
     <string name="layout_trailer_button_sub">Show trailer button on detail page (only when trailer is available).</string>
     <string name="layout_trailer_play_in_background">Play in Background</string>

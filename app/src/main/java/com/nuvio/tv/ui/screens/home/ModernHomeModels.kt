@@ -31,6 +31,11 @@ internal const val MODERN_HERO_FOCUS_DEBOUNCE_MS = 450L
 internal val MODERN_ROW_HEADER_FOCUS_INSET = 40.dp
 internal const val MODERN_CONTINUE_WATCHING_ROW_KEY = "continue_watching"
 internal const val MODERN_UPCOMING_ROW_KEY = "upcoming_section"
+internal const val MODERN_NEXT_UP_ROW_KEY = "next_up_section"
+
+/** Rows that show Continue Watching cards: Continue Watching itself, Next Up and Upcoming. */
+internal fun isContinueWatchingStyleRowKey(key: String?): Boolean =
+    key == MODERN_CONTINUE_WATCHING_ROW_KEY || key == MODERN_NEXT_UP_ROW_KEY || key == MODERN_UPCOMING_ROW_KEY
 internal val MODERN_LANDSCAPE_LOGO_GRADIENT = Brush.verticalGradient(
     colorStops = arrayOf(
         0.0f to Color.Transparent,
@@ -192,6 +197,13 @@ class ModernCarouselRowBuildCache {
     var continueWatchingUseLandscapePosters: Boolean = false
     var continueWatchingShowImdbRatings: Boolean = true
     var continueWatchingRow: HeroCarouselRow? = null
+    var nextUpItems: List<ContinueWatchingItem> = emptyList()
+    var nextUpTitle: String = ""
+    var nextUpAirsDateTemplate: String = ""
+    var nextUpUpcomingLabel: String = ""
+    var nextUpUseLandscapePosters: Boolean = false
+    var nextUpShowImdbRatings: Boolean = true
+    var nextUpRow: HeroCarouselRow? = null
     var upcomingItems: List<ContinueWatchingItem> = emptyList()
     var upcomingTitle: String = ""
     var upcomingUseLandscapePosters: Boolean = false

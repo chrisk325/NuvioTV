@@ -97,24 +97,19 @@ internal suspend fun HomeViewModel.applyConclusiveOlderNextUpResults(
 
     _uiState.update { state ->
         val reconciled = reconcileConclusiveNextUpItems(
-            currentItems = state.continueWatchingItems + state.upcomingItems,
+            currentItems = state.allContinueWatchingItems,
             resolvedItems = acceptedResolvedItems,
             conclusivelyProcessedContentIds = conclusivelyProcessedContentIds,
             dismissedNextUpKeys = dismissedNextUpKeys
         )
         val sorted = sortContinueWatchingItems(reconciled, sortMode)
-        val (main, upcoming) = splitUpcomingItems(sorted, sortMode)
-        if (state.continueWatchingItems == main && state.upcomingItems == upcoming) {
-            state
-        } else {
-            state.copy(continueWatchingItems = main, upcomingItems = upcoming)
-        }
+        state.withContinueWatchingRows(splitContinueWatchingRows(sorted, sortMode, separateNextUpRow))
     }
 
     if (!persistSnapshot) return
     withContext(Dispatchers.IO) {
         if (profileManager.activeProfileId.value != pipelineProfileId) return@withContext
-        val snapshot = (_uiState.value.continueWatchingItems + _uiState.value.upcomingItems)
+        val snapshot = _uiState.value.allContinueWatchingItems
             .toCachedNextUpSnapshot(com.nuvio.tv.ui.components.brokenImageUrls)
         runCatching {
             cwEnrichmentCache.saveNextUpSnapshot(snapshot, force = true)

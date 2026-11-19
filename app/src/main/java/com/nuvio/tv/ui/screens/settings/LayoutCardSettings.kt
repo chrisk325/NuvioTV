@@ -144,6 +144,12 @@ internal fun LayoutContinueWatchingSection(
             checked = uiState.showUnairedNextUp,
             onToggle = { onEvent(LayoutSettingsEvent.SetShowUnairedNextUp(!uiState.showUnairedNextUp)) }
         )
+        SettingsToggleRow(
+            title = stringResource(R.string.layout_separate_next_up_row),
+            subtitle = stringResource(R.string.layout_separate_next_up_row_sub),
+            checked = uiState.separateNextUpRow,
+            onToggle = { onEvent(LayoutSettingsEvent.SetSeparateNextUpRow(!uiState.separateNextUpRow)) }
+        )
         SettingsActionRow(
             title = stringResource(R.string.layout_cw_click_action),
             subtitle = stringResource(R.string.layout_cw_click_action_sub),

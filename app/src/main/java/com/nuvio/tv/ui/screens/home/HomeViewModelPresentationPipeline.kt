@@ -280,11 +280,13 @@ private data class ContinueWatchingPosterInput(
     val pattern: String,
     val screens: Set<CustomPosterScreen>,
     val continueWatchingItems: List<ContinueWatchingItem>,
+    val nextUpItems: List<ContinueWatchingItem>,
     val upcomingItems: List<ContinueWatchingItem>,
 )
 
 private data class ContinueWatchingPosterOverlay(
     val continueWatchingItems: List<ContinueWatchingItem>,
+    val nextUpItems: List<ContinueWatchingItem>,
     val upcomingItems: List<ContinueWatchingItem>,
 )
 
@@ -301,13 +303,14 @@ internal fun HomeViewModel.observeModernHomePresentationPipeline() {
                     pattern = state.customPosterUrlPattern,
                     screens = state.customPosterEnabledScreens,
                     continueWatchingItems = state.continueWatchingItems,
+                    nextUpItems = state.nextUpItems,
                     upcomingItems = state.upcomingItems,
                 )
             }
             .distinctUntilChanged()
             .map { input ->
                 if (!input.enabled) {
-                    ContinueWatchingPosterOverlay(emptyList(), emptyList())
+                    ContinueWatchingPosterOverlay(emptyList(), emptyList(), emptyList())
                 } else {
                     val pattern = patternForScreen(
                         input.pattern,
@@ -316,6 +319,7 @@ internal fun HomeViewModel.observeModernHomePresentationPipeline() {
                     )
                     ContinueWatchingPosterOverlay(
                         continueWatchingItems = input.continueWatchingItems.withCustomPosterUrls(pattern),
+                        nextUpItems = input.nextUpItems.withCustomPosterUrls(pattern),
                         upcomingItems = input.upcomingItems.withCustomPosterUrls(pattern),
                     )
                 }
@@ -327,6 +331,7 @@ internal fun HomeViewModel.observeModernHomePresentationPipeline() {
                     homeRows = state.homeRows,
                     catalogRows = state.catalogRows,
                     continueWatchingItems = overlay.continueWatchingItems,
+                    nextUpItems = overlay.nextUpItems,
                     upcomingItems = overlay.upcomingItems,
                     useLandscapePosters = state.modernLandscapePostersEnabled,
                     showCatalogTypeSuffix = state.catalogTypeSuffixEnabled,
@@ -343,6 +348,7 @@ internal fun HomeViewModel.observeModernHomePresentationPipeline() {
             .distinctUntilChanged { old, new ->
                 old.homeRows === new.homeRows
                     && old.continueWatchingItems == new.continueWatchingItems
+                    && old.nextUpItems == new.nextUpItems
                     && old.upcomingItems == new.upcomingItems
                     && old.useLandscapePosters == new.useLandscapePosters
                     && old.showCatalogTypeSuffix == new.showCatalogTypeSuffix
@@ -360,7 +366,7 @@ internal fun HomeViewModel.observeModernHomePresentationPipeline() {
             .collectLatest { input ->
                 val shouldWarmStart = _modernHomePresentation.value.rows.list.isEmpty()
                 val visibleCatalogRowCount = input.catalogRows.count { it.items.isNotEmpty() }
-                val warmStartCatalogRowCount = if (input.continueWatchingItems.isNotEmpty()) 2 else 3
+                val warmStartCatalogRowCount = if (input.continueWatchingItems.isNotEmpty() || input.nextUpItems.isNotEmpty()) 2 else 3
 
                 if (shouldWarmStart && visibleCatalogRowCount > warmStartCatalogRowCount) {
                     val warmStartPresentation = withContext(Dispatchers.Default) {
