@@ -34,7 +34,9 @@ internal data class ServerResumeEntry(
     val position: Long,
     val duration: Long,
     val lastWatched: Long,
-    val addonBaseUrl: String? = null
+    val addonBaseUrl: String? = null,
+    /** The server's own item for this video ([ServerItemRef.encode]), to clear it from the server's list. */
+    val serverItemId: String? = null
 ) {
     fun toProgress() = WatchProgress(
         contentId = contentId,
@@ -54,7 +56,7 @@ internal data class ServerResumeEntry(
     )
 }
 
-internal fun WatchProgress.toResumeEntry() = ServerResumeEntry(
+internal fun WatchProgress.toResumeEntry(serverItemId: String? = null) = ServerResumeEntry(
     contentId = contentId,
     contentType = contentType,
     name = name,
@@ -68,7 +70,8 @@ internal fun WatchProgress.toResumeEntry() = ServerResumeEntry(
     position = position,
     duration = duration,
     lastWatched = lastWatched,
-    addonBaseUrl = addonBaseUrl
+    addonBaseUrl = addonBaseUrl,
+    serverItemId = serverItemId
 )
 
 /**
@@ -191,9 +194,9 @@ class ServerResumeImport internal constructor(
             return
         }
         val previous = cache(connection.id)
-        val entries = entries(connection.id, catalog.presenter(connection), resume, previous)
+        val entries = resumeEntries(connection.id, catalog.presenter(connection), resume, previous)
         // A full list may have cut off older items, so it can't tell what the server dropped.
-        val next = next(previous, entries, complete = resume.size < LIMIT, fetchedAtMs = fetchedAtMs)
+        val next = nextEntries(previous, entries, complete = resume.size < LIMIT, fetchedAtMs = fetchedAtMs)
         saveCache(connection.id, next)
         show()
         Log.i(TAG, "Continue watching from ${connection.providerId}: ${resume.size} listed, ${next.shown.size} shown")
@@ -208,8 +211,14 @@ class ServerResumeImport internal constructor(
         entries: List<WatchProgress>,
         complete: Boolean,
         fetchedAtMs: Long
+    ): ServerResumeCache = nextEntries(previous, entries.map { it.toResumeEntry() }, complete, fetchedAtMs)
+
+    private fun nextEntries(
+        previous: ServerResumeCache,
+        current: List<ServerResumeEntry>,
+        complete: Boolean,
+        fetchedAtMs: Long
     ): ServerResumeCache {
-        val current = entries.map { it.toResumeEntry() }
         val listed = current.mapTo(mutableSetOf()) { it.videoId }
         val kept = if (complete) current else current + previous.entries.filterNot { it.videoId in listed }
         val before = previous.entries.associateBy { it.videoId }
@@ -227,12 +236,20 @@ class ServerResumeImport internal constructor(
         present: (ServerTitle) -> MetaPreview,
         resume: List<ServerResume>,
         previous: ServerResumeCache = ServerResumeCache()
-    ): List<WatchProgress> {
+    ): List<WatchProgress> = resumeEntries(connectionId, present, resume, previous).map(ServerResumeEntry::toProgress)
+
+    private fun resumeEntries(
+        connectionId: String,
+        present: (ServerTitle) -> MetaPreview,
+        resume: List<ServerResume>,
+        previous: ServerResumeCache
+    ): List<ServerResumeEntry> {
         val seen = previous.entries.associate { it.videoId to it.lastWatched }
         val now = nowMs()
         return resume.mapNotNull { (title, state) ->
             if (state.played || state.positionMs <= 0L || state.durationMs <= 0L) return@mapNotNull null
             entry(present(title), state, connectionId) { videoId -> seen[videoId] ?: now }
+                ?.toResumeEntry(serverItemId = state.videoId.takeIf { ServerItemRef.isServerId(it) })
         }.distinctBy { it.videoId }
     }
 
@@ -270,12 +287,38 @@ class ServerResumeImport internal constructor(
         )
     }
 
-    /** Remembers what Continue watching removed, so it stays out until the server changes it. */
+    /**
+     * Remembers what Continue watching removed, so it stays out until the server changes it, and asks the server
+     * to take it out of its own continue-watching list too.
+     */
     internal fun dismiss(removed: List<WatchProgress>) {
         removed.groupBy { ServerCatalog.connectionId(it.addonBaseUrl.orEmpty()) }.forEach { (connectionId, entries) ->
             if (connectionId == null) return@forEach
             val cache = cache(connectionId)
-            saveCache(connectionId, cache.copy(dismissed = cache.dismissed + entries.map { it.videoId }))
+            val videoIds = entries.mapTo(mutableSetOf()) { it.videoId }
+            saveCache(connectionId, cache.copy(dismissed = cache.dismissed + videoIds))
+            val refs = cache.entries
+                .filter { it.videoId in videoIds }
+                .mapNotNull { entry -> ServerItemRef.parse(entry.serverItemId ?: entry.videoId) }
+                .filter { it.connectionId == connectionId }
+                .distinct()
+            if (refs.isNotEmpty()) scope.launch { removeFromServer(connectionId, refs) }
+        }
+    }
+
+    private suspend fun removeFromServer(connectionId: String, refs: List<ServerItemRef>) {
+        refs.forEach { ref ->
+            try {
+                repository.call(connectionId) { provider, session ->
+                    if (!provider.supports(ServerCapability.USER_STATE_WRITE)) throw ServerException(ServerFailure.UNSUPPORTED)
+                    provider.removeFromResume(session, ref.itemId)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // It stays out of Continue watching here all the same, through the dismissed list.
+                Log.w(TAG, "Removing item ${ref.itemId} from continue watching on $connectionId failed", error)
+            }
         }
     }
 

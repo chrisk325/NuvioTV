@@ -64,6 +64,9 @@ internal abstract class MediaBrowserProvider(
 
     protected abstract fun favoriteEndpoint(userId: String, itemId: String): Endpoint
 
+    /** The POST that takes an item out of the server's resume list, with its JSON body if any. */
+    protected abstract fun removeFromResumeRequest(userId: String, itemId: String): Pair<Endpoint, String?>
+
     internal open fun isSupported(info: PublicInfo): Boolean = isSupportedVersion(info.version)
 
     override suspend fun signIn(address: String, username: String, password: String): ServerSignIn {
@@ -352,6 +355,18 @@ internal abstract class MediaBrowserProvider(
             path = endpoint.path,
             token = session.token,
             query = endpoint.query
+        )
+    }
+
+    override suspend fun removeFromResume(session: ServerSession, itemId: String) {
+        val (endpoint, body) = removeFromResumeRequest(session.userId, itemId)
+        client.execute(
+            method = "POST",
+            baseUrl = session.apiRoot,
+            path = endpoint.path,
+            token = session.token,
+            query = endpoint.query,
+            body = body
         )
     }
 

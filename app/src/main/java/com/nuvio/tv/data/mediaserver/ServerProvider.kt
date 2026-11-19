@@ -82,6 +82,9 @@ interface ServerProvider {
 
     suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean): Unit = unsupported()
 
+    /** Takes [itemId] out of the server's continue-watching list without marking it played. */
+    suspend fun removeFromResume(session: ServerSession, itemId: String): Unit = unsupported()
+
     /** True when the server's libraries are catalogs (AIOStreams, AIOMetadata): rows for Home, not the Library. */
     suspend fun servesCatalogs(session: ServerSession): Boolean = false
 

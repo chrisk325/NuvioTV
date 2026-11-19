@@ -313,6 +313,38 @@ class ServerResumeImportTest {
     }
 
     @Test
+    fun aRemovedItemIsTakenOutOfTheServersListToo() {
+        val harness = harness()
+        val id = harness.connection.id
+        harness.repository.setImportWatchState(id, true)
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        runBlocking { harness.import.import(harness.repository.connection(id)!!) }
+        val shown = mutableListOf<List<WatchProgress>>()
+        verify { harness.progress.setExternalProgress(capture(shown)) }
+
+        harness.import.dismiss(shown.last())
+
+        assertEquals(listOf("ep1"), harness.provider.resumeRemovals)
+    }
+
+    @Test
+    fun aRemovedShowWithAddonMetadataClearsTheServersEpisode() {
+        val harness = harness()
+        val id = harness.connection.id
+        harness.repository.setImportWatchState(id, true)
+        harness.repository.setCatalogMetadata(id, true)
+        harness.provider.resume = listOf(ServerResume(show(id), episodeState(id)))
+        runBlocking { harness.import.import(harness.repository.connection(id)!!) }
+        val shown = mutableListOf<List<WatchProgress>>()
+        verify { harness.progress.setExternalProgress(capture(shown)) }
+        assertEquals("tmdb:37854:1:4", shown.last().single().videoId)
+
+        harness.import.dismiss(shown.last())
+
+        assertEquals(listOf("ep1"), harness.provider.resumeRemovals)
+    }
+
+    @Test
     fun takesOutWhatEarlierVersionsStoredWithTheSyncedProgress() {
         val id = "cfake"
         val stored = listOf(

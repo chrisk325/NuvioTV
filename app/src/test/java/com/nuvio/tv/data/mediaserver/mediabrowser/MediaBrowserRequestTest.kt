@@ -226,6 +226,29 @@ class MediaBrowserRequestTest {
     }
 
     @Test
+    fun jellyfinClearsTheResumePositionToRemoveFromContinueWatching() = runTest {
+        val http = TestHttp { "" }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        jellyfin.removeFromResume(session("jellyfin", "https://media.example.com/jellyfin"), "i1")
+
+        val request = http.requests.single()
+        assertEquals("POST https://media.example.com/jellyfin/UserItems/i1/UserData?userId=u1", "${request.method} ${request.url}")
+        assertEquals("""{"PlaybackPositionTicks":0}""", request.text)
+    }
+
+    @Test
+    fun embyHidesAnItemFromResume() = runTest {
+        val http = TestHttp { "" }
+        val emby = EmbyProvider(http.client, testIdentity)
+
+        emby.removeFromResume(session("emby", "https://media.example.com"), "i1")
+
+        val request = http.requests.single()
+        assertEquals("POST https://media.example.com/emby/Users/u1/Items/i1/HideFromResume?Hide=true", "${request.method} ${request.url}")
+    }
+
+    @Test
     fun embyLooksUpATitleByItsProviderIdsInOneRequest() = runTest {
         val http = TestHttp {
             """{"Items": [{"Id": "m1", "Name": "Apocalypse Now", "Type": "Movie", "ProductionYear": 1979,
