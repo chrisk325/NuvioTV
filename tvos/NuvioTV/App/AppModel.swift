@@ -15,6 +15,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var addons: [Addon] = []
     @Published private(set) var continueWatching: [WatchProgress] = []
 
+    /// With a Jellyfin / Emby server signed in, up next episodes get their own "Next Up" row under
+    /// Continue Watching (as on Jellyfin's home); otherwise they stay in Continue Watching.
+    var splitsNextUp: Bool { !core.mediaServers.servers.isEmpty }
+
+    /// The Continue Watching row: everything, or only titles in progress when Next Up is split off.
+    var resumeItems: [WatchProgress] {
+        splitsNextUp ? continueWatching.filter { !core.isUpNext(progress: $0) } : continueWatching
+    }
+
+    /// The Next Up row (empty unless split off): next episodes to start, most recently watched show first.
+    var nextUpItems: [WatchProgress] {
+        splitsNextUp ? continueWatching.filter { core.isUpNext(progress: $0) } : []
+    }
+
     /// Re-reads Continue Watching after a setting that filters it changed.
     func reloadContinueWatching() {
         continueWatching = core.continueWatching()

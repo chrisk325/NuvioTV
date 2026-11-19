@@ -189,8 +189,12 @@ struct ClassicHomeView: View {
                     if app.settings.showHero {
                         HeroCarousel(items: feed.heroItems(slots, core: app.core))
                     }
-                    if showsContinueWatching {
-                        ContinueWatchingRow(items: app.continueWatching, onFocus: setFocus, focus: $homeFocus,
+                    if app.settings.showContinueWatching && !app.resumeItems.isEmpty {
+                        ContinueWatchingRow(items: app.resumeItems, onFocus: setFocus, focus: $homeFocus,
+                                            lastFocusedId: $lastContinueWatchingId)
+                    }
+                    if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
+                        ContinueWatchingRow(title: "Next Up", items: app.nextUpItems, onFocus: setFocus, focus: $homeFocus,
                                             lastFocusedId: $lastContinueWatchingId)
                     }
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
@@ -213,12 +217,17 @@ struct ClassicHomeView: View {
         app.settings.showContinueWatching && !app.continueWatching.isEmpty
     }
 
+    /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
+    private var rowAboveCatalogs: [WatchProgress] {
+        app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+    }
+
     /// First catalog right under Continue Watching: Up goes there explicitly.
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
         guard showsContinueWatching, app.serverLibraries.isEmpty,
               slot.key == firstLoadedSlotKey else { return nil }
         return {
-            let items = app.continueWatching
+            let items = rowAboveCatalogs
             let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
             homeFocus = .continueWatching(id)
         }
@@ -291,8 +300,11 @@ struct GridHomeView: View {
                 if app.settings.showHero {
                     HeroCarousel(items: feed.heroItems(slots, core: app.core), height: 520)
                 }
-                if app.settings.showContinueWatching && !app.continueWatching.isEmpty {
-                    ContinueWatchingRow(items: app.continueWatching)
+                if app.settings.showContinueWatching && !app.resumeItems.isEmpty {
+                    ContinueWatchingRow(items: app.resumeItems)
+                }
+                if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
+                    ContinueWatchingRow(title: "Next Up", items: app.nextUpItems)
                 }
                 ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                 ForEach(slots, id: \.key) { slot in
@@ -402,9 +414,9 @@ struct ModernHomeView: View {
                     // nothing above on Up (first catalog → Continue Watching / hero).
                     VStack(alignment: .leading, spacing: 24) {
                         Color.clear.frame(height: 0).id(Self.topAnchor)
-                        if showsContinueWatching {
+                        if app.settings.showContinueWatching && !app.resumeItems.isEmpty {
                             ContinueWatchingRow(
-                                items: app.continueWatching,
+                                items: app.resumeItems,
                                 onFocus: { item in
                                     setFocus(item)
                                     // Back on the top row: rows return to the top, right under the hero.
@@ -413,6 +425,17 @@ struct ModernHomeView: View {
                                 focus: $homeFocus,
                                 lastFocusedId: $lastContinueWatchingId,
                                 onMoveUp: { homeFocus = .hero }
+                            )
+                        }
+                        if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
+                            ContinueWatchingRow(
+                                title: "Next Up",
+                                items: app.nextUpItems,
+                                onFocus: setFocus,
+                                focus: $homeFocus,
+                                lastFocusedId: $lastContinueWatchingId,
+                                // Top row when nothing is in progress: Up goes to the hero.
+                                onMoveUp: nextUpMoveUp
                             )
                         }
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
@@ -444,6 +467,11 @@ struct ModernHomeView: View {
         app.settings.showContinueWatching && !app.continueWatching.isEmpty
     }
 
+    /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
+    private var rowAboveCatalogs: [WatchProgress] {
+        app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+    }
+
     /// First catalog: Up goes to Continue Watching, or to the hero when there is none.
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
         guard app.serverLibraries.isEmpty,
@@ -451,10 +479,16 @@ struct ModernHomeView: View {
         else { return nil }
         guard showsContinueWatching else { return { homeFocus = .hero } }
         return {
-            let items = app.continueWatching
+            let items = rowAboveCatalogs
             let id = items.first(where: { $0.videoId == lastContinueWatchingId })?.videoId ?? items.first?.videoId ?? ""
             homeFocus = .continueWatching(id)
         }
+    }
+
+    /// Next Up is the top row when nothing is in progress: Up from it goes to the hero.
+    private var nextUpMoveUp: (() -> Void)? {
+        guard app.resumeItems.isEmpty else { return nil }
+        return { homeFocus = .hero }
     }
 
     private static let topAnchor = "modern.top"

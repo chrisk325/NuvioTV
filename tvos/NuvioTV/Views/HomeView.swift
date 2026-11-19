@@ -164,6 +164,7 @@ enum HomeFocus: Hashable {
 
 struct ContinueWatchingRow: View {
     @EnvironmentObject private var app: AppModel
+    var title = "Continue Watching"
     let items: [WatchProgress]
     var onFocus: ((MetaPreview) -> Void)? = nil
     /// Each card carries `.continueWatching(videoId)`; Up from the first catalog targets the last one focused.
@@ -175,7 +176,7 @@ struct ContinueWatchingRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Continue Watching").font(.headline).padding(.horizontal, 60)
+            Text(title).font(.headline).padding(.horizontal, 60)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 40) {
                     ForEach(items, id: \.videoId) { progress in
