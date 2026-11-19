@@ -258,6 +258,24 @@ class NuvioCore(
     suspend fun loadCatalogFiltered(slot: CatalogSlot, skip: Int, genre: String): CatalogRow =
         catalogRepository.loadRow(slot.addon, slot.catalog, skip, if (genre.isBlank()) emptyMap() else mapOf("genre" to genre))
 
+    /**
+     * Catalogs for Discover (Android's Discover): every enabled add-on's catalogs that can be
+     * browsed — not search-only ones, nor ones that require something other than a genre.
+     */
+    fun discoverSlots(): List<CatalogSlot> =
+        addonRepository.currentAddons.filter { it.enabled }.flatMap { addon ->
+            addon.catalogs.filter { catalog ->
+                !catalog.isSearchOnlyCatalog() &&
+                    catalog.extra.filter { it.isRequired }.all { it.name.equals("genre", ignoreCase = true) } &&
+                    catalog.extraRequired.all { it.equals("genre", ignoreCase = true) }
+            }.map { CatalogSlot(addon, it) }
+        }
+
+    /** The catalog can't list "All": a genre must be picked. */
+    fun genreRequired(slot: CatalogSlot): Boolean =
+        slot.catalog.extra.any { it.name.equals("genre", ignoreCase = true) && it.isRequired } ||
+            slot.catalog.extraRequired.any { it.equals("genre", ignoreCase = true) }
+
     /** Genre options a catalog declares (empty when it has no genre extra). */
     fun genres(slot: CatalogSlot): List<String> =
         slot.catalog.extra.firstOrNull { it.name.equals("genre", ignoreCase = true) }?.options.orEmpty()

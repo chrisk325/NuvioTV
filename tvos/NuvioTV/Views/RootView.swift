@@ -18,6 +18,11 @@ struct RootView: View {
                     .tabItem { Label("Search", systemImage: "magnifyingglass") }
                     .tag(TopBarTab.search.rawValue)
             }
+            if !settings.isTabHidden(tab: TopBarTab.discover.rawValue) {
+                NavigationStack { DiscoverView().nuvioDestinations() }
+                    .tabItem { Label("Discover", systemImage: "safari") }
+                    .tag(TopBarTab.discover.rawValue)
+            }
             if !settings.isTabHidden(tab: TopBarTab.liveTv.rawValue) {
                 NavigationStack { LiveTvView() }
                     .tabItem { Label("Live TV", systemImage: "tv") }
@@ -42,13 +47,14 @@ struct RootView: View {
 
 /// Top bar items that can be hidden (Settings > Appearance).
 enum TopBarTab: String, CaseIterable, Identifiable {
-    case search, liveTv = "livetv", library, addons
+    case search, discover, liveTv = "livetv", library, addons
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .search: return "Search"
+        case .discover: return "Discover"
         case .liveTv: return "Live TV"
         case .library: return "Library"
         case .addons: return "Add-ons"
@@ -58,6 +64,7 @@ enum TopBarTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .search: return "magnifyingglass"
+        case .discover: return "safari"
         case .liveTv: return "tv"
         case .library: return "bookmark"
         case .addons: return "puzzlepiece.extension"
