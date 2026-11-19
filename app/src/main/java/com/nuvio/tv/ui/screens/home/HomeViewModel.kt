@@ -91,6 +91,8 @@ class HomeViewModel @Inject constructor(
     internal val serverCatalog: ServerCatalog,
     internal val trailerPlayerPool: com.nuvio.tv.core.player.TrailerPlayerPool,
     internal val backgroundTrailerController: com.nuvio.tv.core.player.BackgroundTrailerController,
+    internal val serverNextUpSource: com.nuvio.tv.data.mediaserver.ServerNextUpSource =
+        com.nuvio.tv.data.mediaserver.ServerNextUpSource.None,
     internal val metaPreviewEnricher: MetaPreviewEnricher = MetaPreviewEnricher(
         tmdbService,
         tmdbMetadataService,
@@ -333,6 +335,14 @@ class HomeViewModel @Inject constructor(
     internal var continueWatchingSortMode: ContinueWatchingSortMode = ContinueWatchingSortMode.DEFAULT
     @Volatile
     internal var separateNextUpRow: Boolean = true
+    /** The media servers' Next Up entries as cards, or null when no server offers Next Up. */
+    @Volatile
+    internal var serverNextUpCards: List<ServerNextUpCard>? = null
+    /** Server Next Up cards filled in with addon metadata, by video id. */
+    internal val serverNextUpEnriched = java.util.concurrent.ConcurrentHashMap<String, ContinueWatchingItem.NextUp>()
+    /** The app's own Continue Watching items last shown, before the servers' Next Up was merged in. */
+    @Volatile
+    internal var cwLocalContinueWatchingItems: List<ContinueWatchingItem>? = null
     internal val startupStartedAtMs: Long = SystemClock.elapsedRealtime()
     @Volatile
     internal var startupGracePeriodActive: Boolean = true
@@ -392,6 +402,7 @@ class HomeViewModel @Inject constructor(
             observeExternalMetaPrefetchPreference()
             observeContinueWatchingSortMode()
             observeSeparateNextUpRow()
+            observeServerNextUp()
             loadHomeCatalogOrderPreference()
             loadFollowAddonsOrder()
             loadDisabledHomeCatalogPreference()
@@ -432,6 +443,8 @@ class HomeViewModel @Inject constructor(
                     cwEnrichedInProgressOverlay.clear()
                     cwLastBadgeEpisodeKeys = emptySet()
                     cwLastShowIdSiblings = emptyMap()
+                    cwLocalContinueWatchingItems = null
+                    serverNextUpEnriched.clear()
                     _uiState.update {
                         it.copy(layoutPreferencesReady = false, continueWatchingItems = emptyList(), nextUpItems = emptyList(), upcomingItems = emptyList())
                     }
@@ -490,6 +503,7 @@ class HomeViewModel @Inject constructor(
         cwLastBadgeEpisodeKeys = emptySet()
         cwLastShowIdSiblings = emptyMap()
         watchedSeriesStateHolder.clearValidationState()
+        cwLocalContinueWatchingItems = null
         _uiState.update { it.copy(continueWatchingItems = emptyList(), nextUpItems = emptyList(), upcomingItems = emptyList()) }
         // Bump trigger so the pipeline's collectLatest restarts with fresh state.
         cwPipelineRefreshTrigger.value++
@@ -538,15 +552,7 @@ class HomeViewModel @Inject constructor(
                     if (separateNextUpRow == enabled) return@collect
                     separateNextUpRow = enabled
                     // Re-split what is on screen; later pipeline runs pick the new value up.
-                    _uiState.update { state ->
-                        state.withContinueWatchingRows(
-                            splitContinueWatchingRows(
-                                sortContinueWatchingItems(state.allContinueWatchingItems, continueWatchingSortMode),
-                                continueWatchingSortMode,
-                                enabled
-                            )
-                        )
-                    }
+                    recomposeContinueWatchingRows()
                 }
         }
     }
@@ -855,8 +861,8 @@ class HomeViewModel @Inject constructor(
             if (items.isNotEmpty()) {
                 val separateNextUp = layoutPreferenceDataStore.separateNextUpRow.first()
                 separateNextUpRow = separateNextUp
-                val rows = splitContinueWatchingRows(items, sortMode, separateNextUp)
-                _uiState.update { it.withContinueWatchingRows(rows) }
+                val rows = continueWatchingRowsFor(items, sortMode)
+                _uiState.update { applyContinueWatchingRows(it, rows) }
                 _initialCwResolved.value = true
             }
         }
@@ -877,6 +883,8 @@ class HomeViewModel @Inject constructor(
 
     private fun markContinueWatchingWatched(item: ContinueWatchingItem) {
         if (!item.canMarkWatched()) return
+        // A card from a server's Next Up is marked played there too, so the server moves the show on.
+        serverNextUpEntryFor(item)?.let(serverNextUpSource::markPlayed)
         viewModelScope.launch {
             runCatching { watchProgressRepository.markAsCompleted(item.toCompletedProgress()) }
                 .onFailure { error -> Log.w(TAG, "Failed to mark continue watching item as watched", error) }
