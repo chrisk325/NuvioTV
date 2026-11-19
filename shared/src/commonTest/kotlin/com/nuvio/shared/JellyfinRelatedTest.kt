@@ -125,4 +125,54 @@ class JellyfinRelatedTest {
         assertEquals("Four", next[0].episodeTitle)
         kotlin.test.assertTrue(next[1].updatedAtMs < next[0].updatedAtMs)
     }
+
+    @Test
+    fun standInsWithoutPlaceholderTypeAreResolvedThroughTheStreamListOne() = runTest {
+        val asked = mutableListOf<String?>()
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items/e1" -> respond(
+                    """{"Id":"e1","Name":"Marnukh","Type":"Episode","MediaSources":[
+                        {"Id":"auto","Name":"Streams load when played","Container":"mp4","Protocol":"File"},
+                        {"Id":"list","Name":"Load the stream list","Container":"mp4","Protocol":"File"}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Items/e1/PlaybackInfo" -> {
+                    val source = request.url.parameters["MediaSourceId"]
+                    asked += source
+                    if (source == "list") respond(
+                        """{"MediaSources":[
+                            {"Name":"📊 Statistics\n> 42 results"},
+                            {"Id":"r1","Name":"[RD+] 2160p\n> 12 GB","Path":"https://aio.example/r1","Protocol":"Http"}]}""",
+                        HttpStatusCode.OK, json
+                    ) else respond(
+                        """{"MediaSources":[
+                            {"Id":"auto","Name":"Streams load when played","Container":"mp4","Protocol":"File"},
+                            {"Id":"list","Name":"Load the stream list","Container":"mp4","Protocol":"File"}]}""",
+                        HttpStatusCode.OK, json
+                    )
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val streams = MediaServerService(http, serverStore).streams("series", "mediaserver:srv:e1").single().streams
+        assertEquals(listOf("📊 Statistics", "[RD+] 2160p"), streams.map { it.name })
+        assertEquals("list", asked[1]) // the stream-list stand-in is asked first
+    }
+
+    @Test
+    fun onlyTheServersPickRemainsWhenNothingResolves() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            val body = """{"Id":"e1","Name":"X","Type":"Episode","MediaSources":[
+                {"Id":"auto","Name":"Streams load when played","Container":"mp4","Protocol":"File"},
+                {"Id":"list","Name":"Load the stream list","Container":"mp4","Protocol":"File"}]}"""
+            when (request.url.encodedPath) {
+                "/Users/u1/Items/e1", "/Items/e1/PlaybackInfo" -> respond(body, HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val streams = MediaServerService(http, serverStore).streams("series", "mediaserver:srv:e1").single().streams
+        assertEquals(1, streams.size)
+        assertEquals("Streams load when played", streams.single().title)
+    }
 }

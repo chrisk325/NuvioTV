@@ -34,6 +34,7 @@ import io.ktor.http.ContentType as HttpContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -506,26 +507,41 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
                 resolved.getOrPut(key) { source }
             }
         }
+        // AIOMetadata-style servers list stand-ins ("Streams load when played", "Load the stream
+        // list"), recognised by name: they may or may not carry Type "Placeholder". Asking
+        // PlaybackInfo for the "stream list" one returns the real streams (and statistics).
+        fun isReal(source: JsonObject) = !isStandIn(source)
+        fun hasReal() = resolved.values.any(::isReal)
+        val probeIds = stored
+            .sortedByDescending { it.str("Name")?.contains("stream list", ignoreCase = true) == true }
+            .mapNotNull { it.nonBlank("Id") }
+            .distinct()
         ask(null)
-        val storedIds = stored.mapNotNull { it.nonBlank("Id") }.toSet()
-        for (id in storedIds.take(MAX_SOURCE_PROBES)) {
-            // The first call already produced new sources: no need to probe each stored one.
-            if (resolved.values.any { (it.nonBlank("Id") ?: "") !in storedIds && !it.isPlaceholderSource() }) break
+        for (id in probeIds.take(MAX_SOURCE_PROBES)) {
+            if (hasReal()) break
             ask(id)
         }
-        // Still nothing new: the plugin may have saved the resolved versions on the item.
-        val refreshed = if (resolved.isEmpty() || resolved.values.all { it.isPlaceholderSource() }) {
-            item(server, itemId)?.objects("MediaSources").orEmpty()
-        } else emptyList()
+        var refreshed = emptyList<JsonObject>()
+        if (!hasReal()) {
+            // The server may have saved the resolved versions on the item, or still be fetching
+            // them from the stream add-on: look again after a short pause.
+            refreshed = item(server, itemId)?.objects("MediaSources").orEmpty()
+            if (refreshed.none(::isReal)) {
+                delay(2_000)
+                probeIds.firstOrNull()?.let { ask(it) } ?: ask(null)
+                if (!hasReal()) refreshed = item(server, itemId)?.objects("MediaSources").orEmpty()
+            }
+        }
         // Same id and same name only collapse true duplicates (info entries can share an id).
         val all = (resolved.values + refreshed + stored)
             .distinctBy { (it.nonBlank("Id") ?: it.nonBlank("Path") ?: it.toString()) + "|" + it.str("Name") }
-        // Drop only the item's stored stand-ins ("Streams load when played"): placeholders the
-        // plugin returns with the resolved list (AIOStreams statistics / info entries) are kept.
         // Everything the server lists is shown, playable or not (statistics / info entries become
-        // text cards); only the plugin's "load when played" stand-ins are left out.
-        val real = all.filterNot { source -> source.isPlaceholderSource() && isStandIn(source) }
-        val sources = real.ifEmpty { all }.ifEmpty { listOf(JsonObject(mapOf())) }
+        // text cards); the stand-ins only when nothing else came back, and then only the
+        // "load when played" one (the server picks a stream itself), never "Load the stream list".
+        val real = all.filter(::isReal)
+        val sources = real.ifEmpty {
+            all.filter { it.str("Name")?.contains("stream list", ignoreCase = true) != true }.take(1)
+        }.ifEmpty { listOf(JsonObject(mapOf())) }
         val streams = sources.map { source -> sourceStream(server, itemId, target, source) }
         return AddonStreams(server.name, null, streams)
     }
