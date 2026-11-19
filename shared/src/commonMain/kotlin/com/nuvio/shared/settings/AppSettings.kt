@@ -277,6 +277,16 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("tmdb.episodes", true)
         set(value) = put("tmdb.episodes", value)
 
+    /** Season posters from TMDB for the season tabs on the details page (Android useSeasonPosters, default off). */
+    var tmdbUseSeasonPosters: Boolean
+        get() = bool("tmdb.seasonPosters", false)
+        set(value) = put("tmdb.seasonPosters", value)
+
+    /** Layout > Details "Season Posters": seasons as posters instead of text tabs when available (default off). */
+    var detailSeasonPosters: Boolean
+        get() = bool("detail.seasonPosters", false)
+        set(value) = put("detail.seasonPosters", value)
+
     var tmdbUseTrailers: Boolean
         get() = bool("tmdb.trailers", true)
         set(value) = put("tmdb.trailers", value)

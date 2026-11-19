@@ -362,7 +362,8 @@ class NuvioCore(
                     season = ep.season,
                     episode = ep.episode,
                     overview = ep.overview,
-                    runtimeMinutes = ep.runtimeMinutes ?: 0
+                    runtimeMinutes = ep.runtimeMinutes ?: 0,
+                    seasonPoster = ep.seasonPoster?.takeIf { settings.tmdbUseSeasonPosters }
                 )
             }
         }
@@ -471,7 +472,8 @@ class NuvioCore(
         if (e != null && s.tmdbUseTrailers && e.trailerYoutubeKeys.isNotEmpty()) {
             m = m.copy(trailerYtIds = (m.trailerYtIds + e.trailerYoutubeKeys).distinct())
         }
-        if (e != null && e.isShow && s.tmdbUseEpisodes && m.videos.isNotEmpty()) {
+        // Episodes and season posters (Android: needsEpisodes = useEpisodes || useSeasonPosters).
+        if (e != null && e.isShow && (s.tmdbUseEpisodes || s.tmdbUseSeasonPosters) && m.videos.isNotEmpty()) {
             val seasons = m.videos.mapNotNull { it.season }.distinct().filter { it > 0 }.take(30)
             val episodes = seasons.flatMap { season ->
                 runCatching { tmdb.seasonEpisodes(e.tmdbId, season, s.tmdbLanguage) }.getOrDefault(emptyList())
@@ -480,10 +482,11 @@ class NuvioCore(
                 m = m.copy(videos = m.videos.map { v ->
                     val ep = if (v.season != null && v.episode != null) episodes[v.season to v.episode] else null
                     if (ep == null) v else v.copy(
-                        title = ep.title ?: v.title,
-                        overview = ep.overview ?: v.overview,
-                        thumbnail = ep.thumbnail ?: v.thumbnail,
-                        runtimeMinutes = ep.runtimeMinutes ?: v.runtimeMinutes
+                        title = if (s.tmdbUseEpisodes) ep.title ?: v.title else v.title,
+                        overview = if (s.tmdbUseEpisodes) ep.overview ?: v.overview else v.overview,
+                        thumbnail = if (s.tmdbUseEpisodes) ep.thumbnail ?: v.thumbnail else v.thumbnail,
+                        runtimeMinutes = if (s.tmdbUseEpisodes) ep.runtimeMinutes ?: v.runtimeMinutes else v.runtimeMinutes,
+                        seasonPoster = if (s.tmdbUseSeasonPosters) ep.seasonPoster ?: v.seasonPoster else v.seasonPoster
                     )
                 })
             }
@@ -782,6 +785,18 @@ class NuvioCore(
     }
 
     fun isUpNext(progress: WatchProgress): Boolean = progress.durationMs <= 0L
+
+    /**
+     * Season tab posters (Android Layout > Details "Season Posters"): one URL per entry of
+     * [seasons], a season without its own poster getting the show's poster ("" when none), or
+     * null — plain text tabs — when the setting is off or no season has a poster.
+     */
+    fun seasonPosterTabs(meta: Meta, seasons: List<Int>): List<String>? {
+        if (!settings.detailSeasonPosters) return null
+        val posters = seasons.map { meta.seasonPoster(it) }
+        if (posters.all { it == null }) return null
+        return posters.map { it ?: meta.poster.orEmpty() }
+    }
 
     /** An up next episode that hasn't aired yet (its air date is known and in the future). */
     fun isUpcoming(progress: WatchProgress): Boolean =

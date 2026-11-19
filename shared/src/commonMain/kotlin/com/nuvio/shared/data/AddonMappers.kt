@@ -203,8 +203,41 @@ internal fun JsonObject.toMeta(episodeLabel: String = "Episode"): Meta? {
                 defaultVideoId = it.nonBlank("defaultVideoId"),
                 hasScheduledVideos = it.bool("hasScheduledVideos")
             )
-        }
+        },
+        seasonPosters = mapSeasonPosters(appExtras, objects("videos").mapNotNull { it.int("season") })
     )
+}
+
+/**
+ * Android MetaMapper.mapSeasonPosters: app_extras seasonPosters (or seasonPosterByNumber) as a
+ * map keyed by season number, or as a list in season order (with or without specials first).
+ */
+private fun mapSeasonPosters(appExtras: JsonObject?, videoSeasons: List<Int>): Map<Int, String> {
+    fun keyed(element: kotlinx.serialization.json.JsonElement?): Map<Int, String> {
+        val map = element as? JsonObject ?: return emptyMap()
+        return map.entries.mapNotNull { (key, value) ->
+            val season = key.trim().toIntOrNull() ?: return@mapNotNull null
+            val poster = (value as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+            poster?.takeIf { it.isNotBlank() }?.let { season to it }
+        }.toMap()
+    }
+    if (appExtras == null) return emptyMap()
+    val byKey = keyed(appExtras["seasonPosters"]).ifEmpty { keyed(appExtras["seasonPosterByNumber"]) }
+    if (byKey.isNotEmpty()) return byKey
+    val posters = appExtras["seasonPosters"] as? kotlinx.serialization.json.JsonArray ?: return emptyMap()
+    val seasons = videoSeasons.filter { it >= 0 }.distinct().sorted()
+    val positive = seasons.filter { it > 0 }
+    val firstIsNull = (posters.firstOrNull() as? kotlinx.serialization.json.JsonPrimitive)?.let { !it.isString } ?: (posters.firstOrNull() == null)
+    val posterSeasons = when {
+        seasons.size == posters.size -> seasons
+        positive.size == posters.size -> positive
+        positive.isNotEmpty() && posters.size == positive.size + 1 && firstIsNull -> listOf(0) + positive
+        else -> List(posters.size) { it + 1 }
+    }
+    return posters.mapIndexedNotNull { index, element ->
+        val poster = (element as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+        poster?.takeIf { it.isNotBlank() }?.let { posterSeasons[index] to it }
+    }.toMap()
 }
 
 internal fun JsonObject.toVideo(episodeLabel: String): Video? {
@@ -220,7 +253,8 @@ internal fun JsonObject.toVideo(episodeLabel: String): Video? {
         episode = episode,
         overview = str("overview") ?: str("description"),
         runtimeMinutes = parseEpisodeRuntimeMinutes(str("runtime")) ?: 0,
-        available = bool("available")
+        available = bool("available"),
+        seasonPoster = (nonBlank("seasonPoster") ?: nonBlank("season_poster_path"))?.trim()
     )
 }
 

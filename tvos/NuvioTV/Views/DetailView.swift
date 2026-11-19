@@ -566,32 +566,49 @@ struct EpisodesSection: View {
     @Binding var lastFocusedId: String?
     /// Up from the top row (season tabs, else the episode cards): back to the hero screen.
     var onMoveUpFromTop: (() -> Void)? = nil
+    /// The focused season tab (nil: focus is elsewhere), so the row returns to the selected season.
+    @FocusState private var focusedTab: Int32?
 
     var body: some View {
-        let seasons = meta.seasons().map { $0.int32Value }
+        let seasonNumbers = meta.seasons()
+        let seasons = seasonNumbers.map { $0.int32Value }
         let episodes = meta.episodesForSeason(season: selectedSeason)
+        // Settings > Home > Details page "Season posters" (Android detailSeasonPostersEnabled):
+        // posters instead of text tabs when the add-on or TMDB has season posters.
+        let posters = app.core.seasonPosterTabs(meta: meta, seasons: seasonNumbers)
+        // Android shows the poster row even for a single season; text tabs only from two seasons.
+        let showsTabs = seasons.count > 1 || (posters != nil && !seasons.isEmpty)
         VStack(alignment: .leading, spacing: 28) {
-            if seasons.count > 1 {
+            if showsTabs {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 16) {
-                        ForEach(seasons, id: \.self) { season in
+                    HStack(alignment: .top, spacing: posters == nil ? 16 : 28) {
+                        ForEach(Array(seasons.enumerated()), id: \.element) { index, season in
+                            let title = season == 0 ? "Specials" : "Season \(season)"
                             // Moving onto a tab switches the season (as in the Apple TV app); clicking does too.
                             Button {
                                 selectedSeason = season
                             } label: {
-                                Text(season == 0 ? "Specials" : "Season \(season)")
+                                Text(title)
                                     .background(FocusReporter {
                                         if selectedSeason != season { selectedSeason = season }
                                     })
                             }
-                            .buttonStyle(SeasonTabStyle(isSelected: season == selectedSeason))
+                            .buttonStyle(SeasonTabButtonStyle(
+                                isSelected: season == selectedSeason,
+                                rowHasFocus: focusedTab != nil,
+                                posterUrl: posters.map { index < $0.count ? $0[index] : "" }
+                            ))
+                            .focused($focusedTab, equals: season)
                             .onMoveUp(onMoveUpFromTop)
                         }
                     }
                     .padding(.horizontal, 80)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, posters == nil ? 16 : 24)
                 }
                 .focusSection()
+                // Coming back to the row (Up from the episodes) lands on the selected season, not the
+                // tab that happens to sit above (Android focusRestorer), so the season doesn't change.
+                .defaultFocus($focusedTab, selectedSeason, priority: .userInitiated)
             }
 
             ScrollViewReader { proxy in
@@ -609,7 +626,7 @@ struct EpisodesSection: View {
                         // Same modifier on every card, always: a focus binding that moves between
                         // cards rebuilt the focused card and threw focus back to episode 1.
                         .detailFocus(focus, .episode(video.id))
-                        .onMoveUp(seasons.count > 1 ? nil : onMoveUpFromTop)
+                        .onMoveUp(showsTabs ? nil : onMoveUpFromTop)
                         .id(video.id)
                     }
                 }
@@ -627,6 +644,68 @@ struct EpisodesSection: View {
     private func scroll(_ proxy: ScrollViewProxy, to id: String?) {
         guard let id, meta.episodesForSeason(season: selectedSeason).contains(where: { $0.id == id }) else { return }
         DispatchQueue.main.async { proxy.scrollTo(id, anchor: .leading) }
+    }
+}
+
+/// A season tab on the details page: the text tab, or with [posterUrl] (season posters on) a
+/// 2:3 poster with the season's name under it, as on Android: a focus ring when focused, a faint
+/// outline on the selected season while focus is elsewhere, no zoom.
+struct SeasonTabButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let rowHasFocus: Bool
+    /// nil: text tab. "" : poster mode without any artwork (placeholder).
+    let posterUrl: String?
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        if let posterUrl {
+            PosterTab(configuration: configuration, isSelected: isSelected, rowHasFocus: rowHasFocus, url: posterUrl)
+        } else {
+            SeasonTabStyle(isSelected: isSelected).makeBody(configuration: configuration)
+        }
+    }
+
+    static let posterWidth: CGFloat = 200
+    static let posterHeight: CGFloat = 300
+
+    private struct PosterTab: View {
+        let configuration: ButtonStyle.Configuration
+        let isSelected: Bool
+        let rowHasFocus: Bool
+        let url: String
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            let highlighted = isFocused || (isSelected && !rowHasFocus)
+            let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+            VStack(spacing: 14) {
+                ZStack {
+                    shape.fill(Color.white.opacity(0.08))
+                    if url.isEmpty {
+                        Image(systemName: "photo").font(.title).foregroundStyle(.white.opacity(0.3))
+                    } else {
+                        RemoteImage(url: url, maxPixel: ImageLoader.cardSize)
+                    }
+                }
+                .frame(width: SeasonTabButtonStyle.posterWidth, height: SeasonTabButtonStyle.posterHeight)
+                .clipShape(shape)
+                .overlay {
+                    if isFocused {
+                        shape.strokeBorder(Color.white, lineWidth: 5)
+                    } else if isSelected && !rowHasFocus {
+                        shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1.5)
+                    }
+                }
+                .shadow(color: .black.opacity(isFocused ? 0.45 : 0.25), radius: isFocused ? 16 : 8, y: 6)
+                configuration.label
+                    .font(.callout.weight(highlighted ? .semibold : .regular))
+                    .foregroundStyle(highlighted ? Color.white : Color.white.opacity(0.6))
+                    .lineLimit(1)
+                    .frame(width: SeasonTabButtonStyle.posterWidth)
+            }
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+        }
     }
 }
 

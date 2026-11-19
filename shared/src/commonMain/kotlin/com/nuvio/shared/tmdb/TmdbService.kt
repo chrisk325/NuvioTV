@@ -75,7 +75,9 @@ data class TmdbEpisode(
     val title: String?,
     val overview: String?,
     val thumbnail: String?,
-    val runtimeMinutes: Int?
+    val runtimeMinutes: Int?,
+    /** The season's poster (w500), the same on every episode of the season. */
+    val seasonPoster: String? = null
 )
 
 data class TmdbPersonDetail(
@@ -211,18 +213,22 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
 
     /** One season's episodes (Android useEpisodes: titles, overviews, stills, runtimes). */
     @Throws(Exception::class)
-    suspend fun seasonEpisodes(tmdbId: Int, season: Int, language: String): List<TmdbEpisode> =
-        get("tv/$tmdbId/season/$season?language=${encodeUrlComponent(language.ifBlank { "en-US" })}")
-            ?.objects("episodes").orEmpty().mapNotNull { e ->
-                TmdbEpisode(
-                    season = season,
-                    episode = e.int("episode_number") ?: return@mapNotNull null,
-                    title = e.nonBlank("name"),
-                    overview = e.nonBlank("overview"),
-                    thumbnail = image(e.str("still_path"), "w500"),
-                    runtimeMinutes = e.int("runtime")
-                )
-            }
+    suspend fun seasonEpisodes(tmdbId: Int, season: Int, language: String): List<TmdbEpisode> {
+        val body = get("tv/$tmdbId/season/$season?language=${encodeUrlComponent(language.ifBlank { "en-US" })}")
+            ?: return emptyList()
+        val seasonPoster = image(body.str("poster_path"), "w500")
+        return body.objects("episodes").mapNotNull { e ->
+            TmdbEpisode(
+                season = season,
+                episode = e.int("episode_number") ?: return@mapNotNull null,
+                title = e.nonBlank("name"),
+                overview = e.nonBlank("overview"),
+                thumbnail = image(e.str("still_path"), "w500"),
+                runtimeMinutes = e.int("runtime"),
+                seasonPoster = seasonPoster
+            )
+        }
+    }
 
     @Throws(Exception::class)
     suspend fun person(id: Int, language: String): TmdbPersonDetail? {

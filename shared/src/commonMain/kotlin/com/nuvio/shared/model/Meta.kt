@@ -66,13 +66,23 @@ data class Meta(
     val landscapePoster: String? = null,
     val behaviorHints: MetaBehaviorHints? = null,
     /** Where [imdbRating] comes from when it isn't IMDb: "tmdb" (Jellyfin / Emby, TMDB). */
-    val ratingSource: String? = null
+    val ratingSource: String? = null,
+    /** Season number → poster (add-on app_extras seasonPosters / seasonPosterByNumber). */
+    val seasonPosters: Map<Int, String> = emptyMap()
 ) {
     val apiType: String
         get() = type.toApiString(rawType)
 
     val backdropUrl: String?
         get() = background ?: landscapePoster ?: poster
+
+    /**
+     * A season's own poster (Android resolveSeasonPosters): an episode's seasonPoster (add-on
+     * or TMDB), else the add-on's seasonPosters map; null when there is none.
+     */
+    fun seasonPoster(season: Int): String? =
+        videos.firstNotNullOfOrNull { video -> video.seasonPoster?.takeIf { video.season == season && it.isNotBlank() } }
+            ?: seasonPosters[season]?.takeIf { it.isNotBlank() }
 
     val isSeriesLike: Boolean
         get() = isSeriesLikeType(apiType) || videos.any { it.season != null && it.episode != null }
@@ -153,7 +163,9 @@ data class Video(
     val overview: String?,
     /** Episode runtime in minutes, 0 when unknown. */
     val runtimeMinutes: Int = 0,
-    val available: Boolean? = null
+    val available: Boolean? = null,
+    /** Poster of this episode's season (add-on seasonPoster / season_poster_path, or TMDB). */
+    val seasonPoster: String? = null
 ) {
     val isReleased: Boolean
         get() = available != false && !isReleaseInFuture(released)

@@ -402,6 +402,14 @@ private struct HomeSettingsPane: View {
                        isOn: s.bind({ $0.separateUpcomingRow }, { $0.separateUpcomingRow = $1; app.reloadContinueWatching() }))
                 NavigationLink("Catalogs and hero sources") { HomeCatalogsSettings(binder: binder) }
             }
+
+            Section {
+                Toggle("Season posters", isOn: s.bind({ $0.detailSeasonPosters }, { $0.detailSeasonPosters = $1 }))
+            } header: {
+                Text("Details page")
+            } footer: {
+                Text("Show seasons as posters instead of text tabs when available (from the add-on, or from TMDB with Metadata > Season posters).")
+            }
         }
         .padding(.horizontal, 30)
     }
@@ -434,6 +442,7 @@ private struct MetadataSettingsPane: View {
                     Toggle("Details (runtime, status, age rating, country)", isOn: s.bind({ $0.tmdbUseDetails }, { $0.tmdbUseDetails = $1 }))
                     Toggle("Credits (cast photos, director, writer)", isOn: s.bind({ $0.tmdbUseCredits }, { $0.tmdbUseCredits = $1 }))
                     Toggle("Episodes (titles, overviews, thumbnails)", isOn: s.bind({ $0.tmdbUseEpisodes }, { $0.tmdbUseEpisodes = $1 }))
+                    Toggle("Season posters", isOn: s.bind({ $0.tmdbUseSeasonPosters }, { $0.tmdbUseSeasonPosters = $1 }))
                     Toggle("Production companies", isOn: s.bind({ $0.tmdbUseProductions }, { $0.tmdbUseProductions = $1 }))
                     Toggle("Networks", isOn: s.bind({ $0.tmdbUseNetworks }, { $0.tmdbUseNetworks = $1 }))
                     Toggle("Trailers", isOn: s.bind({ $0.tmdbUseTrailers }, { $0.tmdbUseTrailers = $1 }))
