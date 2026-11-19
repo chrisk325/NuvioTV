@@ -234,4 +234,26 @@ class JellyfinRelatedTest {
         assertEquals(1, service.removeFromResume("tt1"))
         assertEquals(listOf("e1", "m1"), cleared)
     }
+    @Test
+    fun discoverBrowsesALibraryByGenre() = runTest {
+        var asked: io.ktor.http.Url? = null
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Genres" -> respond("""{"Items":[{"Name":"Action"},{"Name":"Drama"}]}""", HttpStatusCode.OK, json)
+                "/Users/u1/Items" -> {
+                    asked = request.url
+                    respond("""{"Items":[{"Id":"m1","Name":"Heat","Type":"Movie","ProviderIds":{"Imdb":"tt0113277"}}]}""", HttpStatusCode.OK, json)
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, serverStore)
+        val library = com.nuvio.shared.mediaserver.ServerLibrary(service.servers.single(), "lib1", "Films", null)
+        assertEquals(listOf("Action", "Drama"), service.genres(library))
+        val page = service.browse(library, 0, 60, "Action", "Movie")
+        assertEquals(listOf("tt0113277"), page.map { it.id })
+        assertEquals("Action", asked?.parameters?.get("Genres"))
+        assertEquals("Movie", asked?.parameters?.get("IncludeItemTypes"))
+        assertEquals("lib1", asked?.parameters?.get("ParentId"))
+    }
 }

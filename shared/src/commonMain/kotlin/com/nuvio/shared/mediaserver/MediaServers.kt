@@ -151,6 +151,34 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
 
     /**
+     * A page of a library for Discover: [genre] filters by the server's genre (blank = all),
+     * newest added first, like the library rows. [itemType] narrows a mixed library to "Movie"
+     * or "Series".
+     */
+    @Throws(Exception::class)
+    suspend fun browse(library: ServerLibrary, start: Int, limit: Int, genre: String, itemType: String?): List<MetaPreview> {
+        val types = itemType ?: when (library.collectionType) {
+            "movies" -> "Movie"
+            "tvshows" -> "Series"
+            else -> "Movie,Series"
+        }
+        val genreFilter = genre.takeIf { it.isNotBlank() }?.let { "&Genres=${encodeUrlComponent(it)}" }.orEmpty()
+        return get(
+            library.server,
+            "/Users/${library.server.userId}/Items?ParentId=${library.id}&Recursive=true&IncludeItemTypes=$types$genreFilter" +
+                "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear&StartIndex=$start&Limit=$limit"
+        )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
+    }
+
+    /** The genres used in a library (A–Z), for the Discover genre row. */
+    @Throws(Exception::class)
+    suspend fun genres(library: ServerLibrary): List<String> =
+        get(
+            library.server,
+            "/Genres?ParentId=${library.id}&UserId=${library.server.userId}&SortBy=SortName&SortOrder=Ascending&Recursive=true"
+        )?.objects("Items").orEmpty().mapNotNull { it.nonBlank("Name") }.distinct()
+
+    /**
      * Movies and shows marked as favourite on the server (Filters=IsFavorite), A–Z. Like the
      * library rows, items need an IMDb id so details and add-on streams resolve.
      */

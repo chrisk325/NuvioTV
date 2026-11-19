@@ -1,12 +1,45 @@
 import SwiftUI
 import NuvioShared
 
-/// Discover (Android's Discover screen): browse any installed add-on catalog, filtered by type,
-/// catalog and genre, as an endless poster grid. The last choices are kept between launches.
+/// One browsable catalog in Discover: an add-on catalog or a Jellyfin / Emby library.
+struct DiscoverCatalog: Identifiable {
+    enum Source {
+        case addon(CatalogSlot)
+        /// [itemType]: "Movie" / "Series" for one half of a mixed library, nil otherwise.
+        case server(ServerLibrary, itemType: String?)
+    }
+
+    let id: String
+    /// "movie", "series", … (the type row).
+    let type: String
+    let name: String
+    let source: Source
+
+    static func from(library: ServerLibrary) -> [DiscoverCatalog] {
+        let name = "\(library.name) · \(library.server.name)"
+        switch library.collectionType {
+        case "movies":
+            return [DiscoverCatalog(id: "server:\(library.key)", type: "movie", name: name, source: .server(library, itemType: nil))]
+        case "tvshows":
+            return [DiscoverCatalog(id: "server:\(library.key)", type: "series", name: name, source: .server(library, itemType: nil))]
+        default:
+            return [
+                DiscoverCatalog(id: "server:\(library.key):movie", type: "movie", name: name, source: .server(library, itemType: "Movie")),
+                DiscoverCatalog(id: "server:\(library.key):series", type: "series", name: name, source: .server(library, itemType: "Series")),
+            ]
+        }
+    }
+}
+
+/// Discover (Android's Discover screen): browse any installed add-on catalog or Jellyfin / Emby
+/// library, filtered by type, catalog and genre, as an endless poster grid. The last choices are
+/// kept between launches.
 struct DiscoverView: View {
     @EnvironmentObject private var app: AppModel
 
-    @State private var slots: [CatalogSlot] = []
+    @State private var slots: [DiscoverCatalog] = []
+    /// Server library genres, loaded once per library.
+    @State private var serverGenres: [String: [String]] = [:]
     @AppStorage("discover.type") private var type = "movie"
     @AppStorage("discover.catalog") private var catalogKey = ""
     @AppStorage("discover.genre") private var genre = ""
@@ -23,17 +56,25 @@ struct DiscoverView: View {
 
     private var types: [String] {
         var seen = Set<String>()
-        return slots.map(\.catalog.apiType).filter { seen.insert($0).inserted }
+        return slots.map(\.type).filter { seen.insert($0).inserted }
     }
-    private var catalogs: [CatalogSlot] { slots.filter { $0.catalog.apiType == type } }
-    private var current: CatalogSlot? { catalogs.first { $0.key == catalogKey } ?? catalogs.first }
-    private var genreRequired: Bool { current.map { app.core.genreRequired(slot: $0) } ?? false }
+    private var catalogs: [DiscoverCatalog] { slots.filter { $0.type == type } }
+    private var current: DiscoverCatalog? { catalogs.first { $0.id == catalogKey } ?? catalogs.first }
+    private var genreRequired: Bool {
+        if case .addon(let slot)? = current?.source { return app.core.genreRequired(slot: slot) }
+        return false
+    }
     private var genreOptions: [String] {
         guard let current else { return [] }
-        let genres = app.core.genres(slot: current)
+        let genres: [String]
+        switch current.source {
+        case .addon(let slot): genres = app.core.genres(slot: slot)
+        case .server(let library, _): genres = serverGenres[library.key] ?? []
+        }
         if genres.isEmpty { return [] }
         return genreRequired ? genres : [""] + genres
     }
+    private static let serverPageSize: Int32 = 60
 
     var body: some View {
         ScrollView {
@@ -46,14 +87,14 @@ struct DiscoverView: View {
                 if slots.isEmpty {
                     MessageView(
                         title: "Nothing to discover",
-                        message: "Install add-ons with catalogs in Add-ons to browse them here.",
+                        message: "Install add-ons with catalogs, or sign in to Jellyfin / Emby, to browse them here.",
                         systemImage: "safari"
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
                 } else {
                     filterRow(types, selected: type, label: typeLabel) { select(type: $0) }
-                    filterRow(catalogs.map(\.key), selected: current?.key ?? "", label: catalogLabel) { select(catalog: $0) }
+                    filterRow(catalogs.map(\.id), selected: current?.id ?? "", label: catalogLabel) { select(catalog: $0) }
                     if !genreOptions.isEmpty {
                         filterRow(genreOptions, selected: genre, label: { $0.isEmpty ? "All genres" : $0 }) { select(genre: $0) }
                     }
@@ -78,7 +119,9 @@ struct DiscoverView: View {
             }
         }
         .onAppear(perform: refreshSlots)
-        .task(id: "\(current?.key ?? "")|\(genre)") { await restart() }
+        .onChange(of: app.serverLibraries.map(\.key)) { _, _ in refreshSlots() }
+        .task(id: current?.id ?? "") { await loadServerGenres() }
+        .task(id: "\(current?.id ?? "")|\(genre)") { await restart() }
     }
 
     /// A row of pill buttons, scrolling sideways.
@@ -107,33 +150,47 @@ struct DiscoverView: View {
     }
 
     private func catalogLabel(_ key: String) -> String {
-        guard let slot = slots.first(where: { $0.key == key }) else { return key }
-        return "\(slot.catalog.name) · \(slot.addon.displayName)"
+        slots.first(where: { $0.id == key })?.name ?? key
     }
 
-    /// Reads the catalogs again (add-ons may have changed) and keeps the choices valid.
+    /// Reads the catalogs again (add-ons or servers may have changed) and keeps the choices valid.
     private func refreshSlots() {
-        slots = app.core.discoverSlots()
+        let addonCatalogs = app.core.discoverSlots().map { slot in
+            DiscoverCatalog(id: slot.key, type: slot.catalog.apiType,
+                            name: "\(slot.catalog.name) · \(slot.addon.displayName)", source: .addon(slot))
+        }
+        slots = addonCatalogs + app.serverLibraries.flatMap(DiscoverCatalog.from(library:))
         if !types.contains(type), let first = types.first { type = first }
-        if !catalogs.contains(where: { $0.key == catalogKey }) { catalogKey = catalogs.first?.key ?? "" }
+        if !catalogs.contains(where: { $0.id == catalogKey }) { catalogKey = catalogs.first?.id ?? "" }
         fixGenre()
     }
 
+    /// Genres for server libraries load asynchronously; an unknown genre waits for them.
     private func fixGenre() {
+        if case .server(let library, _)? = current?.source, serverGenres[library.key] == nil { return }
         let options = genreOptions
         if options.isEmpty { genre = "" }
         else if !options.contains(genre) { genre = options.first ?? "" }
     }
 
+    @MainActor
+    private func loadServerGenres() async {
+        guard case .server(let library, _)? = current?.source, serverGenres[library.key] == nil else { return }
+        let genres = (try? await app.core.mediaServers.genres(library: library)) ?? []
+        guard !Task.isCancelled else { return }
+        serverGenres[library.key] = genres
+        fixGenre()
+    }
+
     private func select(type value: String) {
         guard value != type else { return }
         type = value
-        catalogKey = catalogs.first?.key ?? ""
+        catalogKey = catalogs.first?.id ?? ""
         fixGenre()
     }
 
     private func select(catalog key: String) {
-        guard key != catalogKey || current?.key != key else { return }
+        guard key != catalogKey || current?.id != key else { return }
         catalogKey = key
         genre = ""
         fixGenre()
@@ -157,17 +214,31 @@ struct DiscoverView: View {
 
     @MainActor
     private func loadMore() async {
-        guard let slot = current, hasMore, !isLoading else { return }
+        guard let catalog = current, hasMore, !isLoading else { return }
         let id = requestId
         isLoading = true
         do {
-            let row = try await app.core.loadCatalogFiltered(slot: slot, skip: nextSkip, genre: genre)
+            let page: [MetaPreview]
+            let more: Bool
+            let next: Int32
+            switch catalog.source {
+            case .addon(let slot):
+                let row = try await app.core.loadCatalogFiltered(slot: slot, skip: nextSkip, genre: genre)
+                page = row.items
+                more = row.hasMore
+                next = row.nextSkip
+            case .server(let library, let itemType):
+                page = try await app.core.mediaServers.browse(library: library, start: nextSkip,
+                                                              limit: Self.serverPageSize, genre: genre, itemType: itemType)
+                more = Int32(page.count) >= Self.serverPageSize
+                next = nextSkip + Int32(page.count)
+            }
             guard id == requestId else { return }
             let known = Set(items.map(\.id))
-            let fresh = row.items.filter { !known.contains($0.id) }
+            let fresh = page.filter { !known.contains($0.id) }
             items += fresh
-            hasMore = row.hasMore && !fresh.isEmpty
-            nextSkip = row.nextSkip
+            hasMore = more && !fresh.isEmpty
+            nextSkip = next
         } catch {
             guard id == requestId else { return }
             if !(error is CancellationError) { self.error = error.localizedDescription }
