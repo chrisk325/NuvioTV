@@ -32,6 +32,18 @@ interface ServerProvider {
         limit: Int
     ): ServerPage<ServerTitle>
 
+    /** The genres [library] can be narrowed to, in the order the server lists them; empty when it has none. */
+    suspend fun libraryGenres(session: ServerSession, library: ServerLibrary): List<String> = emptyList()
+
+    /** A page of [library] holding only titles of [genre], one of its [libraryGenres]. */
+    suspend fun libraryGenrePage(
+        session: ServerSession,
+        library: ServerLibrary,
+        genre: String,
+        start: Int,
+        limit: Int
+    ): ServerPage<ServerTitle> = unsupported()
+
     suspend fun details(session: ServerSession, itemId: String): ServerItemDetails
 
     suspend fun candidates(session: ServerSession, itemId: String): List<ServerCandidate>

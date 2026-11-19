@@ -92,6 +92,58 @@ class MediaBrowserRequestTest {
     }
 
     @Test
+    fun listsALibrarysGenresByName() = runTest {
+        val http = TestHttp {
+            """{"Items": [{"Id": "g1", "Name": "Action"}, {"Id": "g2", "Name": " "}, {"Id": "g3", "Name": "Drama"},
+                          {"Id": "g4", "Name": "action"}]}"""
+        }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://media.example.com/jellyfin")
+
+        val genres = jellyfin.libraryGenres(session, ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE))
+
+        assertEquals(listOf("Action", "Drama"), genres)
+        val request = http.requests.single()
+        assertTrue(request.url.encodedPath.endsWith("/Genres"))
+        assertEquals("lib1", request.url.queryParameter("parentId"))
+        assertEquals("u1", request.url.queryParameter("userId"))
+        assertEquals("Movie", request.url.queryParameter("includeItemTypes"))
+        assertNull(request.url.queryParameter("limit"))
+    }
+
+    @Test
+    fun collectionLibrariesHaveNoGenres() = runTest {
+        val http = TestHttp()
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+
+        val genres = jellyfin.libraryGenres(
+            session("jellyfin", "https://media.example.com/jellyfin"),
+            ServerLibrary("box", "Collections", ServerMediaKind.COLLECTION)
+        )
+
+        assertTrue(genres.isEmpty())
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
+    fun filtersALibraryPageToTheChosenGenre() = runTest {
+        val http = TestHttp { """{"Items": [{"Id": "m1", "Name": "Heat", "Type": "Movie"}], "TotalRecordCount": 1}""" }
+        val jellyfin = JellyfinProvider(http.client, testIdentity)
+        val session = session("jellyfin", "https://media.example.com/jellyfin")
+        val library = ServerLibrary("lib1", "Movies", ServerMediaKind.MOVIE)
+
+        val page = jellyfin.libraryGenrePage(session, library, "Science Fiction", start = 50, limit = 50)
+
+        assertEquals(listOf("Heat"), page.items.map { it.preview.name })
+        val request = http.requests.single()
+        assertTrue(request.url.encodedPath.endsWith("/Items"))
+        assertEquals("Science Fiction", request.url.queryParameter("genres"))
+        assertNull(request.url.queryParameter("genreIds"))
+        assertEquals("lib1", request.url.queryParameter("parentId"))
+        assertEquals("50", request.url.queryParameter("startIndex"))
+    }
+
+    @Test
     fun listsMixedLibrariesWithMoviesAndShows() = runTest {
         val http = TestHttp { request ->
             if (request.url.encodedPath.endsWith("/UserViews")) {

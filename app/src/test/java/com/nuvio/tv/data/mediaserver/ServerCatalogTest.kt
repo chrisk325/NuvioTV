@@ -65,6 +65,37 @@ class ServerCatalogTest {
     }
 
     @Test
+    fun narrowsALibraryToTheGenreDiscoverPicked() = runTest {
+        val provider = FakeServerProvider()
+        val (catalog, _, connection) = catalog(provider)
+
+        val page = catalog.page(connection, FakeServerProvider.MOVIE_LIBRARY.id, skip = 0, extra = mapOf("genre" to "Drama"))
+        catalog.page(connection, FakeServerProvider.MOVIE_LIBRARY.id, skip = 0, extra = mapOf("genre" to " "))
+
+        assertEquals(1, page.items.size)
+        assertFalse(page.hasMore)
+        assertEquals(listOf(FakeServerProvider.MOVIE_LIBRARY.id to "Drama"), provider.genrePages)
+    }
+
+    @Test
+    fun looksUpALibrarysGenresOnceAndRetriesFailures() = runTest {
+        val provider = FakeServerProvider().apply { genres = listOf("Action", "Drama") }
+        val (catalog, _, connection) = catalog(provider)
+        val baseUrl = ServerCatalog.baseUrl(connection.id)
+        provider.failingLibraries += FakeServerProvider.MOVIE_LIBRARY.id
+
+        assertTrue(catalog.libraryGenres(baseUrl, FakeServerProvider.MOVIE_LIBRARY.id).isEmpty())
+        provider.failingLibraries.clear()
+        assertEquals(listOf("Action", "Drama"), catalog.libraryGenres(baseUrl, FakeServerProvider.MOVIE_LIBRARY.id))
+        assertEquals(listOf("Action", "Drama"), catalog.libraryGenres(baseUrl, FakeServerProvider.MOVIE_LIBRARY.id))
+        assertEquals(2, provider.genreLookups)
+
+        assertTrue(catalog.libraryGenres(baseUrl, "resume").isEmpty())
+        assertTrue(catalog.libraryGenres("https://addon.example.com", FakeServerProvider.MOVIE_LIBRARY.id).isEmpty())
+        assertEquals(2, provider.genreLookups)
+    }
+
+    @Test
     fun exposesSelectedLibrariesAsAttributedAddonRows() = runTest {
         val (catalog, repository, connection) = catalog()
         repository.setLibrarySelected(connection.id, FakeServerProvider.SERIES_LIBRARY.id, false)
