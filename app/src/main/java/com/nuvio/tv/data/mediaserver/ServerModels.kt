@@ -127,6 +127,23 @@ data class ServerTitle(
     val externalIds: TrackingExternalIds = TrackingExternalIds()
 )
 
+/** The next episode of a show on the server's Next Up list, with the show it belongs to. */
+data class ServerNextUp(
+    val show: ServerTitle,
+    /** The episode's own item id on the server. */
+    val episodeItemId: String,
+    /** The show's item id on the server. */
+    val seriesItemId: String?,
+    val season: Int?,
+    val episode: Int?,
+    val title: String?,
+    val overview: String?,
+    val premiereDate: String?,
+    val thumbnail: String?,
+    /** When the server says the episode became available to watch next (AIOMetadata) or was last played. */
+    val lastPlayedEpochMs: Long?
+)
+
 /** A movie or episode in progress on the server, with the movie or show it belongs to. */
 data class ServerResume(
     val title: ServerTitle,

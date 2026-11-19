@@ -7,6 +7,8 @@ import com.nuvio.tv.core.profile.ProfileScopedCredentialStore
 import com.nuvio.tv.core.sync.SyncClientIdentity
 import com.nuvio.tv.data.local.ProfileDataStore
 import com.nuvio.tv.data.mediaserver.AndroidServerPersistence
+import com.nuvio.tv.data.mediaserver.ServerNextUpImport
+import com.nuvio.tv.data.mediaserver.ServerNextUpSource
 import com.nuvio.tv.data.mediaserver.ServerRepository
 import com.nuvio.tv.data.mediaserver.emby.EmbyProvider
 import com.nuvio.tv.data.mediaserver.jellyfin.JellyfinProvider
@@ -71,4 +73,7 @@ object MediaServerModule {
     @Provides
     @IntoSet
     fun credentialStore(repository: ServerRepository): ProfileScopedCredentialStore = repository
+
+    @Provides
+    fun nextUpSource(impl: ServerNextUpImport): ServerNextUpSource = impl
 }

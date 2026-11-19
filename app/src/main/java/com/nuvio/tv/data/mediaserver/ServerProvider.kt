@@ -92,6 +92,12 @@ interface ServerProvider {
     /** The server's continue-watching list with each item's position, for the app's own Continue watching. */
     suspend fun resumeProgress(session: ServerSession, limit: Int): List<ServerResume> = unsupported()
 
+    /**
+     * The server's Next Up list: for each show being watched, the next episode to play, as the server orders them
+     * (Jellyfin's and AIOMetadata's "Next Up" shelf). In-progress episodes are left to [resumeProgress].
+     */
+    suspend fun nextUp(session: ServerSession, limit: Int): List<ServerNextUp> = unsupported()
+
     suspend fun setPlayed(session: ServerSession, itemId: String, played: Boolean): Unit = unsupported()
 
     /** Takes [itemId] out of the server's continue-watching list without marking it played. */

@@ -97,19 +97,20 @@ internal suspend fun HomeViewModel.applyConclusiveOlderNextUpResults(
 
     _uiState.update { state ->
         val reconciled = reconcileConclusiveNextUpItems(
-            currentItems = state.allContinueWatchingItems,
+            currentItems = cwLocalContinueWatchingItems ?: state.allContinueWatchingItems,
             resolvedItems = acceptedResolvedItems,
             conclusivelyProcessedContentIds = conclusivelyProcessedContentIds,
             dismissedNextUpKeys = dismissedNextUpKeys
         )
         val sorted = sortContinueWatchingItems(reconciled, sortMode)
-        state.withContinueWatchingRows(splitContinueWatchingRows(sorted, sortMode, separateNextUpRow))
+        applyContinueWatchingRows(state, continueWatchingRowsFor(sorted, sortMode))
     }
 
     if (!persistSnapshot) return
     withContext(Dispatchers.IO) {
         if (profileManager.activeProfileId.value != pipelineProfileId) return@withContext
-        val snapshot = _uiState.value.allContinueWatchingItems
+        // The app's own items, with the cards a server's Next Up stood in for, not the server's.
+        val snapshot = (cwLocalContinueWatchingItems ?: _uiState.value.allContinueWatchingItems)
             .toCachedNextUpSnapshot(com.nuvio.tv.ui.components.brokenImageUrls)
         runCatching {
             cwEnrichmentCache.saveNextUpSnapshot(snapshot, force = true)
@@ -120,7 +121,7 @@ internal suspend fun HomeViewModel.applyConclusiveOlderNextUpResults(
 internal fun List<ContinueWatchingItem>.toCachedNextUpSnapshot(
     brokenImageUrls: Set<String>
 ): List<CachedNextUpItem> = mapNotNull { item ->
-    val info = (item as? ContinueWatchingItem.NextUp)?.info ?: return@mapNotNull null
+    val info = (item as? ContinueWatchingItem.NextUp)?.info?.takeUnless { it.fromServer } ?: return@mapNotNull null
     CachedNextUpItem(
         contentId = info.contentId,
         contentType = info.contentType,

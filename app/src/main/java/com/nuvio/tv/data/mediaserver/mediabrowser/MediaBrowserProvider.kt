@@ -9,6 +9,7 @@ import com.nuvio.tv.data.mediaserver.ServerIndexEntry
 import com.nuvio.tv.data.mediaserver.ServerItemDetails
 import com.nuvio.tv.data.mediaserver.ServerLibrary
 import com.nuvio.tv.data.mediaserver.ServerMediaKind
+import com.nuvio.tv.data.mediaserver.ServerNextUp
 import com.nuvio.tv.data.mediaserver.ServerPage
 import com.nuvio.tv.data.mediaserver.ServerPlayMethod
 import com.nuvio.tv.data.mediaserver.ServerPlaybackEvent
@@ -348,6 +349,63 @@ internal abstract class MediaBrowserProvider(
             val kind = ServerMediaKind.fromContentType(title.preview.apiType) ?: return@mapNotNull null
             if (libraries.none { it.holds(kind) }) return@mapNotNull null
             ServerResume(title, state)
+        }
+    }
+
+    override suspend fun nextUp(session: ServerSession, limit: Int): List<ServerNextUp> {
+        val items = get(
+            session,
+            Endpoint("/Shows/NextUp", mapOf("userId" to session.userId)),
+            ItemsResult.serializer(),
+            mapOf(
+                "limit" to limit.toString(),
+                "fields" to LIST_FIELDS,
+                "enableUserData" to "true",
+                // In-progress episodes come from the resume list; Next Up holds the episodes not started yet.
+                "enableResumable" to "false",
+                "enableRewatching" to "false",
+                "imageTypeLimit" to "1",
+                "enableImageTypes" to "Primary,Backdrop,Logo,Thumb"
+            )
+        ).items.filter { it.isEpisode }
+        if (items.isEmpty()) return emptyList()
+        val mapper = mapper(session)
+        val seriesIds = items.mapNotNull { it.seriesId }.distinct()
+        // An episode carries no ids of its show; fetching the shows lets the entry open and match the show.
+        val shows = try {
+            get(
+                session,
+                itemsEndpoint(session.userId),
+                ItemsResult.serializer(),
+                mapOf(
+                    "ids" to seriesIds.joinToString(","),
+                    "fields" to LIST_FIELDS,
+                    "imageTypeLimit" to "1",
+                    "enableImageTypes" to "Primary,Backdrop,Logo"
+                )
+            ).items.associateBy { it.id }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        return items.mapNotNull { item ->
+            val show = item.seriesId?.let { shows[it] }?.let(mapper::title)
+                ?: mapper.resumeTitle(item)
+                ?: return@mapNotNull null
+            ServerNextUp(
+                show = show,
+                episodeItemId = item.id,
+                seriesItemId = item.seriesId,
+                season = item.parentIndexNumber,
+                episode = item.indexNumber,
+                title = item.name,
+                overview = item.overview,
+                premiereDate = item.premiereDate,
+                thumbnail = mapper.video(item).thumbnail,
+                lastPlayedEpochMs = item.userData?.lastPlayedDate
+                    ?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+            )
         }
     }
 

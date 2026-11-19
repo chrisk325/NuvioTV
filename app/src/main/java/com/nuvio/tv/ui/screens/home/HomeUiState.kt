@@ -87,7 +87,9 @@ data class HomeUiState(
 data class ContinueWatchingRows(
     val main: List<ContinueWatchingItem>,
     val nextUp: List<ContinueWatchingItem> = emptyList(),
-    val upcoming: List<ContinueWatchingItem> = emptyList()
+    val upcoming: List<ContinueWatchingItem> = emptyList(),
+    /** The app's own items the rows were built from, before a media server's Next Up was merged in. */
+    val local: List<ContinueWatchingItem>? = null
 ) {
     /** Items of the rows that make up the old single Continue Watching row (main + Next Up). */
     val primaryCount: Int get() = main.size + nextUp.size
@@ -183,8 +185,17 @@ data class NextUpInfo(
     val seedSeason: Int? = null,
     val seedEpisode: Int? = null,
     val contentLanguage: String? = null,
-    val mdbListRatings: com.nuvio.tv.domain.model.MDBListRatings? = null
-)
+    val mdbListRatings: com.nuvio.tv.domain.model.MDBListRatings? = null,
+    /**
+     * Set when the card comes from a media server's Next Up list (e.g. AIOMetadata's Jellyfin API): the server's
+     * episode item ([com.nuvio.tv.data.mediaserver.ServerItemRef.encode]). Such cards aren't saved with the
+     * app's own Next Up; they're shown from the server's list.
+     */
+    val serverItemRef: String? = null
+) {
+    val fromServer: Boolean
+        get() = serverItemRef != null
+}
 
 @Immutable
 sealed class HomeRow {
