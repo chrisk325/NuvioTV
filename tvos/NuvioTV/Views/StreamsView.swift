@@ -1,7 +1,11 @@
 import SwiftUI
 import NuvioShared
 
-private enum StreamsFocus: Hashable { case stateAction }
+private enum StreamsFocus: Hashable {
+    case stateAction
+    /// A stream card: add-on group index, then the card's index in that group.
+    case stream(Int, Int)
+}
 
 struct StreamsView: View {
     @EnvironmentObject private var app: AppModel
@@ -16,6 +20,8 @@ struct StreamsView: View {
     @State private var autoPlayed = false
     @State private var resolving: AddonStream?
     @State private var resolveError: String?
+    /// The first stream card got focus for this load (later updates don't take focus away).
+    @State private var focusedFirstStream = false
 
     var body: some View {
         ZStack {
@@ -78,6 +84,7 @@ struct StreamsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .padding(.horizontal, 50)
+            .defaultFocus($focus, .stream(0, 0))
         }
         .onAppear(perform: start)
         // Menu always goes back to the details page.
@@ -124,6 +131,7 @@ struct StreamsView: View {
         subscription?.cancel()
         subscription = nil
         update = nil
+        focusedFirstStream = false
         if !keepAutoPlay { autoPlayed = false }
         start()
     }
@@ -213,7 +221,7 @@ struct StreamsView: View {
     private func list(_ update: StreamsUpdate) -> some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 22) {
-                ForEach(Array(update.groups.enumerated()), id: \.offset) { _, group in
+                ForEach(Array(update.groups.enumerated()), id: \.offset) { groupIndex, group in
                     HStack(spacing: 14) {
                         if let logo = group.addonLogo {
                             RemoteImage(url: logo, contentMode: .fit).frame(width: 40, height: 40)
@@ -222,18 +230,32 @@ struct StreamsView: View {
                         Text("\(group.streams.count)").font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.top, 20)
-                    ForEach(Array(sorted(group.streams).enumerated()), id: \.offset) { _, stream in
+                    ForEach(Array(sorted(group.streams).enumerated()), id: \.offset) { index, stream in
                         Button {
                             select(stream)
                         } label: {
                             StreamRow(stream: stream, debridEnabled: app.core.debrid.hasAnyProvider)
                         }
                         .buttonStyle(StreamCardStyle())
+                        .focused($focus, equals: .stream(groupIndex, index))
                     }
                 }
             }
             .padding(.vertical, 40)
             .padding(.horizontal, 20) // room for the focus scale
+        }
+        // The first stream gets focus as soon as the list shows, not the header's Reload button.
+        .onAppear(perform: focusFirstStream)
+    }
+
+    private func focusFirstStream() {
+        guard !focusedFirstStream else { return }
+        Task { @MainActor in
+            // Let the lazy list lay out its first card before moving focus to it.
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !focusedFirstStream, update?.groups.isEmpty == false else { return }
+            focus = .stream(0, 0)
+            focusedFirstStream = true
         }
     }
 
