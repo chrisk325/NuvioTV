@@ -30,6 +30,7 @@ struct StreamsView: View {
                 header
                     .frame(width: 420, alignment: .topLeading)
                     .padding(.top, 40)
+                    .focusSection()
 
                 Group {
                     if let update, !update.groups.isEmpty {
@@ -61,8 +62,15 @@ struct StreamsView: View {
                         VStack(spacing: 30) {
                             LoadingView(label: "Finding streams…")
                                 .frame(maxHeight: 300)
-                            Button("Cancel") { dismiss() }
-                                .focused($focus, equals: .stateAction)
+                            HStack(spacing: 30) {
+                                Button("Cancel") { dismiss() }
+                                    .focused($focus, equals: .stateAction)
+                                Button {
+                                    retry(keepAutoPlay: true)
+                                } label: {
+                                    Label("Reload", systemImage: "arrow.clockwise")
+                                }
+                            }
                         }
                         .onAppear { focus = .stateAction }
                     }
@@ -111,11 +119,12 @@ struct StreamsView: View {
         }
     }
 
-    private func retry() {
+    /// Starts the search again. [keepAutoPlay]: a manual reload doesn't auto-play a stream again.
+    private func retry(keepAutoPlay: Bool = false) {
         subscription?.cancel()
         subscription = nil
         update = nil
-        autoPlayed = false
+        if !keepAutoPlay { autoPlayed = false }
         start()
     }
 
@@ -181,6 +190,21 @@ struct StreamsView: View {
                     Text(update.isComplete ? "\(count) streams" : "\(count) streams · searching…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                }
+                if update.isComplete && !update.failedAddons.isEmpty {
+                    Text("No answer from \(update.failedAddons.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                if !update.groups.isEmpty {
+                    // Ask every add-on (and Jellyfin / Emby) again, e.g. after a time-out.
+                    Button {
+                        retry(keepAutoPlay: true)
+                    } label: {
+                        Label("Reload", systemImage: "arrow.clockwise")
+                    }
+                    .padding(.top, 10)
                 }
             }
         }
