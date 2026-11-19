@@ -20,6 +20,7 @@ import com.nuvio.tv.domain.model.WatchProgress
 data class HomeUiState(
     val catalogRows: List<CatalogRow> = emptyList(),
     val continueWatchingItems: List<ContinueWatchingItem> = emptyList(),
+    val nextUpItems: List<ContinueWatchingItem> = emptyList(),
     val upcomingItems: List<ContinueWatchingItem> = emptyList(),
     val isLoading: Boolean = true,
     val layoutPreferencesReady: Boolean = false,
@@ -80,6 +81,40 @@ data class HomeUiState(
     val mdbListShowOnHero: Boolean = false,
     val mdbListRatingOrder: List<String> = com.nuvio.tv.domain.model.MDBListSettings.DEFAULT_RATING_ORDER
 )
+
+/** The Continue Watching items as split across the home screen's rows. */
+@Immutable
+data class ContinueWatchingRows(
+    val main: List<ContinueWatchingItem>,
+    val nextUp: List<ContinueWatchingItem> = emptyList(),
+    val upcoming: List<ContinueWatchingItem> = emptyList()
+) {
+    /** Items of the rows that make up the old single Continue Watching row (main + Next Up). */
+    val primaryCount: Int get() = main.size + nextUp.size
+    fun isEmpty(): Boolean = main.isEmpty() && nextUp.isEmpty() && upcoming.isEmpty()
+}
+
+/** Every Continue Watching item across the Continue Watching, Next Up and Upcoming rows. */
+val HomeUiState.allContinueWatchingItems: List<ContinueWatchingItem>
+    get() = continueWatchingItems + nextUpItems + upcomingItems
+
+/** Items of the Continue Watching and Next Up rows together. */
+val HomeUiState.primaryContinueWatchingItems: List<ContinueWatchingItem>
+    get() = continueWatchingItems + nextUpItems
+
+/** The key and items of the home row ("continue_watching", "next_up_section" or "upcoming_section") holding [item]. */
+internal fun HomeUiState.continueWatchingRowOf(item: ContinueWatchingItem): Pair<String, List<ContinueWatchingItem>> = when {
+    item in nextUpItems -> "next_up_section" to nextUpItems
+    item in upcomingItems -> "upcoming_section" to upcomingItems
+    else -> "continue_watching" to continueWatchingItems
+}
+
+fun HomeUiState.hasContinueWatchingRows(rows: ContinueWatchingRows): Boolean =
+    continueWatchingItems == rows.main && nextUpItems == rows.nextUp && upcomingItems == rows.upcoming
+
+fun HomeUiState.withContinueWatchingRows(rows: ContinueWatchingRows): HomeUiState =
+    if (hasContinueWatchingRows(rows)) this
+    else copy(continueWatchingItems = rows.main, nextUpItems = rows.nextUp, upcomingItems = rows.upcoming)
 
 @Immutable
 sealed class ContinueWatchingItem {

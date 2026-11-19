@@ -331,6 +331,8 @@ class HomeViewModel @Inject constructor(
     internal var externalMetaPrefetchEnabled: Boolean = false
     @Volatile
     internal var continueWatchingSortMode: ContinueWatchingSortMode = ContinueWatchingSortMode.DEFAULT
+    @Volatile
+    internal var separateNextUpRow: Boolean = true
     internal val startupStartedAtMs: Long = SystemClock.elapsedRealtime()
     @Volatile
     internal var startupGracePeriodActive: Boolean = true
@@ -389,6 +391,7 @@ class HomeViewModel @Inject constructor(
             watchedSeriesStateHolder.loadFromDisk()
             observeExternalMetaPrefetchPreference()
             observeContinueWatchingSortMode()
+            observeSeparateNextUpRow()
             loadHomeCatalogOrderPreference()
             loadFollowAddonsOrder()
             loadDisabledHomeCatalogPreference()
@@ -430,7 +433,7 @@ class HomeViewModel @Inject constructor(
                     cwLastBadgeEpisodeKeys = emptySet()
                     cwLastShowIdSiblings = emptyMap()
                     _uiState.update {
-                        it.copy(layoutPreferencesReady = false, continueWatchingItems = emptyList())
+                        it.copy(layoutPreferencesReady = false, continueWatchingItems = emptyList(), nextUpItems = emptyList(), upcomingItems = emptyList())
                     }
                     clearFocusState()
                     _gridFocusState.value = HomeScreenFocusState()
@@ -487,7 +490,7 @@ class HomeViewModel @Inject constructor(
         cwLastBadgeEpisodeKeys = emptySet()
         cwLastShowIdSiblings = emptyMap()
         watchedSeriesStateHolder.clearValidationState()
-        _uiState.update { it.copy(continueWatchingItems = emptyList(), upcomingItems = emptyList()) }
+        _uiState.update { it.copy(continueWatchingItems = emptyList(), nextUpItems = emptyList(), upcomingItems = emptyList()) }
         // Bump trigger so the pipeline's collectLatest restarts with fresh state.
         cwPipelineRefreshTrigger.value++
     }
@@ -523,6 +526,27 @@ class HomeViewModel @Inject constructor(
                     }
                     // Clear caches so the new sort is applied immediately on next pipeline run
                     clearAllCwInMemoryCaches()
+                }
+        }
+    }
+
+    private fun observeSeparateNextUpRow() {
+        viewModelScope.launch {
+            layoutPreferenceDataStore.separateNextUpRow
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (separateNextUpRow == enabled) return@collect
+                    separateNextUpRow = enabled
+                    // Re-split what is on screen; later pipeline runs pick the new value up.
+                    _uiState.update { state ->
+                        state.withContinueWatchingRows(
+                            splitContinueWatchingRows(
+                                sortContinueWatchingItems(state.allContinueWatchingItems, continueWatchingSortMode),
+                                continueWatchingSortMode,
+                                enabled
+                            )
+                        )
+                    }
                 }
         }
     }
@@ -829,8 +853,10 @@ class HomeViewModel @Inject constructor(
                 mode = sortMode
             )
             if (items.isNotEmpty()) {
-                val (mainItems, upcomingOnly) = splitUpcomingItems(items, sortMode)
-                _uiState.update { it.copy(continueWatchingItems = mainItems, upcomingItems = upcomingOnly) }
+                val separateNextUp = layoutPreferenceDataStore.separateNextUpRow.first()
+                separateNextUpRow = separateNextUp
+                val rows = splitContinueWatchingRows(items, sortMode, separateNextUp)
+                _uiState.update { it.withContinueWatchingRows(rows) }
                 _initialCwResolved.value = true
             }
         }

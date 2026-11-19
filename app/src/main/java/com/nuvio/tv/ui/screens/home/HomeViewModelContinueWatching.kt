@@ -581,7 +581,7 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                 // next-up replaces it. Dropping it here and adding it back below moved focus
                 // to the neighbouring card.
                 val awaitingNextUpItems = continueWatchingCardsAwaitingNextUp(
-                    shownItems = _uiState.value.continueWatchingItems,
+                    shownItems = _uiState.value.primaryContinueWatchingItems,
                     placedContentIds = inProgressOnly.mapTo(mutableSetOf()) { it.progress.contentId } +
                         cachedNextUpItems.map { it.info.contentId },
                     seededContentIds = activeSeedContentIds,
@@ -597,17 +597,18 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                             mode = continueWatchingSortMode
                         )
                     )
-                    val (mainItems, upcomingOnly) = splitUpcomingItems(initialItems, continueWatchingSortMode)
+                    val initialRows = splitContinueWatchingRows(initialItems, continueWatchingSortMode, separateNextUpRow)
 
                     _uiState.update { state ->
-                        if (mainItems.isEmpty() && upcomingOnly.isEmpty() && state.continueWatchingItems.isNotEmpty()) {
+                        val shownPrimary = state.primaryContinueWatchingItems
+                        if (initialRows.isEmpty() && shownPrimary.isNotEmpty()) {
                             state
-                        } else if (state.continueWatchingItems == mainItems && state.upcomingItems == upcomingOnly) {
+                        } else if (state.hasContinueWatchingRows(initialRows)) {
                             state
-                        } else if (!snapshot.hasLoadedRemoteProgress && state.continueWatchingItems.isNotEmpty() && mainItems.size < state.continueWatchingItems.size) {
+                        } else if (!snapshot.hasLoadedRemoteProgress && shownPrimary.isNotEmpty() && initialRows.primaryCount < shownPrimary.size) {
                             state
                         } else {
-                            state.copy(continueWatchingItems = mainItems, upcomingItems = upcomingOnly)
+                            state.withContinueWatchingRows(initialRows)
                         }
                     }
                     _initialCwResolved.value = true
@@ -692,17 +693,17 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                                         mode = continueWatchingSortMode
                                     )
                                 )
-                                val (partialMain, partialUpcoming) = splitUpcomingItems(partialItems, continueWatchingSortMode)
+                                val partialRows = splitContinueWatchingRows(partialItems, continueWatchingSortMode, separateNextUpRow)
                                 _uiState.update { state ->
-                                    if (state.continueWatchingItems == partialMain && state.upcomingItems == partialUpcoming) {
+                                    if (state.hasContinueWatchingRows(partialRows)) {
                                         state
-                                    } else if (!snapshot.hasLoadedRemoteProgress && state.continueWatchingItems.isNotEmpty()) {
+                                    } else if (!snapshot.hasLoadedRemoteProgress && state.primaryContinueWatchingItems.isNotEmpty()) {
                                         // Don't overwrite with partial data until remote progress
                                         // has loaded. Partial next-up resolution should not replace
                                         // cached items that include Trakt in-progress entries.
                                         state
                                     } else {
-                                        state.copy(continueWatchingItems = partialMain, upcomingItems = partialUpcoming)
+                                        state.withContinueWatchingRows(partialRows)
                                     }
                                 }
                                 debug.recordPartialRendered(
@@ -1125,29 +1126,28 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                         mode = continueWatchingSortMode
                     )
                 )
-                val (normalMain, normalUpcoming) = splitUpcomingItems(normalItems, continueWatchingSortMode)
+                val normalRows = splitContinueWatchingRows(normalItems, continueWatchingSortMode, separateNextUpRow)
 
                 _uiState.update { state ->
                     // Don't overwrite cached CW with empty data while sources are still loading.
                     // Once remote progress is confirmed loaded (Nuvio Sync completed or Trakt
                     // responded), trust the empty result — items may have been deleted remotely.
-                    val shouldProtectCache = normalMain.isEmpty() && normalUpcoming.isEmpty() &&
-                        state.continueWatchingItems.isNotEmpty() &&
+                    val shownPrimary = state.primaryContinueWatchingItems
+                    val shouldProtectCache = normalRows.isEmpty() &&
+                        shownPrimary.isNotEmpty() &&
                         !snapshot.hasLoadedRemoteProgress
                     val shouldPreventShrink = !snapshot.hasLoadedRemoteProgress &&
-                        state.continueWatchingItems.isNotEmpty() &&
-                        normalMain.size < state.continueWatchingItems.size
+                        shownPrimary.isNotEmpty() &&
+                        normalRows.primaryCount < shownPrimary.size
                     if (shouldProtectCache || shouldPreventShrink) {
                         state
-                    } else if (state.continueWatchingItems == normalMain && state.upcomingItems == normalUpcoming) {
-                        state
                     } else {
-                        state.copy(continueWatchingItems = normalMain, upcomingItems = normalUpcoming)
+                        state.withContinueWatchingRows(normalRows)
                     }
                 }
                 SimklContinueWatchingDisplayLogger.log(
                     buildSimklCwDisplayDiagnosticReport(
-                        displayedItems = _uiState.value.continueWatchingItems + _uiState.value.upcomingItems,
+                        displayedItems = _uiState.value.allContinueWatchingItems,
                         liveProgress = items,
                         nextUpSeeds = nextUpSeeds,
                         watchedItems = allWatchedItems,
@@ -1173,7 +1173,7 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                 // Save lightweight CW snapshot to disk immediately so cache stays fresh
                 // even if enrichment is cancelled by collectLatest.
                 viewModelScope.launch(Dispatchers.IO) {
-                    val currentItems = _uiState.value.continueWatchingItems + _uiState.value.upcomingItems
+                    val currentItems = _uiState.value.allContinueWatchingItems
                     val brokenUrls = com.nuvio.tv.ui.components.brokenImageUrls
                     val ratingVisibility = layoutPreferenceDataStore.detailImdbRatingsVisibility.first()
                     val nextUpSnap = currentItems.mapNotNull { item ->
@@ -1739,7 +1739,7 @@ private suspend fun HomeViewModel.enrichVisibleContinueWatchingItems(
 
     _uiState.update { state ->
         val mergedEnrichedItems = mergeConcurrentContinueWatchingEnrichment(
-            currentItems = state.continueWatchingItems + state.upcomingItems,
+            currentItems = state.allContinueWatchingItems,
             originalItems = finalItems,
             enrichedItems = enrichedItems
         )
@@ -1747,15 +1747,13 @@ private suspend fun HomeViewModel.enrichVisibleContinueWatchingItems(
             mergedEnrichedItems,
             continueWatchingSortMode
         )
-        val (enrichedMain, enrichedUpcoming) = splitUpcomingItems(
-            sortedMergedItems,
-            continueWatchingSortMode
+        state.withContinueWatchingRows(
+            splitContinueWatchingRows(
+                sortedMergedItems,
+                continueWatchingSortMode,
+                separateNextUpRow
+            )
         )
-        if (state.continueWatchingItems == enrichedMain && state.upcomingItems == enrichedUpcoming) {
-            state
-        } else {
-            state.copy(continueWatchingItems = enrichedMain, upcomingItems = enrichedUpcoming)
-        }
     }
     persistLocalContinueWatchingMetadata(
         originalItems = finalItems,
@@ -1850,28 +1848,50 @@ internal fun mergeContinueWatchingItems(
 }
 
 /**
- * Splits items into (mainRow, upcomingRow) for [ContinueWatchingSortMode.SPLIT_UPCOMING].
- * Upcoming items are unaired NextUp episodes; everything else stays in the main row.
- * For other modes, all items go into mainRow and upcomingRow is empty.
+ * Splits the merged Continue Watching list into the rows shown on the home screen.
+ *
+ * - With [ContinueWatchingSortMode.SPLIT_UPCOMING], unaired NextUp episodes go to the Upcoming row
+ *   (soonest first).
+ * - With [separateNextUp], the remaining NextUp episodes go to their own Next Up row beneath
+ *   Continue Watching, which then only holds in-progress items. Like a Jellyfin "Next Up" shelf, the
+ *   row is ordered by when each episode became available to watch: the later of when the show was
+ *   last watched and when the episode aired ([NextUpInfo.sortTimestamp]), newest first. Unaired
+ *   episodes (when not split into Upcoming) follow, soonest first.
+ * - Otherwise everything stays in the main row.
  */
-internal fun splitUpcomingItems(
+internal fun splitContinueWatchingRows(
     items: List<ContinueWatchingItem>,
-    mode: ContinueWatchingSortMode
-): Pair<List<ContinueWatchingItem>, List<ContinueWatchingItem>> {
-    if (mode != ContinueWatchingSortMode.SPLIT_UPCOMING) {
-        return items to emptyList()
+    mode: ContinueWatchingSortMode,
+    separateNextUp: Boolean
+): ContinueWatchingRows {
+    val (upcoming, rest) = if (mode == ContinueWatchingSortMode.SPLIT_UPCOMING) {
+        items.partition { item -> item is ContinueWatchingItem.NextUp && !item.info.hasAired }
+    } else {
+        emptyList<ContinueWatchingItem>() to items
     }
-    val (upcoming, main) = items.partition { item ->
-        item is ContinueWatchingItem.NextUp && !item.info.hasAired
+    val (nextUp, main) = if (separateNextUp) {
+        rest.partition { item -> item is ContinueWatchingItem.NextUp }
+    } else {
+        emptyList<ContinueWatchingItem>() to rest
     }
-    // Sort upcoming by release date ascending (soonest first)
-    val sortedUpcoming = upcoming.sortedWith { a, b ->
-        val dateA = parseEpisodeReleaseDate(
-            (a as? ContinueWatchingItem.NextUp)?.info?.released
-        )
-        val dateB = parseEpisodeReleaseDate(
-            (b as? ContinueWatchingItem.NextUp)?.info?.released
-        )
+    val (airedNextUp, unairedNextUp) = nextUp.partition { item ->
+        (item as ContinueWatchingItem.NextUp).info.hasAired
+    }
+    val sortedNextUp = airedNextUp.sortedByDescending { item ->
+        val info = (item as ContinueWatchingItem.NextUp).info
+        maxOf(info.sortTimestamp, info.lastWatched)
+    } + unairedNextUp.sortedBySoonestRelease()
+    return ContinueWatchingRows(
+        main = main,
+        nextUp = sortedNextUp,
+        upcoming = upcoming.sortedBySoonestRelease()
+    )
+}
+
+private fun List<ContinueWatchingItem>.sortedBySoonestRelease(): List<ContinueWatchingItem> =
+    sortedWith { a, b ->
+        val dateA = parseEpisodeReleaseDate((a as? ContinueWatchingItem.NextUp)?.info?.released)
+        val dateB = parseEpisodeReleaseDate((b as? ContinueWatchingItem.NextUp)?.info?.released)
         when {
             dateA == null && dateB == null -> 0
             dateA == null -> 1
@@ -1879,8 +1899,6 @@ internal fun splitUpcomingItems(
             else -> dateA.compareTo(dateB)
         }
     }
-    return main to sortedUpcoming
-}
 
 private suspend fun HomeViewModel.buildNextUpItem(
     progress: WatchProgress,
@@ -2691,7 +2709,7 @@ private fun HomeViewModel.persistLocalContinueWatchingMetadata(
     }
 
     // Use the full UI state for cache snapshots so async-injected items are included.
-    val currentUiItems = _uiState.value.continueWatchingItems + _uiState.value.upcomingItems
+    val currentUiItems = _uiState.value.allContinueWatchingItems
 
     // Build next-up snapshot for cache
     val brokenUrls = com.nuvio.tv.ui.components.brokenImageUrls
@@ -2773,7 +2791,7 @@ private fun HomeViewModel.persistLocalContinueWatchingMetadata(
         // Only persist metadata for entries still visible in CW. Between the start
         // of this pipeline cycle and now the user may have removed items — writing
         // them back would resurrect them on next launch.
-        val visibleContentIds = (_uiState.value.continueWatchingItems + _uiState.value.upcomingItems).mapNotNullTo(mutableSetOf()) { item ->
+        val visibleContentIds = (_uiState.value.allContinueWatchingItems).mapNotNullTo(mutableSetOf()) { item ->
             when (item) {
                 is ContinueWatchingItem.InProgress -> item.progress.contentId
                 is ContinueWatchingItem.NextUp -> item.info.contentId
@@ -3311,6 +3329,17 @@ internal fun HomeViewModel.removeContinueWatchingPipeline(
                         is ContinueWatchingItem.InProgress -> false
                     }
                 },
+                nextUpItems = state.nextUpItems.filterNot { item ->
+                    when (item) {
+                        is ContinueWatchingItem.NextUp ->
+                            nextUpDismissKey(
+                                item.info.contentId,
+                                item.info.seedSeason,
+                                item.info.seedEpisode
+                            ) == dismissKey
+                        is ContinueWatchingItem.InProgress -> false
+                    }
+                },
                 upcomingItems = state.upcomingItems.filterNot { item ->
                     when (item) {
                         is ContinueWatchingItem.NextUp ->
@@ -3335,6 +3364,12 @@ internal fun HomeViewModel.removeContinueWatchingPipeline(
         _uiState.update { state ->
             state.copy(
                 continueWatchingItems = state.continueWatchingItems.filterNot { item ->
+                    when (item) {
+                        is ContinueWatchingItem.InProgress -> item.progress.contentId == contentId
+                        is ContinueWatchingItem.NextUp -> item.info.contentId == contentId
+                    }
+                },
+                nextUpItems = state.nextUpItems.filterNot { item ->
                     when (item) {
                         is ContinueWatchingItem.InProgress -> item.progress.contentId == contentId
                         is ContinueWatchingItem.NextUp -> item.info.contentId == contentId

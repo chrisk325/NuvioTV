@@ -37,7 +37,7 @@ internal fun HomeViewModel.createShuffleHomeState(): StateFlow<HomeUiState> {
         finished
     ) { state, profile, watched, refresh, seeds ->
         val cards = seeds.mapNotNull { seed -> cachedCwMeta(seed.contentType, seed.contentId)?.let(seed::toShuffleCard) }
-        applyHomeShuffle(state, profile, watched, episodeShuffle, refresh.visit, continueWatchingSortMode, cards) { id, type ->
+        applyHomeShuffle(state, profile, watched, episodeShuffle, refresh.visit, continueWatchingSortMode, cards, separateNextUpRow) { id, type ->
             cachedCwMeta(type, id)?.videos?.map { video ->
                 Video(video.id, video.title.orEmpty(), video.released, video.thumbnail,
                     season = video.season, episode = video.episode, overview = video.overview, available = video.available)
@@ -81,10 +81,11 @@ internal fun applyHomeShuffle(
     visit: Long,
     sortMode: ContinueWatchingSortMode,
     finished: List<ContinueWatchingItem.NextUp> = emptyList(),
+    separateNextUp: Boolean = false,
     videos: (String, String) -> List<Video>?
 ): HomeUiState {
     if (!profile.available || profile.shows.values.none { it.enabled }) return state
-    val native = state.continueWatchingItems + state.upcomingItems
+    val native = state.allContinueWatchingItems
     val items = native + finished.filter { card ->
         profile.settings(card.info.contentId, card.info.contentType).enabled &&
             native.none { it.contentId() == card.info.contentId }
@@ -121,6 +122,5 @@ internal fun applyHomeShuffle(
         }
     }
     val unique = projected.distinctBy { it.shuffleFocusKey ?: continueWatchingItemKey(it) }
-    val (current, upcoming) = splitUpcomingItems(unique, sortMode)
-    return state.copy(continueWatchingItems = current, upcomingItems = upcoming)
+    return state.withContinueWatchingRows(splitContinueWatchingRows(unique, sortMode, separateNextUp))
 }

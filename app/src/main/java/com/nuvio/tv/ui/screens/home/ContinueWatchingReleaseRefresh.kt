@@ -54,7 +54,7 @@ internal fun hasContinueWatchingReleaseSince(
 internal fun HomeViewModel.observeContinueWatchingReleases() {
     viewModelScope.launch {
         _uiState
-            .map { it.continueWatchingItems + it.upcomingItems }
+            .map { it.allContinueWatchingItems }
             .distinctUntilChanged()
             .collectLatest { items ->
                 while (true) {
@@ -76,7 +76,7 @@ internal fun HomeViewModel.observeContinueWatchingReleases() {
 internal fun HomeViewModel.refreshContinueWatchingIfReleased() {
     val state = _uiState.value
     val released = hasContinueWatchingReleaseSince(
-        items = state.continueWatchingItems + state.upcomingItems,
+        items = state.allContinueWatchingItems,
         noNextUpRecheckTimes = cwNoNextUpSeeds.values,
         sinceMs = cwLastCycleStartedAtMs,
         nowMs = System.currentTimeMillis()

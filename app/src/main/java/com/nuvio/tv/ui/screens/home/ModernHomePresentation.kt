@@ -18,6 +18,7 @@ internal data class ModernHomePresentationInput(
     val homeRows: List<HomeRow>,
     val catalogRows: List<CatalogRow>,
     val continueWatchingItems: List<ContinueWatchingItem>,
+    val nextUpItems: List<ContinueWatchingItem> = emptyList(),
     val upcomingItems: List<ContinueWatchingItem>,
     val useLandscapePosters: Boolean,
     val showCatalogTypeSuffix: Boolean,
@@ -88,6 +89,50 @@ internal fun buildModernHomePresentation(
         } else {
             cache.continueWatchingItems = emptyList()
             cache.continueWatchingRow = null
+        }
+
+        // Next Up row: the next episode of each show being watched, beneath Continue Watching.
+        val strNextUpSectionTitle = localizedContext.getString(R.string.next_up_section_title)
+        if (input.nextUpItems.isNotEmpty()) {
+            val reuseNextUpRow =
+                cache.nextUpRow != null &&
+                    cache.nextUpItems == input.nextUpItems &&
+                    cache.nextUpTitle == strNextUpSectionTitle &&
+                    cache.nextUpAirsDateTemplate == strAirsDate &&
+                    cache.nextUpUpcomingLabel == strUpcoming &&
+                    cache.nextUpUseLandscapePosters == input.useLandscapePosters &&
+                    cache.nextUpShowImdbRatings == input.showImdbRatings
+            val nextUpRow = if (reuseNextUpRow) {
+                checkNotNull(cache.nextUpRow)
+            } else {
+                HeroCarouselRow(
+                    key = MODERN_NEXT_UP_ROW_KEY,
+                    title = strNextUpSectionTitle,
+                    globalRowIndex = -1,
+                    items = input.nextUpItems.map { item ->
+                        buildContinueWatchingItem(
+                            item = item,
+                            useLandscapePosters = input.useLandscapePosters,
+                            showImdbRatings = input.showImdbRatings,
+                            detailImdbRatingsVisibility = input.detailImdbRatingsVisibility,
+                            airsDateTemplate = strAirsDate,
+                            upcomingLabel = strUpcoming,
+                            context = localizedContext
+                        )
+                    }.asStable()
+                )
+            }
+            cache.nextUpItems = input.nextUpItems
+            cache.nextUpTitle = strNextUpSectionTitle
+            cache.nextUpAirsDateTemplate = strAirsDate
+            cache.nextUpUpcomingLabel = strUpcoming
+            cache.nextUpUseLandscapePosters = input.useLandscapePosters
+            cache.nextUpShowImdbRatings = input.showImdbRatings
+            cache.nextUpRow = nextUpRow
+            add(nextUpRow)
+        } else {
+            cache.nextUpItems = emptyList()
+            cache.nextUpRow = null
         }
 
         // Upcoming row (SPLIT_UPCOMING mode)

@@ -1274,9 +1274,10 @@ fun ModernHomeContent(
             item = selectedOptionsItem,
             onDismiss = { optionsItem.value = null },
             onRemove = {
-                val targetIndex = if (uiState.continueWatchingItems.size <= 1) null
-                else (lastFocusedContinueWatchingIndex.intValue).coerceAtMost(uiState.continueWatchingItems.size - 2).coerceAtLeast(0)
-                pendingRowFocusKey.value = if (targetIndex != null) "continue_watching" else null
+                val (rowKey, rowItems) = uiState.continueWatchingRowOf(selectedOptionsItem)
+                val targetIndex = if (rowItems.size <= 1) null
+                else (lastFocusedContinueWatchingIndex.intValue).coerceAtMost(rowItems.size - 2).coerceAtLeast(0)
+                pendingRowFocusKey.value = if (targetIndex != null) rowKey else null
                 pendingRowFocusIndex.value = targetIndex
                 pendingRowFocusNonce.intValue++
                 onRemoveContinueWatching(
@@ -1301,9 +1302,10 @@ fun ModernHomeContent(
                 optionsItem.value = null
             },
             onMarkWatched = {
-                val targetIndex = if (uiState.continueWatchingItems.size <= 1) null
-                else lastFocusedContinueWatchingIndex.intValue.coerceAtMost(uiState.continueWatchingItems.lastIndex)
-                pendingRowFocusKey.value = if (targetIndex != null) "continue_watching" else null
+                val (rowKey, rowItems) = uiState.continueWatchingRowOf(selectedOptionsItem)
+                val targetIndex = if (rowItems.size <= 1) null
+                else lastFocusedContinueWatchingIndex.intValue.coerceAtMost(rowItems.lastIndex)
+                pendingRowFocusKey.value = if (targetIndex != null) rowKey else null
                 pendingRowFocusIndex.value = targetIndex
                 pendingRowFocusNonce.intValue++
                 onMarkContinueWatchingWatched(selectedOptionsItem)

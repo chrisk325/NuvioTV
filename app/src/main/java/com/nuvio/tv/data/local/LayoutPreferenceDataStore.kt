@@ -121,6 +121,7 @@ class LayoutPreferenceDataStore @Inject constructor(
     private val nextUpFromFurthestEpisodeKey = booleanPreferencesKey("next_up_from_furthest_episode")
     private val blurContinueWatchingNextUpKey = booleanPreferencesKey("blur_continue_watching_next_up")
     private val continueWatchingSortModeKey = stringPreferencesKey("continue_watching_sort_mode")
+    private val separateNextUpRowKey = booleanPreferencesKey("separate_next_up_row")
     private val continueWatchingClickActionKey = stringPreferencesKey("continue_watching_click_action")
     private val detailPageTrailerButtonEnabledKey = booleanPreferencesKey("detail_page_trailer_button_enabled")
     private val preferExternalMetaAddonDetailKey = booleanPreferencesKey("prefer_external_meta_addon_detail")
@@ -405,6 +406,10 @@ class LayoutPreferenceDataStore @Inject constructor(
 
     val blurContinueWatchingNextUp: Flow<Boolean> = profileFlow { prefs ->
         prefs[blurContinueWatchingNextUpKey] ?: false
+    }
+
+    val separateNextUpRow: Flow<Boolean> = profileFlow { prefs ->
+        prefs[separateNextUpRowKey] ?: true
     }
 
     val continueWatchingSortMode: Flow<ContinueWatchingSortMode> = profileFlow { prefs ->
@@ -850,6 +855,12 @@ class LayoutPreferenceDataStore @Inject constructor(
     suspend fun setBlurContinueWatchingNextUp(enabled: Boolean) {
         store().edit { prefs ->
             prefs[blurContinueWatchingNextUpKey] = enabled
+        }
+    }
+
+    suspend fun setSeparateNextUpRow(enabled: Boolean) {
+        store().edit { prefs ->
+            prefs[separateNextUpRowKey] = enabled
         }
     }
 

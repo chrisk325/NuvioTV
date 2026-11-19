@@ -131,30 +131,46 @@ fun GridHomeContent(
     // off screen, so the scroll has to survive too, not just the index.
     val lastFocusedCwIndex = rememberSaveable { mutableIntStateOf(-1) }
     val lastFocusedUpcomingIndex = rememberSaveable { mutableIntStateOf(-1) }
+    val lastFocusedNextUpIndex = rememberSaveable { mutableIntStateOf(-1) }
     val cwFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val upcomingFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+    val nextUpFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val cwRowFocusRequester = remember { FocusRequester() }
     val upcomingRowFocusRequester = remember { FocusRequester() }
+    val nextUpRowFocusRequester = remember { FocusRequester() }
     val cwListState = androidx.compose.foundation.lazy.rememberLazyListState()
     val upcomingListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val nextUpListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     // Improved Back navigation for CW/Upcoming rows: scroll to first item
     val contentHasFocus = remember { mutableStateOf(false) }
     val activeCwRowKey = remember { mutableStateOf<String?>(null) }
     val cwPendingScrollToStart = remember { mutableIntStateOf(0) }
     val upcomingPendingScrollToStart = remember { mutableIntStateOf(0) }
+    val nextUpPendingScrollToStart = remember { mutableIntStateOf(0) }
     BackHandler(enabled = contentHasFocus.value && run {
         val key = activeCwRowKey.value ?: return@run false
-        val idx = if (key == "continue_watching") lastFocusedCwIndex.intValue else lastFocusedUpcomingIndex.intValue
+        val idx = when (key) {
+            "continue_watching" -> lastFocusedCwIndex.intValue
+            "next_up_section" -> lastFocusedNextUpIndex.intValue
+            else -> lastFocusedUpcomingIndex.intValue
+        }
         idx > 0
     }) {
         val key = activeCwRowKey.value ?: return@BackHandler
-        if (key == "continue_watching") {
-            lastFocusedCwIndex.intValue = 0
-            cwPendingScrollToStart.intValue++
-        } else {
-            lastFocusedUpcomingIndex.intValue = 0
-            upcomingPendingScrollToStart.intValue++
+        when (key) {
+            "continue_watching" -> {
+                lastFocusedCwIndex.intValue = 0
+                cwPendingScrollToStart.intValue++
+            }
+            "next_up_section" -> {
+                lastFocusedNextUpIndex.intValue = 0
+                nextUpPendingScrollToStart.intValue++
+            }
+            else -> {
+                lastFocusedUpcomingIndex.intValue = 0
+                upcomingPendingScrollToStart.intValue++
+            }
         }
     }
 
@@ -205,7 +221,26 @@ fun GridHomeContent(
             emptyList()
         }
     }
-    val continueWatchingOffset = if (continueWatchingItems.isNotEmpty()) 1 else 0
+    val nextUpItems = remember(
+        uiState.continueWatchingEnabled,
+        uiState.nextUpItems,
+        uiState.customPosterUrlPattern,
+        uiState.customPosterEnabledScreens,
+    ) {
+        if (uiState.continueWatchingEnabled) {
+            uiState.nextUpItems.withCustomPosterUrls(
+                com.nuvio.tv.core.poster.patternForScreen(uiState.customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
+            )
+        } else {
+            emptyList()
+        }
+    }
+    val hasUpcomingSection = uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()
+    val continueWatchingOffset = listOf(
+        continueWatchingItems.isNotEmpty(),
+        nextUpItems.isNotEmpty(),
+        hasUpcomingSection
+    ).count { it }
 
     LaunchedEffect(gridItems, gridFocusState.hasSavedFocus, gridFocusState.focusedItemKey) {
         // Restore once per screen entry, not again when background catalog loads finish.
@@ -255,7 +290,7 @@ fun GridHomeContent(
     val shouldRestoreHeroFocus = gridFocusState.hasSavedFocus &&
         gridFocusState.focusedItemKey == "hero"
     val firstGridItemFocusRequester = remember { FocusRequester() }
-    val hasContinueWatching = continueWatchingItems.isNotEmpty()
+    val hasContinueWatching = continueWatchingItems.isNotEmpty() || nextUpItems.isNotEmpty()
     val hasStandaloneFocusableGridItem = remember(gridItems) {
         gridItems.any { it is GridItem.Content || it is GridItem.SeeAll }
     }
@@ -446,6 +481,7 @@ fun GridHomeContent(
                     val cwRow = activeCwRowKey.value
                     val fromCwRow = when (cwRow) {
                         "continue_watching" -> cwRowFocusRequester
+                        "next_up_section" -> nextUpRowFocusRequester
                         "upcoming_section" -> upcomingRowFocusRequester
                         else -> null
                     }
@@ -593,8 +629,77 @@ fun GridHomeContent(
                 }
             }
 
+            // Emit Next Up beneath Continue Watching: the next episode of each show being watched
+            if (nextUpItems.isNotEmpty()) {
+                item(
+                    key = "next_up_section",
+                    span = { GridItemSpan(maxLineSpan) },
+                    contentType = "next_up_section"
+                ) {
+                    LaunchedEffect(nextUpPendingScrollToStart.intValue) {
+                        if (nextUpPendingScrollToStart.intValue > 0) {
+                            nextUpListState.scrollToItem(0, 0)
+                            nextUpRowFocusRequester.let { runCatching { it.requestFocus() } }
+                            nextUpPendingScrollToStart.intValue = 0
+                        }
+                    }
+                    GridContinueWatchingSection(
+                        modifier = Modifier.fillMaxWidth(),
+                        fullWidth = gridWidth,
+                        items = nextUpItems,
+                        title = stringResource(R.string.next_up_section_title),
+                        focusedItemIndex = if (shouldRequestInitialFocus && !hasHero && continueWatchingItems.isEmpty()) 0 else -1,
+                        lastFocusedIndex = lastFocusedNextUpIndex,
+                        focusRequesters = nextUpFocusRequesters,
+                        rowFocusRequester = nextUpRowFocusRequester,
+                        listState = nextUpListState,
+                        onItemFocused = { lastFocusedNextUpIndex.intValue = it; activeCwRowKey.value = "next_up_section" },
+                        onItemClick = onContinueWatchingClick,
+                        onStartFromBeginning = onContinueWatchingStartFromBeginning,
+                        showManualPlayOption = showContinueWatchingManualPlayOption,
+                        onPlayManually = onContinueWatchingPlayManually,
+                        onDetailsClick = { item ->
+                            onNavigateToDetail(
+                                when (item) {
+                                    is ContinueWatchingItem.InProgress -> item.progress.contentId
+                                    is ContinueWatchingItem.NextUp -> item.info.contentId
+                                },
+                                when (item) {
+                                    is ContinueWatchingItem.InProgress -> item.progress.contentType
+                                    is ContinueWatchingItem.NextUp -> item.info.contentType
+                                },
+                                ""
+                            )
+                        },
+                        onMarkWatched = onMarkContinueWatchingWatched,
+                        onRemoveItem = { item ->
+                            val contentId = when (item) {
+                                is ContinueWatchingItem.InProgress -> item.progress.contentId
+                                is ContinueWatchingItem.NextUp -> item.info.contentId
+                            }
+                            val season = when (item) {
+                                is ContinueWatchingItem.InProgress -> item.progress.season
+                                is ContinueWatchingItem.NextUp -> item.info.seedSeason
+                            }
+                            val episode = when (item) {
+                                is ContinueWatchingItem.InProgress -> item.progress.episode
+                                is ContinueWatchingItem.NextUp -> item.info.seedEpisode
+                            }
+                            val isNextUp = item is ContinueWatchingItem.NextUp
+                            onRemoveContinueWatching(contentId, season, episode, isNextUp)
+                        },
+                        blurUnwatchedEpisodes = uiState.blurUnwatchedEpisodes,
+                        useEpisodeThumbnails = uiState.useEpisodeThumbnailsInCw,
+                        cardStyle = uiState.continueWatchingCardStyle,
+                        cornerRadius = posterCardStyle.cornerRadius,
+                        posterCardWidth = posterCardStyle.width,
+                        posterCardHeight = posterCardStyle.height
+                    )
+                }
+            }
+
             // Emit Upcoming section if SPLIT_UPCOMING mode has upcoming items
-            if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) {
+            if (hasUpcomingSection) {
                 item(
                     key = "upcoming_section",
                     span = { GridItemSpan(maxLineSpan) },

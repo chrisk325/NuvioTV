@@ -89,6 +89,7 @@ data class LayoutSettingsUiState(
     val showFullReleaseDate: Boolean = true,
     val nextUpFromFurthestEpisode: Boolean = true,
     val showUnairedNextUp: Boolean = true,
+    val separateNextUpRow: Boolean = true,
     val continueWatchingEnabled: Boolean = true,
     val continueWatchingSortMode: ContinueWatchingSortMode = ContinueWatchingSortMode.DEFAULT,
     val continueWatchingClickAction: ContinueWatchingClickAction = ContinueWatchingClickAction.STREAM,
@@ -157,6 +158,7 @@ sealed class LayoutSettingsEvent {
     data class SetShowFullReleaseDate(val enabled: Boolean) : LayoutSettingsEvent()
     data class SetNextUpFromFurthestEpisode(val enabled: Boolean) : LayoutSettingsEvent()
     data class SetShowUnairedNextUp(val enabled: Boolean) : LayoutSettingsEvent()
+    data class SetSeparateNextUpRow(val enabled: Boolean) : LayoutSettingsEvent()
     data class SetContinueWatchingEnabled(val enabled: Boolean) : LayoutSettingsEvent()
     data class SetContinueWatchingSortMode(val mode: ContinueWatchingSortMode) : LayoutSettingsEvent()
     data class SetContinueWatchingClickAction(val action: ContinueWatchingClickAction) : LayoutSettingsEvent()
@@ -417,6 +419,11 @@ class LayoutSettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            layoutPreferenceDataStore.separateNextUpRow.distinctUntilChanged().collectLatest { enabled ->
+                updateUiStateIfChanged { it.copy(separateNextUpRow = enabled) }
+            }
+        }
+        viewModelScope.launch {
             layoutPreferenceDataStore.continueWatchingEnabled
                 .distinctUntilChanged()
                 .collect { enabled ->
@@ -524,6 +531,7 @@ class LayoutSettingsViewModel @Inject constructor(
             is LayoutSettingsEvent.SetShowFullReleaseDate -> setShowFullReleaseDate(event.enabled)
             is LayoutSettingsEvent.SetNextUpFromFurthestEpisode -> setNextUpFromFurthestEpisode(event.enabled)
             is LayoutSettingsEvent.SetShowUnairedNextUp -> setShowUnairedNextUp(event.enabled)
+            is LayoutSettingsEvent.SetSeparateNextUpRow -> setSeparateNextUpRow(event.enabled)
             is LayoutSettingsEvent.SetContinueWatchingEnabled -> setContinueWatchingEnabled(event.enabled)
             is LayoutSettingsEvent.SetContinueWatchingSortMode -> setContinueWatchingSortMode(event.mode)
             is LayoutSettingsEvent.SetContinueWatchingClickAction -> setContinueWatchingClickAction(event.action)
@@ -926,6 +934,13 @@ class LayoutSettingsViewModel @Inject constructor(
         if (_uiState.value.showUnairedNextUp == enabled) return
         viewModelScope.launch {
             layoutPreferenceDataStore.setShowUnairedNextUp(enabled)
+        }
+    }
+
+    private fun setSeparateNextUpRow(enabled: Boolean) {
+        if (_uiState.value.separateNextUpRow == enabled) return
+        viewModelScope.launch {
+            layoutPreferenceDataStore.setSeparateNextUpRow(enabled)
         }
     }
 
