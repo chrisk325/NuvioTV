@@ -256,4 +256,38 @@ class JellyfinRelatedTest {
         assertEquals("Movie", asked?.parameters?.get("IncludeItemTypes"))
         assertEquals("lib1", asked?.parameters?.get("ParentId"))
     }
+    @Test
+    fun aioMetadataShapedItemsStillReachContinueWatchingAndNextUp() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                // No RunTimeTicks and no LastPlayedDate on the episode, as AIOMetadata serves it.
+                "/Users/u1/Items/Resume" -> respond(
+                    """{"Items":[{"Id":"ep1","Name":"Pilot","Type":"Episode","SeriesId":"ser1","SeriesName":"Show",
+                        "ParentIndexNumber":1,"IndexNumber":1,"ProviderIds":{},
+                        "UserData":{"PlaybackPositionTicks":6000000000}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Items/ser1" -> respond("""{"Id":"ser1","Type":"Series","ProviderIds":{"Imdb":"tt7"}}""", HttpStatusCode.OK, json)
+                "/Items/ani1" -> respond("""{"Id":"ani1","Type":"Series","ProviderIds":{"Kitsu":"42"}}""", HttpStatusCode.OK, json)
+                // A season-less anime episode (ParentIndexNumber null).
+                "/Shows/NextUp" -> respond(
+                    """{"Items":[{"Id":"ep9","Name":"Episode 9","Type":"Episode","SeriesId":"ani1","SeriesName":"Anime",
+                        "ParentIndexNumber":null,"IndexNumber":9,"ProviderIds":{}}]}""",
+                    HttpStatusCode.OK, json
+                )
+                "/Users/u1/Items" -> respond("""{"Items":[]}""", HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, serverStore)
+        val resume = service.resumeSnapshot()!!.single()
+        assertEquals("tt7", resume.contentId)
+        assertEquals("tt7:1:1", resume.videoId)
+        kotlin.test.assertTrue(resume.durationMs > resume.positionMs, "duration ${resume.durationMs}")
+        kotlin.test.assertTrue(resume.isResumable)
+        val next = service.nextUp().single()
+        assertEquals(9, next.episode)
+        assertNull(next.season)
+        assertEquals("mediaserver:srv:ep9", next.videoId)
+    }
 }

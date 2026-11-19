@@ -45,6 +45,8 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlin.random.Random
 
 /** A signed-in Jellyfin or Emby server (both speak the MediaBrowser API). */
@@ -883,6 +885,31 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         }
     }
 
+    /** Series item id → its run time in ms (0 when the server has none), per server. */
+    private val seriesRuntime = mutableMapOf<String, Long>()
+
+    /**
+     * Length of a partly watched item in ms. Servers that emulate Jellyfin (AIOMetadata) often
+     * have no RunTimeTicks on episodes, so: the item's run time, else what its PlayedPercentage
+     * implies, else the show's run time, else a typical length (at least twice the position, so
+     * the card never counts as finished).
+     */
+    private suspend fun runtimeMs(server: MediaServer, item: JsonObject, data: JsonObject, positionMs: Long, seriesId: String?): Long {
+        item.long("RunTimeTicks")?.takeIf { it > 0 }?.let { return it / 10_000L }
+        val percent = runCatching { data["PlayedPercentage"]?.jsonPrimitive?.doubleOrNull }.getOrNull()
+        if (percent != null && percent in 0.5..99.5) return (positionMs * 100 / percent).toLong()
+        if (seriesId != null) {
+            val key = "${server.id}|$seriesId"
+            val series = seriesRuntime.getOrPut(key) {
+                runCatching { item(server, seriesId)?.long("RunTimeTicks") }
+                    .onFailure { if (it is CancellationException) throw it }.getOrNull()?.div(10_000L) ?: 0L
+            }
+            if (series > positionMs) return series
+        }
+        val typical = if (seriesId != null) 45 * 60_000L else 120 * 60_000L
+        return maxOf(typical, positionMs * 2)
+    }
+
     /** Series item id → IMDb id (null when the server has none), per server. */
     private val seriesImdb = mutableMapOf<String, String?>()
 
@@ -926,19 +953,24 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         val itemId = nonBlank("Id") ?: return null
         val data = obj("UserData") ?: return null
         val position = (data.long("PlaybackPositionTicks") ?: 0L) / 10_000L
-        val duration = (long("RunTimeTicks") ?: 0L) / 10_000L
-        if (position <= 0 || duration <= 0) return null
-        val updated = parseReleaseEpochMs(data.str("LastPlayedDate")) ?: return null
-        return if (str("Type") == "Episode") {
-            val seriesId = nonBlank("SeriesId") ?: return null
-            val season = int("ParentIndexNumber") ?: return null
+        if (position <= 0) return null
+        val isEpisode = str("Type") == "Episode"
+        val seriesId = if (isEpisode) nonBlank("SeriesId") ?: return null else null
+        val duration = runtimeMs(server, this, data, position, seriesId)
+        // No LastPlayedDate (servers that emulate Jellyfin may leave it out): a fixed, oldest time,
+        // so the entry is listed but never overrides progress made in the app.
+        val updated = parseReleaseEpochMs(data.str("LastPlayedDate")) ?: 1L
+        return if (isEpisode) {
+            seriesId!!
+            // Season-less shows (anime numbered straight through) have no ParentIndexNumber.
+            val season = int("ParentIndexNumber")
             val number = int("IndexNumber") ?: return null
             val imdb = seriesImdbId(server, seriesId)
             val contentId = imdb ?: nativeId(server, seriesId)
             WatchProgress(
                 contentId = contentId,
                 contentType = "series",
-                videoId = imdb?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
+                videoId = imdb?.takeIf { season != null }?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
                 name = str("SeriesName") ?: str("Name") ?: contentId,
                 poster = "${server.address}/Items/$seriesId/Images/Primary?maxHeight=600&api_key=${server.token}",
                 background = "${server.address}/Items/$seriesId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
@@ -998,14 +1030,15 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         items.mapIndexedNotNull { index, item ->
             val itemId = item.nonBlank("Id") ?: return@mapIndexedNotNull null
             val seriesId = item.nonBlank("SeriesId") ?: return@mapIndexedNotNull null
-            val season = item.int("ParentIndexNumber") ?: return@mapIndexedNotNull null
+            // Season-less shows (anime numbered straight through) have no ParentIndexNumber.
+            val season = item.int("ParentIndexNumber")
             val number = item.int("IndexNumber") ?: return@mapIndexedNotNull null
             val imdb = seriesImdbId(server, seriesId)
             val contentId = imdb ?: nativeId(server, seriesId)
             WatchProgress(
                 contentId = contentId,
                 contentType = "series",
-                videoId = imdb?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
+                videoId = imdb?.takeIf { season != null }?.let { "$it:$season:$number" } ?: nativeId(server, itemId),
                 name = item.str("SeriesName") ?: contentId,
                 poster = "${server.address}/Items/$seriesId/Images/Primary?maxHeight=600&api_key=${server.token}",
                 background = "${server.address}/Items/$seriesId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
