@@ -128,12 +128,44 @@ internal abstract class MediaBrowserProvider(
         limit: Int
     ): ServerPage<ServerTitle> {
         val key = "${session.connection.id}:${library.id}"
-        var result = libraryItems(session, library, start, limit, libraryGenres[key])
+        var result = libraryItems(session, library, start, limit, genreId = libraryGenres[key])
         if (result.items.isEmpty() && start == 0 && !libraryGenres.containsKey(key) && library.kind != ServerMediaKind.COLLECTION) {
             val genre = firstGenre(session, library).orEmpty()
             libraryGenres[key] = genre
-            if (genre.isNotEmpty()) result = libraryItems(session, library, start, limit, genre)
+            if (genre.isNotEmpty()) result = libraryItems(session, library, start, limit, genreId = genre)
         }
+        val mapper = mapper(session)
+        return ServerPage(result.items.mapNotNull(mapper::title), result.totalRecordCount)
+    }
+
+    override suspend fun libraryGenres(session: ServerSession, library: ServerLibrary): List<String> {
+        if (library.kind == ServerMediaKind.COLLECTION) return emptyList()
+        return get(
+            session,
+            Endpoint("/Genres"),
+            ItemsResult.serializer(),
+            mapOf(
+                "parentId" to library.id,
+                "userId" to session.userId,
+                "includeItemTypes" to library.kind.itemType(),
+                "recursive" to "true",
+                "sortBy" to "SortName",
+                "sortOrder" to "Ascending"
+            )
+        ).items
+            .mapNotNull { it.name?.trim()?.takeIf(String::isNotEmpty) }
+            .distinctBy { it.lowercase() }
+    }
+
+    // By name rather than id: Jellyfin, Emby and AIOMetadata all take Genres, while genre ids differ between them.
+    override suspend fun libraryGenrePage(
+        session: ServerSession,
+        library: ServerLibrary,
+        genre: String,
+        start: Int,
+        limit: Int
+    ): ServerPage<ServerTitle> {
+        val result = libraryItems(session, library, start, limit, genreName = genre)
         val mapper = mapper(session)
         return ServerPage(result.items.mapNotNull(mapper::title), result.totalRecordCount)
     }
@@ -143,13 +175,15 @@ internal abstract class MediaBrowserProvider(
         library: ServerLibrary,
         start: Int,
         limit: Int,
-        genreId: String?
+        genreId: String? = null,
+        genreName: String? = null
     ): ItemsResult = get(
         session,
         itemsEndpoint(session.userId),
         ItemsResult.serializer(),
         itemQuery(library) + mapOf(
             "genreIds" to genreId?.takeIf { it.isNotEmpty() },
+            "genres" to genreName?.takeIf { it.isNotEmpty() },
             "sortBy" to if (library.kind == ServerMediaKind.COLLECTION) "SortName" else "DateCreated,SortName",
             "sortOrder" to if (library.kind == ServerMediaKind.COLLECTION) "Ascending" else "Descending",
             "startIndex" to start.toString(),

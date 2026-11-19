@@ -41,6 +41,9 @@ internal class FakeServerProvider(
     var titleLookup: (suspend (ServerLibrary, ServerTitleQuery) -> List<ServerIndexEntry>?)? = null
     val titleQueries = mutableListOf<ServerTitleQuery>()
     var indexRequests = 0
+    var genres: List<String> = emptyList()
+    var genreLookups = 0
+    val genrePages = mutableListOf<Pair<String, String>>()
 
     override suspend fun libraries(session: ServerSession): List<ServerLibrary> = listOf(MOVIE_LIBRARY, SERIES_LIBRARY)
 
@@ -53,6 +56,23 @@ internal class FakeServerProvider(
         if (library.id in failingLibraries) throw ServerException(ServerFailure.UNREACHABLE)
         val ids = (start until minOf(start + limit, movieCount)).map { it.toString() }
         return ServerPage(ids.map { title(session, it) }, movieCount)
+    }
+
+    override suspend fun libraryGenres(session: ServerSession, library: ServerLibrary): List<String> {
+        genreLookups++
+        if (library.id in failingLibraries) throw ServerException(ServerFailure.UNREACHABLE)
+        return genres
+    }
+
+    override suspend fun libraryGenrePage(
+        session: ServerSession,
+        library: ServerLibrary,
+        genre: String,
+        start: Int,
+        limit: Int
+    ): ServerPage<ServerTitle> {
+        genrePages += library.id to genre
+        return ServerPage(listOf(title(session, "7")), 1)
     }
 
     override suspend fun collectionPage(

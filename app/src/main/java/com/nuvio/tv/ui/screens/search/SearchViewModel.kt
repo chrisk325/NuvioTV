@@ -1079,7 +1079,29 @@ class SearchViewModel @Inject constructor(
         fetchDiscoverContent(reset = false)
     }
 
+    /**
+     * A server library declares no genres of its own, so they are asked of the server when the library is picked
+     * and filled into its catalog, which shows them in the genre filter.
+     */
+    private fun loadServerGenres() {
+        val state = _uiState.value
+        val catalog = state.discoverCatalogs.firstOrNull { it.key == state.selectedDiscoverCatalogKey } ?: return
+        if (catalog.genres.isNotEmpty() || !ServerCatalog.isServerAddon(catalog.addonBaseUrl)) return
+        viewModelScope.launch {
+            val genres = serverCatalog.libraryGenres(catalog.addonBaseUrl, catalog.catalogId)
+            if (genres.isEmpty()) return@launch
+            _uiState.update { current ->
+                current.copy(
+                    discoverCatalogs = current.discoverCatalogs.map {
+                        if (it.key == catalog.key && it.genres.isEmpty()) it.copy(genres = genres) else it
+                    }
+                )
+            }
+        }
+    }
+
     private fun fetchDiscoverContent(reset: Boolean) {
+        if (reset) loadServerGenres()
         discoverJob?.cancel()
         discoverJob = viewModelScope.launch {
             val state = _uiState.value

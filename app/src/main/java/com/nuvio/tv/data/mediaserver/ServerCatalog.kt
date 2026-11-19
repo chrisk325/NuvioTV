@@ -13,6 +13,7 @@ import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.domain.model.enabledAddons
 import com.nuvio.tv.domain.repository.AddonRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -46,6 +47,8 @@ class ServerCatalog @Inject constructor(
     private val addonRepository: AddonRepository
 ) {
     val detailsLoaded = MutableSharedFlow<ServerItemDetails>(extraBufferCapacity = DETAILS_BUFFER)
+
+    private val genreCache = ConcurrentHashMap<String, List<String>>()
 
     val addons: Flow<List<Addon>> = repository.uiState
         .map { state -> state.enabledConnections.mapNotNull(::addonFor) }
@@ -130,9 +133,14 @@ class ServerCatalog @Inject constructor(
             else -> {
                 val library = connection.libraries.firstOrNull { it.id == catalogId }
                     ?: throw ServerException(ServerFailure.NOT_FOUND)
+                val genre = extraArgs["genre"]?.trim()?.takeIf { it.isNotEmpty() }
                 pageOf(connection, skip) {
                     repository.call(connection.id) { provider, session ->
-                        provider.libraryPage(session, library, skip, PAGE_SIZE)
+                        if (genre != null) {
+                            provider.libraryGenrePage(session, library, genre, skip, PAGE_SIZE)
+                        } else {
+                            provider.libraryPage(session, library, skip, PAGE_SIZE)
+                        }
                     }
                 }
             }
@@ -154,6 +162,27 @@ class ServerCatalog @Inject constructor(
             nextSkip = page.nextSkip ?: skip,
             extraArgs = extraArgs
         )
+    }
+
+    /**
+     * The genres the library behind [catalogId] can be narrowed to, for Discover's genre filter. Empty for rows that
+     * are not a library, or when the server has none or can't be reached; a failed lookup is tried again next time.
+     */
+    suspend fun libraryGenres(addonBaseUrl: String, catalogId: String): List<String> {
+        val connectionId = connectionId(addonBaseUrl) ?: return emptyList()
+        val key = "$connectionId|$catalogId"
+        genreCache[key]?.let { return it }
+        val connection = repository.connection(connectionId) ?: return emptyList()
+        val library = connection.libraries.firstOrNull { it.id == catalogId } ?: return emptyList()
+        val genres = try {
+            repository.call(connection.id) { provider, session -> provider.libraryGenres(session, library) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        genreCache[key] = genres
+        return genres
     }
 
     suspend fun collectionRow(ref: ServerItemRef): CatalogRow {
