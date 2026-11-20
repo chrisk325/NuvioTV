@@ -69,6 +69,9 @@ data class TmdbEnrichment(
     val seasonNumbers: List<Int> = emptyList()
 )
 
+/** One page of a collection source. */
+data class TmdbPage(val items: List<MetaPreview>, val hasMore: Boolean)
+
 data class TmdbEpisode(
     val season: Int,
     val episode: Int,
@@ -255,6 +258,48 @@ class TmdbService(private val http: HttpClient, private val apiKey: String) {
             movies = movies,
             shows = shows
         )
+    }
+
+    // --- Collection sources (Nuvio collections: TMDB lists, collections, people, discover) -------
+
+    /** A TMDB list ("list/{id}"), in the list's order; items carry their own media type. */
+    @Throws(Exception::class)
+    suspend fun listPage(id: Int, page: Int, language: String): TmdbPage {
+        val body = get("list/$id?page=$page&language=${encodeUrlComponent(language.ifBlank { "en-US" })}") ?: return TmdbPage(emptyList(), false)
+        val items = body.objects("items").mapNotNull { it.toPreview(it.str("media_type") == "tv") }
+        val totalPages = body.int("total_pages") ?: page
+        return TmdbPage(items, page < totalPages && items.isNotEmpty())
+    }
+
+    /** A movie collection's films, oldest first (TMDB's order). */
+    @Throws(Exception::class)
+    suspend fun collectionPage(id: Int, language: String): TmdbPage {
+        val body = get("collection/$id?language=${encodeUrlComponent(language.ifBlank { "en-US" })}") ?: return TmdbPage(emptyList(), false)
+        return TmdbPage(body.objects("parts").mapNotNull { it.toPreview(false) }, false)
+    }
+
+    /** A person's films or shows: as cast, or as director when [director]. */
+    @Throws(Exception::class)
+    suspend fun personCreditsPage(id: Int, director: Boolean, isShow: Boolean, language: String): TmdbPage {
+        val body = get("person/$id/combined_credits?language=${encodeUrlComponent(language.ifBlank { "en-US" })}") ?: return TmdbPage(emptyList(), false)
+        val wanted = if (isShow) "tv" else "movie"
+        val entries = if (director) body.objects("crew").filter { it.str("job").equals("Director", ignoreCase = true) }
+            else body.objects("cast")
+        val items = entries.filter { it.str("media_type") == wanted }
+            .mapNotNull { it.toPreview(isShow) }
+            .distinctBy { it.id }
+        return TmdbPage(items, false)
+    }
+
+    /** discover/movie or discover/tv with the given query parameters (sort_by, with_genres, …). */
+    @Throws(Exception::class)
+    suspend fun discoverPage(isShow: Boolean, params: Map<String, String>, page: Int, language: String): TmdbPage {
+        val query = (params + mapOf("page" to page.toString(), "language" to language.ifBlank { "en-US" }))
+            .entries.joinToString("&") { "${it.key}=${encodeUrlComponent(it.value)}" }
+        val body = get("discover/${if (isShow) "tv" else "movie"}?$query") ?: return TmdbPage(emptyList(), false)
+        val items = body.objects("results").mapNotNull { it.toPreview(isShow) }.distinctBy { it.id }
+        val totalPages = body.int("total_pages") ?: page
+        return TmdbPage(items, page < totalPages && items.isNotEmpty())
     }
 
     private fun JsonObject.toPreview(isShow: Boolean): MetaPreview? {

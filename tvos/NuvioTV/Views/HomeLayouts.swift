@@ -201,11 +201,13 @@ struct ClassicHomeView: View {
                         ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems, onFocus: setFocus, focus: $homeFocus,
                                             lastFocusedId: $lastContinueWatchingId)
                     }
+                    NuvioCollectionRows(pinned: true)
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                     ForEach(slots, id: \.key) { slot in
                         CatalogRowView(slot: slot, onFocus: setFocus,
                                        onMoveUp: upToContinueWatching(from: slot))
                     }
+                    NuvioCollectionRows(pinned: false)
                 }
                 .padding(.vertical, 40)
             }
@@ -229,7 +231,8 @@ struct ClassicHomeView: View {
 
     /// First catalog right under Continue Watching: Up goes there explicitly.
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
-        guard showsContinueWatching, app.serverLibraries.isEmpty,
+        // Rows in between (pinned collections, server libraries): the focus engine moves up itself.
+        guard showsContinueWatching, app.serverLibraries.isEmpty, !app.nuvioCollections.contains(where: { $0.pinToTop }),
               slot.key == firstLoadedSlotKey else { return nil }
         return {
             let items = rowAboveCatalogs
@@ -314,10 +317,12 @@ struct GridHomeView: View {
                 if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
                     ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems)
                 }
+                NuvioCollectionRows(pinned: true)
                 ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
                 ForEach(slots, id: \.key) { slot in
                     GridSection(slot: slot)
                 }
+                NuvioCollectionRows(pinned: false)
             }
             .padding(.vertical, 40)
         }
@@ -456,11 +461,13 @@ struct ModernHomeView: View {
                                 onMoveUp: upcomingMoveUp
                             )
                         }
+                        NuvioCollectionRows(pinned: true)
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
                         ForEach(slots, id: \.key) { slot in
                             CatalogRowView(slot: slot, landscape: app.settings.modernLandscapePosters, onFocus: setFocus,
                                            onMoveUp: upToContinueWatching(from: slot))
                         }
+                        NuvioCollectionRows(pinned: false)
                     }
                     .padding(.top, 30)
                     .padding(.bottom, 60)
@@ -493,7 +500,7 @@ struct ModernHomeView: View {
 
     /// First catalog: Up goes to Continue Watching, or to the hero when there is none.
     private func upToContinueWatching(from slot: CatalogSlot) -> (() -> Void)? {
-        guard app.serverLibraries.isEmpty,
+        guard app.serverLibraries.isEmpty, !app.nuvioCollections.contains(where: { $0.pinToTop }),
               slot.key == slots.first(where: { !feed.state($0).items.isEmpty })?.key
         else { return nil }
         guard showsContinueWatching else { return { homeFocus = .hero } }

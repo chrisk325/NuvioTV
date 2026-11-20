@@ -42,6 +42,8 @@ enum Route: Hashable {
     case serverLibrary(ServerLibrary)
     /// A collection from the server's Collections library (e.g. made in AIOMetadata): its titles.
     case serverCollection(MetaPreview)
+    /// A folder of an imported Nuvio collection: its sources' titles.
+    case collectionFolder(NuvioCollection, NuvioCollectionFolder)
 }
 
 struct RouteDestination: View {
@@ -63,6 +65,8 @@ struct RouteDestination: View {
             ServerLibraryGridView(library: library)
         case .serverCollection(let collection):
             ServerCollectionGridView(collection: collection)
+        case .collectionFolder(let collection, let folder):
+            CollectionFolderView(collection: collection, folder: folder)
         }
     }
 }

@@ -65,7 +65,7 @@ struct HomeView: View {
     var body: some View {
         let slots = app.homeSlots
         Group {
-            if slots.isEmpty && app.serverLibraries.isEmpty {
+            if slots.isEmpty && app.serverLibraries.isEmpty && app.nuvioCollections.isEmpty {
                 // Works with add-ons, a Jellyfin / Emby server, or both: only wait while either
                 // is still loading (no add-ons installed is not "loading").
                 if app.isRefreshingAddons || !app.hasLoadedAddons || app.isLoadingServerLibraries {

@@ -35,6 +35,7 @@ import com.nuvio.shared.tracking.TrackedMedia
 import com.nuvio.shared.tracking.TraktService
 import com.nuvio.shared.tracking.WatchedRepository
 import com.nuvio.shared.model.Video
+import com.nuvio.shared.collections.sortedForCollection
 import kotlinx.coroutines.CancellationException
 import com.nuvio.shared.model.Subtitle
 import com.nuvio.shared.repository.WatchProgressRepository
@@ -44,6 +45,7 @@ import com.nuvio.shared.util.isReleaseInFuture
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -84,6 +86,8 @@ private class JobCancellable(private val job: Job) : CoreSubscription {
 
 /** What the media servers last reported as in progress (video id → their update time). */
 private const val SERVER_RESUME_KEY = "mediaserver.resume.v1"
+/** Imported Nuvio collections (this device only, never synced). */
+private const val NUVIO_COLLECTIONS_KEY = "collections.imported.v1"
 
 /** Longest wait for a media server to describe a title before TMDB is used instead. */
 private const val SERVER_LOOKUP_MS = 8_000L
@@ -1624,6 +1628,109 @@ class NuvioCore(
     }
 
     fun close() = scope.cancel()
+
+    // --- Nuvio collections (imported from JSON, read-only, kept on this device only) -------
+
+    private val nuvioCollectionsState = kotlinx.coroutines.flow.MutableStateFlow(
+        store.getString(NUVIO_COLLECTIONS_KEY)?.let {
+            runCatching { com.nuvio.shared.collections.NuvioCollectionsJson.parse(it) }.getOrNull()
+        }.orEmpty()
+    )
+
+    /** Imported Nuvio collections, in their order (pinned ones first on Home). */
+    fun nuvioCollections(): List<com.nuvio.shared.collections.NuvioCollection> = nuvioCollectionsState.value
+
+    fun observeNuvioCollections(onChange: (List<com.nuvio.shared.collections.NuvioCollection>) -> Unit): CoreSubscription =
+        observe(nuvioCollectionsState, onChange)
+
+    /**
+     * Replaces the imported collections with those in [input]: collections JSON exported from the
+     * Android app or its phone page, or a link to such a file. Returns how many were imported.
+     * Nothing is synced anywhere.
+     */
+    @Throws(Exception::class)
+    suspend fun importNuvioCollections(input: String): Int {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) throw IllegalArgumentException("Paste collections JSON or a link to it")
+        val text = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            val response = http.get(trimmed)
+            if (!response.status.isSuccess()) throw IllegalStateException("Couldn't download the collections (HTTP ${response.status.value})")
+            response.bodyAsText()
+        } else trimmed
+        val parsed = com.nuvio.shared.collections.NuvioCollectionsJson.parse(text)
+        if (parsed.isEmpty()) throw IllegalArgumentException("No collections found in the JSON")
+        store.putString(NUVIO_COLLECTIONS_KEY, com.nuvio.shared.collections.NuvioCollectionsJson.encode(parsed))
+        nuvioCollectionsState.value = parsed
+        return parsed.size
+    }
+
+    fun removeNuvioCollections() {
+        store.putString(NUVIO_COLLECTIONS_KEY, null)
+        nuvioCollectionsState.value = emptyList()
+    }
+
+    /** The add-on catalog a collection source points at, among the enabled add-ons. */
+    private fun collectionSlot(source: com.nuvio.shared.collections.NuvioCollectionSource): CatalogSlot? {
+        val addons = addonRepository.currentAddons.filter { it.enabled }
+        val addon = addons.firstOrNull { it.id == source.addonId } ?: return null
+        val catalog = addon.catalogs.firstOrNull { it.id == source.catalogId && it.apiType == source.type }
+            ?: addon.catalogs.firstOrNull { it.id == source.catalogId }
+            ?: return null
+        return CatalogSlot(addon, catalog)
+    }
+
+    /** A source's tab / row name: its title, else the add-on catalog's name. */
+    fun collectionSourceTitle(source: com.nuvio.shared.collections.NuvioCollectionSource): String {
+        source.title?.takeIf { it.isNotBlank() }?.let { return it }
+        return when (source.kind) {
+            "addon" -> collectionSlot(source)?.let { slot ->
+                listOfNotNull(slot.catalog.name, source.genre).joinToString(" · ")
+            } ?: source.catalogId.orEmpty()
+            "trakt" -> "Trakt list"
+            else -> source.tmdbSourceType.orEmpty().lowercase().replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    /**
+     * One page of a collection source: add-on catalog (with its genre), TMDB list / collection /
+     * company / network / discover / person / director, or a public Trakt list. Pass 0 as
+     * [cursor] for the first page, then the page's nextCursor.
+     */
+    @Throws(Exception::class)
+    suspend fun collectionSourcePage(source: com.nuvio.shared.collections.NuvioCollectionSource, cursor: Int): com.nuvio.shared.collections.CollectionPage {
+        val language = settings.tmdbLanguage
+        return when (source.kind) {
+            "addon" -> {
+                val slot = collectionSlot(source)
+                    ?: throw IllegalStateException("Add-on catalog not installed: ${source.addonId} / ${source.catalogId}")
+                val row = loadCatalogFiltered(slot, cursor, source.genre.orEmpty())
+                com.nuvio.shared.collections.CollectionPage(row.items, row.hasMore, row.nextSkip)
+            }
+            "trakt" -> {
+                val (items, more) = trakt.publicListPage(source.traktListId ?: 0L, source.isShow, cursor + 1,
+                    source.sortBy?.takeIf { it.isNotBlank() } ?: "rank", source.sortHow?.takeIf { it.isNotBlank() } ?: "asc")
+                com.nuvio.shared.collections.CollectionPage(items, more, cursor + 1)
+            }
+            else -> {
+                val page = cursor + 1
+                val id = source.tmdbId ?: 0
+                val result = when (source.tmdbSourceType?.uppercase()) {
+                    "LIST" -> tmdb.listPage(id, page, language)
+                    "COLLECTION" -> tmdb.collectionPage(id, language)
+                    "PERSON" -> tmdb.personCreditsPage(id, director = false, isShow = source.isShow, language = language)
+                    "DIRECTOR" -> tmdb.personCreditsPage(id, director = true, isShow = source.isShow, language = language)
+                    else -> {
+                        val isShow = source.isShow || source.tmdbSourceType.equals("NETWORK", ignoreCase = true)
+                        tmdb.discoverPage(isShow, com.nuvio.shared.collections.discoverParams(source, isShow,
+                            com.nuvio.shared.collections.todayIso(currentTimeMillis())), page, language)
+                    }
+                }
+                val local = source.tmdbSourceType?.uppercase() in setOf("LIST", "COLLECTION", "PERSON", "DIRECTOR")
+                val items = if (local) result.items.sortedForCollection(source.sortBy) else result.items
+                com.nuvio.shared.collections.CollectionPage(items, result.hasMore, page)
+            }
+        }
+    }
 
     internal fun <T> observe(flow: Flow<T>, onChange: (T) -> Unit): CoreSubscription =
         JobCancellable(scope.launch { flow.collect { onChange(it) } })

@@ -47,6 +47,8 @@ final class AppModel: ObservableObject {
         continueWatching = core.continueWatching()
     }
     @Published private(set) var library: [SavedItem] = []
+    /// Imported Nuvio collections (Home rows, read-only, this device only).
+    @Published private(set) var nuvioCollections: [NuvioCollection] = []
     @Published private(set) var isRefreshingAddons = false
     @Published private(set) var failedAddonUrls: [String] = []
     @Published private(set) var watched: Set<String> = []
@@ -70,6 +72,9 @@ final class AppModel: ObservableObject {
                 self?.continueWatching = list
                 self?.preloadContinueWatchingPreviews()
             }
+        })
+        subscriptions.append(core.observeNuvioCollections { [weak self] list in
+            MainActor.assumeIsolated { self?.nuvioCollections = list }
         })
         subscriptions.append(core.observeLibrary { [weak self] list in
             MainActor.assumeIsolated { self?.library = list }

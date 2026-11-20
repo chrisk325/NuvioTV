@@ -355,6 +355,44 @@ class TraktService(
         if (auth) accessToken()?.let { header("Authorization", "Bearer $it") }
     }
 
+    /**
+     * A public Trakt list's movies or shows (Nuvio collection source), one page of 100, with
+     * whether more pages follow. Needs only the app's client id, not a signed-in account.
+     */
+    @Throws(Exception::class)
+    suspend fun publicListPage(listId: Long, isShow: Boolean, page: Int, sortBy: String, sortHow: String): Pair<List<MetaPreview>, Boolean> {
+        if (clientId.isBlank()) return emptyList<MetaPreview>() to false
+        val type = if (isShow) "shows" else "movies"
+        val response = http.get("$API/lists/$listId/items/$type?extended=full&page=$page&limit=$PUBLIC_LIST_PAGE&sort_by=$sortBy&sort_how=$sortHow") {
+            traktHeaders(auth = false)
+        }
+        if (!response.status.isSuccess()) throw IllegalStateException("Trakt list $listId: HTTP ${response.status.value}")
+        val pageCount = response.headers["X-Pagination-Page-Count"]?.toIntOrNull() ?: page
+        val items = (AddonJson.parseToJsonElement(response.bodyAsText()) as? JsonArray).orEmpty().mapNotNull { element ->
+            val media = (element as? JsonObject)?.obj(if (isShow) "show" else "movie") ?: return@mapNotNull null
+            val title = media.nonBlank("title") ?: return@mapNotNull null
+            val ids = media.obj("ids")
+            val imdb = ids?.nonBlank("imdb")
+            val tmdb = ids?.int("tmdb")
+            val id = imdb ?: tmdb?.let { "tmdb:$it" } ?: return@mapNotNull null
+            MetaPreview(
+                id = id,
+                type = if (isShow) ContentType.SERIES else ContentType.MOVIE,
+                name = title,
+                poster = imdb?.let(::poster),
+                posterShape = PosterShape.POSTER,
+                background = imdb?.let { "https://images.metahub.space/background/medium/$it/img" },
+                logo = null,
+                description = media.str("overview"),
+                releaseInfo = media.int("year")?.toString(),
+                imdbRating = null,
+                genres = emptyList(),
+                imdbId = imdb
+            )
+        }.distinctBy { it.id }
+        return items to (page < pageCount && items.isNotEmpty())
+    }
+
     private suspend fun get(path: String): kotlinx.serialization.json.JsonElement? {
         if (!isConfigured) return null
         val response = http.get("$API/$path") { traktHeaders() }
@@ -380,6 +418,7 @@ class TraktService(
 
     companion object {
         private const val API = "https://api.trakt.tv"
+        private const val PUBLIC_LIST_PAGE = 100
         private const val TOKEN_KEY = "trakt.token"
 
         fun poster(imdb: String) = "https://images.metahub.space/poster/medium/$imdb/img"

@@ -401,6 +401,7 @@ private struct HomeSettingsPane: View {
                 Toggle("Separate Upcoming row",
                        isOn: s.bind({ $0.separateUpcomingRow }, { $0.separateUpcomingRow = $1; app.reloadContinueWatching() }))
                 NavigationLink("Catalogs and hero sources") { HomeCatalogsSettings(binder: binder) }
+                NavigationLink("Nuvio collections") { NuvioCollectionsSettingsView() }
             }
 
             Section {
