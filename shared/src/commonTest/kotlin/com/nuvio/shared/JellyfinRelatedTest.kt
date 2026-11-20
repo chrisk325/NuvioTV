@@ -290,4 +290,29 @@ class JellyfinRelatedTest {
         assertNull(next.season)
         assertEquals("mediaserver:srv:ep9", next.videoId)
     }
+    @Test
+    fun landscapePostersComeFromThumbImages() = runTest {
+        var asked: io.ktor.http.Url? = null
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Items" -> {
+                    asked = request.url
+                    respond("""{"Items":[
+                        {"Id":"m1","Name":"Heat","Type":"Movie","ProviderIds":{"Imdb":"tt0113277"},"ImageTags":{"Primary":"p","Thumb":"th1"}},
+                        {"Id":"s1","Name":"Show","Type":"Series","ProviderIds":{"Imdb":"tt9"},"ImageTags":{"Primary":"p"},
+                         "ParentThumbItemId":"parent","ParentThumbImageTag":"th2"},
+                        {"Id":"m2","Name":"Plain","Type":"Movie","ProviderIds":{"Imdb":"tt2"},"ImageTags":{"Primary":"p"}}]}""",
+                        HttpStatusCode.OK, json)
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, serverStore)
+        val library = com.nuvio.shared.mediaserver.ServerLibrary(service.servers.single(), "lib1", "Films", null)
+        val page = service.browse(library, 0, 60, "", null)
+        assertEquals("http://jf/Items/m1/Images/Thumb?maxWidth=1280&tag=th1&api_key=tok", page[0].landscapePoster)
+        assertEquals("http://jf/Items/parent/Images/Thumb?maxWidth=1280&tag=th2&api_key=tok", page[1].landscapePoster)
+        assertNull(page[2].landscapePoster)
+        assertEquals("Primary,Backdrop,Logo,Thumb", asked?.parameters?.get("EnableImageTypes"))
+    }
 }

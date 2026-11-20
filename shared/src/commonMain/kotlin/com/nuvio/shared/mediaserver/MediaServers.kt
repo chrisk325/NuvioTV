@@ -149,7 +149,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         get(
             library.server,
             "/Users/${library.server.userId}/Items?ParentId=${library.id}&Recursive=true&IncludeItemTypes=Movie,Series" +
-                "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear&StartIndex=$start&Limit=$limit"
+                "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&StartIndex=$start&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
 
     /**
@@ -168,7 +168,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         return get(
             library.server,
             "/Users/${library.server.userId}/Items?ParentId=${library.id}&Recursive=true&IncludeItemTypes=$types$genreFilter" +
-                "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear&StartIndex=$start&Limit=$limit"
+                "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&StartIndex=$start&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
     }
 
@@ -189,7 +189,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         get(
             server,
             "/Users/${server.userId}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series" +
-                "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
+                "&SortBy=SortName&SortOrder=Ascending&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
 
     /** Movies and shows on the server matching [query] (SearchTerm), for the Search tab. */
@@ -198,7 +198,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         get(
             server,
             "/Users/${server.userId}/Items?SearchTerm=${encodeUrlComponent(query)}&Recursive=true" +
-                "&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Overview,ProductionYear&Limit=$limit"
+                "&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
 
     // --- Finding titles ---------------------------------------------------------------------
@@ -333,6 +333,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             background = if ((item["BackdropImageTags"] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true)
                 image("Backdrop", "maxWidth=1920") else null,
             logo = if (item.obj("ImageTags")?.str("Logo") != null) image("Logo", "maxWidth=800") else null,
+            landscapePoster = item.thumbImage(server),
             description = item.str("Overview"),
             releaseInfo = item.int("ProductionYear")?.toString(),
             imdbRating = item.str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
@@ -427,6 +428,17 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         return updated
     }
 
+    /**
+     * Landscape artwork: the item's Thumb image, else its parent's (an episode's show), as the
+     * Android app uses for landscape poster cards. AIOMetadata publishes its landscape posters here.
+     */
+    private fun JsonObject.thumbImage(server: MediaServer): String? {
+        val own = obj("ImageTags")?.nonBlank("Thumb")?.let { tag -> nonBlank("Id")?.let { it to tag } }
+        val parent = nonBlank("ParentThumbItemId")?.let { id -> nonBlank("ParentThumbImageTag")?.let { id to it } }
+        val (id, tag) = own ?: parent ?: return null
+        return "${server.address}/Items/$id/Images/Thumb?maxWidth=$THUMB_MAX_WIDTH&tag=${encodeUrlComponent(tag)}&api_key=${server.token}"
+    }
+
     /** Server rows / favourites / search: IMDb id when the server has one, else a native id. */
     private fun JsonObject.toPreview(server: MediaServer): MetaPreview? {
         val itemId = nonBlank("Id") ?: return null
@@ -450,6 +462,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
             imdbRating = str("CommunityRating")?.toDoubleOrNull()?.let { ((it * 10).toInt() / 10.0).toString() },
             genres = emptyList(),
             imdbId = imdb,
+            landscapePoster = thumbImage(server),
             ratingSource = "tmdb"
         )
     }
@@ -1103,5 +1116,8 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         const val KEY = "mediaservers.v1"
         const val NATIVE = "mediaserver"
         const val MAX_SOURCE_PROBES = 3
+        const val THUMB_MAX_WIDTH = 1280
+        /** Image tags listings return: Thumb too, for landscape posters (Android enableImageTypes). */
+        const val IMAGE_TYPES = "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo,Thumb"
     }
 }
