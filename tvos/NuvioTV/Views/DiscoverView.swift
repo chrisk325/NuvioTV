@@ -35,6 +35,8 @@ struct DiscoverCatalog: Identifiable {
             DiscoverCatalog(id: id, type: type, name: label(library.name, type: type, source: library.server.name),
                             source: .server(library, itemType: itemType))
         }
+        // Collections libraries hold collections, not titles: not a Discover catalog.
+        if library.isCollections { return [] }
         switch library.collectionType {
         case "movies": return [entry("server:\(library.key)", "movie", nil)]
         case "tvshows": return [entry("server:\(library.key)", "series", nil)]

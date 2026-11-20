@@ -40,6 +40,8 @@ enum Route: Hashable {
     case person(Int32)
     /// "See all" of a Jellyfin / Emby library.
     case serverLibrary(ServerLibrary)
+    /// A collection from the server's Collections library (e.g. made in AIOMetadata): its titles.
+    case serverCollection(MetaPreview)
 }
 
 struct RouteDestination: View {
@@ -59,11 +61,30 @@ struct RouteDestination: View {
             PersonView(personId: id)
         case .serverLibrary(let library):
             ServerLibraryGridView(library: library)
+        case .serverCollection(let collection):
+            ServerCollectionGridView(collection: collection)
         }
     }
 }
 
+extension AppModel {
+    /// Where a card goes: a server collection opens its titles, anything else its details page.
+    func route(for item: MetaPreview) -> Route {
+        core.mediaServers.isCollection(preview: item) ? .serverCollection(item) : .detail(item)
+    }
+}
+
 extension View {
+    /// The card's long-press menu (Library, watched…); none for a server collection.
+    @ViewBuilder
+    func itemContextMenu(app: AppModel, item: MetaPreview) -> some View {
+        if app.core.mediaServers.isCollection(preview: item) {
+            self
+        } else {
+            contextMenu { ItemContextMenu(app: app, item: item) }
+        }
+    }
+
     /// Registers the app's navigation destinations on a NavigationStack root.
     func nuvioDestinations() -> some View {
         navigationDestination(for: Route.self) { RouteDestination(route: $0) }

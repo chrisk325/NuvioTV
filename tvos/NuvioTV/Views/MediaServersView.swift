@@ -91,8 +91,9 @@ struct ServerLibraryRow: View {
     }
 
     /// Like add-on rows: "Films - Movie"; the server name only when there are several servers.
+    /// A Collections library is just its name.
     private var title: String {
-        let base = "\(library.name) - \(library.typeLabel)"
+        let base = library.isCollections ? library.name : "\(library.name) - \(library.typeLabel)"
         return app.core.mediaServers.servers.count > 1 ? "\(base) · \(library.server.name)" : base
     }
 }
@@ -111,7 +112,7 @@ struct ServerLibraryGridView: View {
 
     var body: some View {
         ScrollView {
-            Text("\(library.name) - \(library.typeLabel)")
+            Text(library.isCollections ? library.name : "\(library.name) - \(library.typeLabel)")
                 .font(.title2.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 60)
@@ -143,5 +144,72 @@ struct ServerLibraryGridView: View {
         let fresh = page.filter { !known.contains($0.id) }
         items += fresh
         hasMore = page.count >= Int(pageSize) && !fresh.isEmpty
+    }
+}
+
+/// A collection from the server's Collections library (made in AIOMetadata, or a Jellyfin / Emby
+/// collection): its movies and shows as a paged poster grid. Read-only.
+struct ServerCollectionGridView: View {
+    @EnvironmentObject private var app: AppModel
+    let collection: MetaPreview
+
+    @State private var items: [MetaPreview] = []
+    @State private var hasMore = true
+    @State private var isLoading = false
+    @State private var failed = false
+    private let pageSize: Int32 = 60
+
+    private var columns: [GridItem] { PosterGrid.columns(landscape: app.settings.modernLandscapePosters) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(collection.name)
+                    .font(.title2.weight(.semibold))
+                if let overview = collection.description_, !overview.isEmpty {
+                    Text(overview)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .frame(maxWidth: 1200, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 60)
+            .padding(.top, 20)
+            LazyVGrid(columns: columns, spacing: 50) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    PosterCard(item: item)
+                        .onAppear {
+                            if index >= items.count - 8 { Task { await loadMore() } }
+                        }
+                }
+            }
+            .padding(60)
+            if isLoading { ProgressView().padding() }
+            if !isLoading && items.isEmpty && !hasMore {
+                MessageView(title: failed ? "Couldn't load this collection" : "This collection is empty",
+                            systemImage: "square.stack")
+            }
+        }
+        .task { if items.isEmpty { await loadMore() } }
+    }
+
+    @MainActor
+    private func loadMore() async {
+        guard hasMore, !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let page = try await app.core.mediaServers.collectionItems(
+                collectionId: collection.id, start: Int32(items.count), limit: pageSize)
+            let known = Set(items.map(\.id))
+            let fresh = page.filter { !known.contains($0.id) }
+            items += fresh
+            hasMore = page.count >= Int(pageSize) && !fresh.isEmpty
+        } catch {
+            failed = items.isEmpty
+            hasMore = false
+        }
     }
 }

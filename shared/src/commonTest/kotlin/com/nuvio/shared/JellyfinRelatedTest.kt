@@ -315,4 +315,35 @@ class JellyfinRelatedTest {
         assertNull(page[2].landscapePoster)
         assertEquals("Primary,Backdrop,Logo,Thumb", asked?.parameters?.get("EnableImageTypes"))
     }
+    @Test
+    fun collectionsLibraryListsCollectionsThatOpenTheirTitles() = runTest {
+        val asked = mutableListOf<io.ktor.http.Url>()
+        val http = HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/Users/u1/Views" -> respond("""{"Items":[
+                    {"Id":"films","Name":"Films","CollectionType":"movies"},
+                    {"Id":"cols","Name":"Collections","CollectionType":"boxsets"}]}""", HttpStatusCode.OK, json)
+                "/Users/u1/Items" -> {
+                    asked += request.url
+                    when (request.url.parameters["ParentId"]) {
+                        "cols" -> respond("""{"Items":[{"Id":"bs1","Name":"Heist Night","Type":"BoxSet","ImageTags":{"Primary":"p"}}]}""", HttpStatusCode.OK, json)
+                        "bs1" -> respond("""{"Items":[{"Id":"m1","Name":"Heat","Type":"Movie","ProviderIds":{"Imdb":"tt0113277"}}]}""", HttpStatusCode.OK, json)
+                        else -> respond("""{"Items":[]}""", HttpStatusCode.OK, json)
+                    }
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val service = MediaServerService(http, serverStore)
+        val libraries = service.libraries(service.servers.single())
+        val collections = libraries.single { it.isCollections }
+        assertEquals("Collections", collections.typeLabel)
+        val tiles = service.latest(collections, 0, 30)
+        assertEquals(listOf("Heist Night"), tiles.map { it.name })
+        kotlin.test.assertTrue(service.isCollection(tiles.single()))
+        assertNull(asked.last().parameters["IncludeItemTypes"]) // direct children, not every movie inside
+        val titles = service.collectionItems(tiles.single().id, 0, 60)
+        assertEquals(listOf("tt0113277"), titles.map { it.id })
+        kotlin.test.assertFalse(service.isCollection(titles.single()))
+    }
 }

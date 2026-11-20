@@ -281,7 +281,7 @@ struct PosterCard: View {
     private var portrait: some View {
         // Room for the focused poster's lift so it doesn't touch the title.
         VStack(alignment: .leading, spacing: 28) {
-            NavigationLink(value: Route.detail(item)) {
+            NavigationLink(value: app.route(for: item)) {
                 ZStack {
                     RemoteImage(url: item.poster ?? item.backdropUrl, maxPixel: ImageLoader.cardSize)
                     if item.poster == nil && item.backdropUrl == nil {
@@ -300,7 +300,7 @@ struct PosterCard: View {
             }
             .buttonStyle(.card)
             .onMoveUp(onMoveUp)
-            .contextMenu { ItemContextMenu(app: app, item: item) }
+            .itemContextMenu(app: app, item: item)
 
             Text(item.name)
                 .font(.caption)
@@ -353,7 +353,7 @@ struct LandscapeCard: View {
     var onMoveUp: (() -> Void)? = nil
 
     var body: some View {
-        NavigationLink(value: Route.detail(item)) {
+        NavigationLink(value: app.route(for: item)) {
             ZStack(alignment: .bottomLeading) {
                 RemoteImage(url: item.landscapeArtwork, maxPixel: ImageLoader.wideCardSize)
                 LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
@@ -374,7 +374,7 @@ struct LandscapeCard: View {
         }
         .buttonStyle(.card)
         .onMoveUp(onMoveUp)
-        .contextMenu { ItemContextMenu(app: app, item: item) }
+        .itemContextMenu(app: app, item: item)
     }
 }
 

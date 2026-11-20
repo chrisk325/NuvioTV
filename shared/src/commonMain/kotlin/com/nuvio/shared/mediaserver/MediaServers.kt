@@ -64,16 +64,20 @@ data class ServerLibrary(
     val server: MediaServer,
     val id: String,
     val name: String,
-    /** Jellyfin / Emby CollectionType: "movies", "tvshows" or null (mixed). */
+    /** Jellyfin / Emby CollectionType: "movies", "tvshows", "boxsets" (collections) or null (mixed). */
     val collectionType: String? = null
 ) {
     val key: String get() = "${server.id}:$id"
+
+    /** The server's Collections library (BoxSets, e.g. collections made in AIOMetadata). */
+    val isCollections: Boolean get() = collectionType == "boxsets"
 
     /** "Name - Movie" / "Name - Series" / "Name - Movies & Series", like add-on catalog rows. */
     val typeLabel: String
         get() = when (collectionType) {
             "movies" -> "Movie"
             "tvshows" -> "Series"
+            "boxsets" -> "Collections"
             else -> "Movies & Series"
         }
 }
@@ -138,7 +142,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     @Throws(Exception::class)
     suspend fun libraries(server: MediaServer): List<ServerLibrary> =
         get(server, "/Users/${server.userId}/Views")?.objects("Items").orEmpty()
-            .filter { it.str("CollectionType") in setOf("movies", "tvshows", null) }
+            .filter { it.str("CollectionType") in setOf("movies", "tvshows", "boxsets", null) }
             .mapNotNull { o ->
                 ServerLibrary(server, o.nonBlank("Id") ?: return@mapNotNull null, o.str("Name").orEmpty(), o.str("CollectionType"))
             }
@@ -146,11 +150,36 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     /** Newest titles of a library as previews; titles with an IMDb id open normal add-on details. */
     @Throws(Exception::class)
     suspend fun latest(library: ServerLibrary, start: Int, limit: Int): List<MetaPreview> =
-        get(
+        if (library.isCollections) collectionsOf(library, start, limit) else get(
             library.server,
             "/Users/${library.server.userId}/Items?ParentId=${library.id}&Recursive=true&IncludeItemTypes=Movie,Series" +
                 "&SortBy=DateCreated&SortOrder=Descending&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&StartIndex=$start&Limit=$limit"
         )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
+
+    /**
+     * The collections in a Collections library (BoxSets), A–Z, as the Android app lists them: its
+     * direct children, each opening the titles it holds ([collectionItems]).
+     */
+    private suspend fun collectionsOf(library: ServerLibrary, start: Int, limit: Int): List<MetaPreview> =
+        get(
+            library.server,
+            "/Users/${library.server.userId}/Items?ParentId=${library.id}&SortBy=SortName&SortOrder=Ascending" +
+                "&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES&StartIndex=$start&Limit=$limit"
+        )?.objects("Items").orEmpty().mapNotNull { it.toPreview(library.server) }
+
+    /** A collection (from a Collections library) is opened as a grid of its titles, not a details page. */
+    fun isCollection(preview: MetaPreview): Boolean = preview.rawType == COLLECTION_TYPE && parseNative(preview.id) != null
+
+    /** The movies and shows in a collection, in the server's order. */
+    @Throws(Exception::class)
+    suspend fun collectionItems(collectionId: String, start: Int, limit: Int): List<MetaPreview> {
+        val (server, itemId) = parseNative(collectionId) ?: return emptyList()
+        return get(
+            server,
+            "/Users/${server.userId}/Items?ParentId=$itemId&Fields=ProviderIds,Overview,ProductionYear$IMAGE_TYPES" +
+                "&StartIndex=$start&Limit=$limit"
+        )?.objects("Items").orEmpty().mapNotNull { it.toPreview(server) }
+    }
 
     /**
      * A page of a library for Discover: [genre] filters by the server's genre (blank = all),
@@ -442,6 +471,23 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     /** Server rows / favourites / search: IMDb id when the server has one, else a native id. */
     private fun JsonObject.toPreview(server: MediaServer): MetaPreview? {
         val itemId = nonBlank("Id") ?: return null
+        if (str("Type").let { it.equals("BoxSet", ignoreCase = true) || it.equals("Folder", ignoreCase = true) }) {
+            return MetaPreview(
+                id = nativeId(server, itemId),
+                type = ContentType.UNKNOWN,
+                rawType = COLLECTION_TYPE,
+                name = str("Name") ?: itemId,
+                poster = "${server.address}/Items/$itemId/Images/Primary?maxHeight=600&api_key=${server.token}",
+                posterShape = PosterShape.POSTER,
+                background = "${server.address}/Items/$itemId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
+                logo = null,
+                description = str("Overview"),
+                releaseInfo = null,
+                imdbRating = null,
+                genres = emptyList(),
+                landscapePoster = thumbImage(server)
+            )
+        }
         val imdb = obj("ProviderIds")?.let { it.nonBlank("Imdb") ?: it.nonBlank("IMDB") }
         val isShow = str("Type") == "Series"
         remember(server, isShow, obj("ProviderIds"), itemId)
@@ -1117,6 +1163,7 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
         const val NATIVE = "mediaserver"
         const val MAX_SOURCE_PROBES = 3
         const val THUMB_MAX_WIDTH = 1280
+        const val COLLECTION_TYPE = "collection"
         /** Image tags listings return: Thumb too, for landscape posters (Android enableImageTypes). */
         const val IMAGE_TYPES = "&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo,Thumb"
     }
