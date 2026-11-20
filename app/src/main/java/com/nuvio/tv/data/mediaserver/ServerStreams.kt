@@ -87,7 +87,7 @@ class ServerStreams @Inject constructor(
                     ),
                     addonName = label,
                     addonLogo = null,
-                    serverTarget = candidate.target
+                    serverTarget = candidate.target.takeUnless { candidate.informational }
                 )
             }
     }

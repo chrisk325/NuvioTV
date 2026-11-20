@@ -35,6 +35,7 @@ internal class MediaBrowserMapper(
             posterShape = PosterShape.POSTER,
             background = item.backdropImage(),
             logo = item.logoImage(),
+            landscapePoster = item.thumbImage(),
             description = item.overview,
             releaseInfo = item.productionYear?.toString(),
             imdbRating = item.communityRating?.formatRating(),
@@ -62,6 +63,7 @@ internal class MediaBrowserMapper(
             posterShape = PosterShape.POSTER,
             background = item.backdropImage(),
             logo = item.logoImage(),
+            landscapePoster = item.parentThumbImage(),
             description = item.overview,
             releaseInfo = null,
             imdbRating = null,
@@ -139,7 +141,8 @@ internal class MediaBrowserMapper(
         if (item.isMissing) return emptyList()
         val itemRef = ServerItemRef(connectionId, item.id)
         val sources = item.mediaSources.filterNot { it.isPlaceholder }
-        return sources.map { source ->
+        return item.mediaSources.mapNotNull { source ->
+            if (source.isPlaceholder) return@mapNotNull notice(itemRef, item, source)
             val video = source.mediaStreams.firstOrNull { it.type.equals("Video", ignoreCase = true) }
             val audio = source.mediaStreams.firstOrNull { it.type.equals("Audio", ignoreCase = true) }
             ServerCandidate(
@@ -156,6 +159,25 @@ internal class MediaBrowserMapper(
                 sizeBytes = source.size
             )
         }
+    }
+
+    /**
+     * A placeholder source an addon-backed server sends for an addon stream that has nothing to play, such as
+     * AIOStreams' statistics entries passed through by AIOMetadata. The server's own stand-ins (the item's id, or its
+     * "load the stream list" marker) are not notices.
+     */
+    private fun notice(itemRef: ServerItemRef, item: BaseItem, source: MediaSource): ServerCandidate? {
+        val name = source.name?.takeIf { it.isNotBlank() } ?: return null
+        if (source.id.equals(item.id, ignoreCase = true)) return null
+        if (name.trim().lowercase() in PLACEHOLDER_LABELS) return null
+        return ServerCandidate(
+            target = ServerPlaybackTarget(item = itemRef, mediaSourceId = source.id),
+            title = name,
+            description = null,
+            filename = null,
+            sizeBytes = null,
+            informational = true
+        )
     }
 
     fun image(itemId: String, type: String, tag: String, maxWidth: Int? = null, maxHeight: Int? = null): String =
@@ -178,6 +200,16 @@ internal class MediaBrowserMapper(
             ?: parentBackdropItemId?.let { parentId ->
                 parentBackdropImageTags.firstOrNull()?.let { image(parentId, "Backdrop/0", it, maxWidth = 1920) }
             }
+
+    /**
+     * Landscape artwork (Jellyfin's Thumb image), used for landscape poster cards. AIOMetadata's Jellyfin server
+     * publishes its landscape posters here.
+     */
+    private fun BaseItem.thumbImage(): String? =
+        imageTags["Thumb"]?.let { image(id, "Thumb", it, maxWidth = THUMB_MAX_WIDTH) } ?: parentThumbImage()
+
+    private fun BaseItem.parentThumbImage(): String? =
+        parentThumbItemId?.let { parentId -> parentThumbImageTag?.let { image(parentId, "Thumb", it, maxWidth = THUMB_MAX_WIDTH) } }
 
     private fun BaseItem.logoImage(): String? =
         imageTags["Logo"]?.let { image(id, "Logo", it, maxWidth = 800) }
@@ -224,6 +256,11 @@ internal fun libraryKind(collectionType: String?, type: String? = null): ServerM
 }
 
 internal const val TICKS_PER_MS = 10_000L
+
+private const val THUMB_MAX_WIDTH = 1280
+
+/** Names AIOMetadata gives its own placeholder versions, which stand in for streams rather than describe one. */
+private val PLACEHOLDER_LABELS = setOf("streams load when played", "load the stream list")
 
 private fun ticksToMinutes(ticks: Long): Int = (ticks / TICKS_PER_MS / 60_000L).toInt()
 

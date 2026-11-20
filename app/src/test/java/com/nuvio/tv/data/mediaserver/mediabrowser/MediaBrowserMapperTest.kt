@@ -66,17 +66,45 @@ class MediaBrowserMapperTest {
     }
 
     @Test
-    fun skipsVersionsThatCannotPlay() {
+    fun listsAddonNoticesAsInformationOnly() {
         val withNotices = movie.copy(
-            mediaSources = movie.mediaSources + json.decodeFromString(
-                MediaSource.serializer(),
+            mediaSources = movie.mediaSources + listOf(
+                """{"Id": "9b1d", "Type": "Placeholder", "Name": "📊 Statistics\nFound 42 streams in 1.2s"}""",
                 """{"Id": "notice", "Type": "Placeholder", "Name": "Torrentio: rate limited"}"""
-            )
+            ).map { json.decodeFromString(MediaSource.serializer(), it) }
         )
-        assertEquals(listOf("ms1", "ms2"), mapper.candidates(withNotices).map { it.target.mediaSourceId })
+        val candidates = mapper.candidates(withNotices)
+        assertEquals(listOf("ms1", "ms2", "9b1d", "notice"), candidates.map { it.target.mediaSourceId })
+        assertEquals(listOf(false, false, true, true), candidates.map { it.informational })
+        assertEquals("📊 Statistics\nFound 42 streams in 1.2s", candidates[2].title)
+        // The playable versions keep their own naming; notices do not count as versions.
+        assertEquals("4K Remux", candidates.first().title)
+    }
 
-        val onlyNotice = movie.copy(mediaSources = withNotices.mediaSources.takeLast(1))
-        assertTrue(mapper.candidates(onlyNotice).isEmpty())
+    @Test
+    fun keepsNoticesWhereTheServerPutsThem() {
+        val statistics = json.decodeFromString(
+            MediaSource.serializer(),
+            """{"Id": "9b1d", "Type": "Placeholder", "Name": "📊 Statistics"}"""
+        )
+        val first = movie.copy(mediaSources = listOf(statistics) + movie.mediaSources)
+        assertEquals(listOf("9b1d", "ms1", "ms2"), mapper.candidates(first).map { it.target.mediaSourceId })
+
+        val between = movie.copy(mediaSources = listOf(movie.mediaSources[0], statistics, movie.mediaSources[1]))
+        assertEquals(listOf("ms1", "9b1d", "ms2"), mapper.candidates(between).map { it.target.mediaSourceId })
+    }
+
+    @Test
+    fun skipsTheServersOwnPlaceholders() {
+        val placeholders = movie.copy(
+            mediaSources = listOf(
+                """{"Id": "f1c9a0", "Type": "Placeholder", "Name": "Streams load when played"}""",
+                """{"Id": "mk-f1c9a0", "Type": "Placeholder", "Name": "Load the stream list"}""",
+                """{"Id": "f1c9a0", "Type": "Placeholder", "Name": "No streams found for this title"}""",
+                """{"Id": "blank", "Type": "Placeholder", "Name": " "}"""
+            ).map { json.decodeFromString(MediaSource.serializer(), it) }
+        )
+        assertTrue(mapper.candidates(placeholders).isEmpty())
     }
 
     @Test
@@ -118,6 +146,26 @@ class MediaBrowserMapperTest {
         assertEquals(7442L, ids.kitsu)
         assertEquals(5114L, ids.mal)
         assertNull(ids.trakt)
+    }
+
+    @Test
+    fun mapsThumbImageToLandscapePoster() {
+        assertNull(mapper.preview(movie)!!.landscapePoster)
+        val preview = mapper.preview(movie.copy(imageTags = mapOf("Primary" to "p1", "Thumb" to "t1")))!!
+        assertTrue(preview.landscapePoster!!.startsWith("https://media.example.com/jellyfin/Items/f1c9a0/Images/Thumb?tag=t1"))
+    }
+
+    @Test
+    fun usesSeriesThumbAsLandscapePosterForResumedEpisode() {
+        val episode = json.decodeFromString(
+            BaseItem.serializer(),
+            """
+            {"Id": "e1", "Name": "Pilot", "Type": "Episode", "SeriesId": "s1", "SeriesName": "Show",
+             "SeriesPrimaryImageTag": "sp", "ParentThumbItemId": "s1", "ParentThumbImageTag": "st"}
+            """
+        )
+        val preview = mapper.resumeTitle(episode)!!.preview
+        assertTrue(preview.landscapePoster!!.startsWith("https://media.example.com/jellyfin/Items/s1/Images/Thumb?tag=st"))
     }
 
     @Test

@@ -62,6 +62,8 @@ internal data class BaseItem(
     @SerialName("ParentBackdropImageTags") val parentBackdropImageTags: List<String> = emptyList(),
     @SerialName("ParentLogoItemId") val parentLogoItemId: String? = null,
     @SerialName("ParentLogoImageTag") val parentLogoImageTag: String? = null,
+    @SerialName("ParentThumbItemId") val parentThumbItemId: String? = null,
+    @SerialName("ParentThumbImageTag") val parentThumbImageTag: String? = null,
     @SerialName("SeriesId") val seriesId: String? = null,
     @SerialName("SeriesName") val seriesName: String? = null,
     @SerialName("SeriesPrimaryImageTag") val seriesPrimaryImageTag: String? = null,
