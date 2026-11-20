@@ -82,6 +82,19 @@ class MediaBrowserMapperTest {
     }
 
     @Test
+    fun keepsNoticesWhereTheServerPutsThem() {
+        val statistics = json.decodeFromString(
+            MediaSource.serializer(),
+            """{"Id": "9b1d", "Type": "Placeholder", "Name": "📊 Statistics"}"""
+        )
+        val first = movie.copy(mediaSources = listOf(statistics) + movie.mediaSources)
+        assertEquals(listOf("9b1d", "ms1", "ms2"), mapper.candidates(first).map { it.target.mediaSourceId })
+
+        val between = movie.copy(mediaSources = listOf(movie.mediaSources[0], statistics, movie.mediaSources[1]))
+        assertEquals(listOf("ms1", "9b1d", "ms2"), mapper.candidates(between).map { it.target.mediaSourceId })
+    }
+
+    @Test
     fun skipsTheServersOwnPlaceholders() {
         val placeholders = movie.copy(
             mediaSources = listOf(
