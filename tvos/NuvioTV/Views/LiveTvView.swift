@@ -56,7 +56,8 @@ struct LiveTvView: View {
             try? await app.core.loadLiveTv(force: false)
         }
         .sheet(isPresented: $showSources, onDismiss: {
-            Task { try? await app.core.loadLiveTv(force: true) }
+            // Adding or removing a source invalidates the channels; otherwise the cache stays.
+            Task { try? await app.core.loadLiveTv(force: false) }
         }) {
             NavigationStack { LiveTvSourcesView().environmentObject(app) }
         }

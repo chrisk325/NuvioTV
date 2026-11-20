@@ -7,12 +7,33 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+
+/** Channels as last loaded, kept on the device so Live TV opens at once. */
+@Serializable
+private data class ChannelsCache(
+    val savedAtMs: Long,
+    val sourcesKey: String,
+    val channels: List<LiveTvChannel>,
+    /** Guide URL → request headers, so the guide can be refreshed without reloading channels. */
+    val epgUrls: Map<String, Map<String, String>>
+)
+
+/** The parsed guide (guide key → programmes), kept on the device. */
+@Serializable
+private data class GuideCache(
+    val savedAtMs: Long,
+    val urlsKey: String,
+    val guide: Map<String, List<LiveTvProgramme>>
+)
 
 data class LiveTvState(
     val groups: List<LiveTvGroup>,
@@ -23,8 +44,13 @@ data class LiveTvState(
     val channelCount: Int get() = groups.sumOf { it.channels.size }
 }
 
-/** Sources, channels, guide, favourites and recents (port of LiveTvRepository, simplified). */
-class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
+/**
+ * Sources, channels, guide, favourites and recents (port of LiveTvRepository, simplified).
+ * Channels and the parsed guide are cached in [cache] (files in Caches on Apple TV): Live TV shows
+ * them straight away and refreshes in the background — channels after 30 minutes, the guide
+ * after 6 hours or when it is about to run out.
+ */
+class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, private val cache: KeyValueStore = store) {
     private val json = Json { ignoreUnknownKeys = true }
     private val net = LiveTvHttp(http)
     private val xtream = XtreamProvider(net)
@@ -36,6 +62,10 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
     private var channels: List<LiveTvChannel> = emptyList()
     private var guide: Map<String, List<LiveTvProgramme>> = emptyMap()
     private var lastLoadMs = 0L
+    private var epgUrls: Map<String, Map<String, String>> = emptyMap()
+    private var guideSavedAtMs = 0L
+    private var guideUrlsKey = ""
+    private var restored = false
 
     // --- Sources ----------------------------------------------------------------------------
 
@@ -94,9 +124,59 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
 
     // --- Loading ----------------------------------------------------------------------------
 
-    /** Loads every source's channels, then the guide. Cached for 30 minutes unless [force]. */
+    private fun sourcesKey(): String = (store.getString(SOURCES) ?: "").hashCode().toString()
+    private fun urlsKey(urls: Map<String, Map<String, String>>): String = urls.keys.sorted().joinToString("\n").hashCode().toString()
+
+    /** First load of this run: the channels and guide saved last time, shown before any download. */
+    private suspend fun restoreCache(sourcesKey: String) {
+        if (restored) return
+        restored = true
+        // Reading and decoding a large guide stays off the main thread.
+        val (savedChannels, savedGuide) = withContext(Dispatchers.Default) {
+            val c = cache.getString(CHANNELS_CACHE)?.let {
+                runCatching { json.decodeFromString(ChannelsCache.serializer(), it) }.getOrNull()
+            }?.takeIf { it.sourcesKey == sourcesKey && it.channels.isNotEmpty() }
+            val g = c?.let {
+                cache.getString(GUIDE_CACHE)?.let { raw ->
+                    runCatching { json.decodeFromString(GuideCache.serializer(), raw) }.getOrNull()
+                }
+            }
+            c to g
+        }
+        savedChannels ?: return
+        channels = savedChannels.channels
+        epgUrls = savedChannels.epgUrls
+        lastLoadMs = savedChannels.savedAtMs
+        savedGuide?.takeIf { it.urlsKey == urlsKey(epgUrls) }?.let { saved ->
+            // Programmes that ended long ago are dropped; the rest is still a valid guide.
+            val cutoff = currentTimeMillis() - GUIDE_PAST_MS
+            guide = saved.guide.mapValues { (_, list) -> list.filter { it.stopEpochMs > cutoff } }.filterValues { it.isNotEmpty() }
+            guideSavedAtMs = saved.savedAtMs
+            guideUrlsKey = saved.urlsKey
+        }
+        _state.value = LiveTvState(groupsFor(channels), isLoading = false, errors = emptyList(), guideLoaded = guide.isNotEmpty())
+    }
+
+    /** The guide needs downloading: none, other guide URLs, older than 6 hours, or under 6 hours left. */
+    private fun guideStale(urls: Map<String, Map<String, String>>): Boolean {
+        if (guide.isEmpty() || guideUrlsKey != urlsKey(urls)) return true
+        val now = currentTimeMillis()
+        if (now - guideSavedAtMs > GUIDE_TTL_MS) return true
+        val coveredUntil = guide.values.maxOfOrNull { list -> list.maxOfOrNull { it.stopEpochMs } ?: 0L } ?: 0L
+        return coveredUntil - now < GUIDE_TTL_MS
+    }
+
+    /**
+     * Loads every source's channels, then the guide. Saved channels and guide show at once; the
+     * channels are downloaded again after 30 minutes, the guide when stale, both when [force].
+     */
     suspend fun load(force: Boolean) {
-        if (!force && channels.isNotEmpty() && currentTimeMillis() - lastLoadMs < 30 * 60_000) return
+        val sourcesKey = sourcesKey()
+        restoreCache(sourcesKey)
+        if (!force && channels.isNotEmpty() && currentTimeMillis() - lastLoadMs < CHANNELS_TTL_MS) {
+            if (guideStale(epgUrls)) loadGuide(epgUrls)
+            return
+        }
         val all = sources
         _state.value = _state.value.copy(isLoading = true, errors = emptyList())
         val errors = mutableListOf<String>()
@@ -126,10 +206,21 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
                 }
             }.awaitAll().flatten()
         }
+        // Nothing came back (offline, server down): keep showing the saved channels.
+        if (loaded.isEmpty() && channels.isNotEmpty() && errors.isNotEmpty()) {
+            _state.value = _state.value.copy(isLoading = false, errors = errors)
+            return
+        }
         channels = loaded
+        this.epgUrls = epgUrls
         lastLoadMs = currentTimeMillis()
-        _state.value = LiveTvState(groupsFor(loaded), isLoading = false, errors = errors, guideLoaded = false)
-        loadGuide(epgUrls)
+        val snapshot = ChannelsCache(lastLoadMs, sourcesKey, loaded, epgUrls)
+        withContext(Dispatchers.Default) {
+            runCatching { cache.putString(CHANNELS_CACHE, json.encodeToString(ChannelsCache.serializer(), snapshot)) }
+        }
+        // The saved guide keeps showing while a new one downloads.
+        _state.value = LiveTvState(groupsFor(loaded), isLoading = false, errors = errors, guideLoaded = guide.isNotEmpty())
+        if (force || guideStale(epgUrls)) loadGuide(epgUrls)
     }
 
     private suspend fun loadGuide(urls: Map<String, Map<String, String>>) {
@@ -138,18 +229,39 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
         val byName = channels.associate { liveTvNameKey(it.tvgName ?: it.name) to it.guideKey }
         val now = currentTimeMillis()
         val merged = HashMap<String, List<LiveTvProgramme>>()
-        for ((url, headers) in urls) {
-            try {
-                val xml = net.text(url, headers)
-                parseXmlTv(xml, wanted, byName, now - 3 * 3_600_000L, now + 24 * 3_600_000L).forEach { (k, v) ->
-                    if (merged[k].isNullOrEmpty()) merged[k] = v
+        // Every guide downloads at the same time (big XMLTV files are the slow part).
+        val parsed = coroutineScope {
+            urls.map { (url, headers) ->
+                async {
+                    try {
+                        val xml = net.text(url, headers)
+                        withContext(Dispatchers.Default) {
+                            parseXmlTv(xml, wanted, byName, now - GUIDE_PAST_MS, now + GUIDE_AHEAD_MS)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-            }
+            }.awaitAll()
+        }
+        // In URL order: the first guide that has a channel wins, as before.
+        parsed.forEach { result ->
+            result?.forEach { (k, v) -> if (merged[k].isNullOrEmpty()) merged[k] = v }
+        }
+        if (merged.isEmpty()) {
+            // Every download failed: the saved guide stays.
+            _state.value = _state.value.copy(guideLoaded = guide.isNotEmpty())
+            return
         }
         guide = merged
+        guideSavedAtMs = now
+        guideUrlsKey = urlsKey(urls)
+        val saved = GuideCache(now, guideUrlsKey, merged)
+        withContext(Dispatchers.Default) {
+            runCatching { cache.putString(GUIDE_CACHE, json.encodeToString(GuideCache.serializer(), saved)) }
+        }
         _state.value = _state.value.copy(guideLoaded = true)
     }
 
@@ -212,6 +324,13 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore) {
         private const val SOURCES = "livetv.sources"
         private const val FAVORITES = "livetv.favorites"
         private const val RECENTS = "livetv.recents"
+        private const val CHANNELS_CACHE = "livetv.cache.channels.v1"
+        private const val GUIDE_CACHE = "livetv.cache.guide.v1"
+        private const val CHANNELS_TTL_MS = 30 * 60_000L
+        private const val GUIDE_TTL_MS = 6 * 3_600_000L
+        private const val GUIDE_PAST_MS = 3 * 3_600_000L
+        /** How far ahead the guide is kept: long enough to outlast the 6-hour refresh. */
+        private const val GUIDE_AHEAD_MS = 36 * 3_600_000L
     }
 }
 

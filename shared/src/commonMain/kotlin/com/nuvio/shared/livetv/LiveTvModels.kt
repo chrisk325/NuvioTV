@@ -26,10 +26,13 @@ data class LiveTvSource(
         }
 }
 
+@Serializable
 enum class CatchupKind { XTREAM, DEFAULT, APPEND, SHIFT, FLUSSONIC }
 
+@Serializable
 data class LiveTvCatchup(val kind: CatchupKind, val days: Int, val template: String? = null)
 
+@Serializable
 data class LiveTvChannel(
     val id: String,
     val name: String,
@@ -52,6 +55,7 @@ data class LiveTvChannel(
     val hasCatchup: Boolean get() = catchup != null
 }
 
+@Serializable
 data class LiveTvProgramme(
     val title: String,
     val startEpochMs: Long,

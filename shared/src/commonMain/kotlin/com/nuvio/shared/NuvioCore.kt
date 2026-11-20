@@ -131,7 +131,7 @@ class NuvioCore(
     val mdbListTracker = com.nuvio.shared.tracking.MdbListTracker(httpClient, store, config.mdbListClientId, cacheStore ?: store)
     val tmdb = TmdbService(httpClient, config.tmdbApiKey)
     val skipSegments = com.nuvio.shared.tracking.SkipSegmentsService(httpClient, config.introDbApiUrl)
-    val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store)
+    val liveTv = com.nuvio.shared.livetv.LiveTvRepository(httpClient, store, cacheStore ?: store)
     val mediaServers = com.nuvio.shared.mediaserver.MediaServerService(httpClient, store)
     val cloud = com.nuvio.shared.cloud.NuvioCloud(httpClient, store, config.supabaseUrl.trimEnd('/'), config.supabaseAnonKey, profileIndex, deviceStore)
     val profiles = com.nuvio.shared.settings.ProfileStore(deviceStore)
