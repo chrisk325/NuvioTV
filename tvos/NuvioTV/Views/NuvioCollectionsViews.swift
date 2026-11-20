@@ -52,22 +52,9 @@ struct CollectionFolderTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
             NavigationLink(value: Route.collectionFolder(collection, folder)) {
-                ZStack {
-                    LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.05)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                    if let cover = folder.coverImageUrl, !cover.isEmpty {
-                        RemoteImage(url: cover, maxPixel: ImageLoader.cardSize)
-                    } else if let emoji = folder.coverEmoji, !emoji.isEmpty {
-                        Text(emoji).font(.system(size: min(size.width, size.height) * 0.42))
-                    } else {
-                        Text(folder.title)
-                            .font(.headline)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                    }
-                }
-                .frame(width: size.width, height: size.height)
-                .clipped()
+                FolderTileArt(folder: folder, size: size)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
             }
             .buttonStyle(.card)
 
@@ -77,6 +64,45 @@ struct CollectionFolderTile: View {
                     .lineLimit(1)
                     .frame(width: size.width, alignment: .leading)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// A folder tile's artwork: the cover (image, else emoji, else name); while focused, the folder's
+/// focus GIF plays over it (Android focusGifUrl / focusGifEnabled), loaded only then.
+private struct FolderTileArt: View {
+    let folder: NuvioCollectionFolder
+    let size: CGSize
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        ZStack {
+            cover
+            if isFocused, let gif = folder.focusGif {
+                AnimatedGIFView(url: gif, maxPixel: max(size.width, size.height) * 2)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
+    }
+
+    @ViewBuilder
+    private var cover: some View {
+        ZStack {
+            LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.05)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            if let cover = folder.coverImageUrl, !cover.isEmpty {
+                RemoteImage(url: cover, maxPixel: ImageLoader.cardSize)
+            } else if let emoji = folder.coverEmoji, !emoji.isEmpty {
+                Text(emoji).font(.system(size: min(size.width, size.height) * 0.42))
+            } else if folder.focusGif == nil || !isFocused {
+                Text(folder.title)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .padding()
             }
         }
     }

@@ -39,6 +39,17 @@ class NuvioCollectionsTest {
     }
 
     @Test
+    fun focusGifHonoursItsSwitch() {
+        val folders = NuvioCollectionsJson.parse("""[{"id":"c","title":"t","folders":[
+            {"id":"a","title":"A","focusGifUrl":"https://g/a.gif"},
+            {"id":"b","title":"B","focusGifUrl":"https://g/b.gif","focusGifEnabled":false},
+            {"id":"n","title":"N","focusGifUrl":"https://g/n.gif","focusGifEnabled":null}]}]""").single().folders
+        assertEquals("https://g/a.gif", folders[0].focusGif)
+        assertEquals(null, folders[1].focusGif)
+        assertEquals("https://g/n.gif", folders[2].focusGif)
+    }
+
+    @Test
     fun acceptsAWrapperObjectAndRejectsNonsense() {
         assertEquals(1, NuvioCollectionsJson.parse("""{"collections":$exported}""").size)
         assertFailsWith<IllegalArgumentException> { NuvioCollectionsJson.parse("not json") }

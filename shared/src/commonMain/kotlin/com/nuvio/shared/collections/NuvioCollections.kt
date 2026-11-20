@@ -32,6 +32,8 @@ data class NuvioCollectionFolder(
     val title: String,
     val coverImageUrl: String? = null,
     val focusGifUrl: String? = null,
+    /** Play [focusGifUrl] while the tile is focused (Android focusGifEnabled, default on). */
+    val focusGifEnabled: Boolean = true,
     val coverEmoji: String? = null,
     /** "POSTER", "LANDSCAPE" / "wide" or "SQUARE" (default). */
     val tileShape: String = "SQUARE",
@@ -40,6 +42,9 @@ data class NuvioCollectionFolder(
     val heroBackdropUrl: String? = null,
     val titleLogoUrl: String? = null
 ) {
+    /** The GIF to play while the tile is focused, when there is one and it's switched on. */
+    val focusGif: String? get() = focusGifUrl?.trim()?.takeIf { focusGifEnabled && it.isNotEmpty() }
+
     /** "poster", "landscape" or "square", for the tile. */
     val shape: String
         get() = when (tileShape.lowercase()) {
