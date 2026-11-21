@@ -210,6 +210,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("home.splitUpcoming", true)
         set(value) = put("home.splitUpcoming", value)
 
+    /** Home: the Upcoming row right under Continue Watching, above Next Up (default: Next Up first). */
+    var upcomingAboveNextUp: Boolean
+        get() = bool("home.upcomingFirst", false)
+        set(value) = put("home.upcomingFirst", value)
+
     var showContinueWatching: Boolean
         get() = bool("home.continueWatching", true)
         set(value) = put("home.continueWatching", value)

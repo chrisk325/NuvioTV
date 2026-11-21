@@ -193,13 +193,11 @@ struct ClassicHomeView: View {
                         ContinueWatchingRow(items: app.resumeItems, onFocus: setFocus, focus: $homeFocus,
                                             lastFocusedId: $lastContinueWatchingId)
                     }
-                    if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
-                        ContinueWatchingRow(title: "Next Up", items: app.nextUpItems, onFocus: setFocus, focus: $homeFocus,
-                                            lastFocusedId: $lastContinueWatchingId)
-                    }
-                    if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
-                        ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems, onFocus: setFocus, focus: $homeFocus,
-                                            lastFocusedId: $lastContinueWatchingId)
+                    if app.settings.showContinueWatching {
+                        ForEach(app.rowsBelowContinueWatching) { row in
+                            ContinueWatchingRow(title: row.title, items: row.items, onFocus: setFocus, focus: $homeFocus,
+                                                lastFocusedId: $lastContinueWatchingId)
+                        }
                     }
                     NuvioCollectionRows(pinned: true)
                     ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
@@ -225,8 +223,7 @@ struct ClassicHomeView: View {
 
     /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
     private var rowAboveCatalogs: [WatchProgress] {
-        if !app.upcomingItems.isEmpty { return app.upcomingItems }
-        return app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+        app.rowsBelowContinueWatching.last?.items ?? app.resumeItems
     }
 
     /// First catalog right under Continue Watching: Up goes there explicitly.
@@ -311,11 +308,10 @@ struct GridHomeView: View {
                 if app.settings.showContinueWatching && !app.resumeItems.isEmpty {
                     ContinueWatchingRow(items: app.resumeItems)
                 }
-                if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
-                    ContinueWatchingRow(title: "Next Up", items: app.nextUpItems)
-                }
-                if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
-                    ContinueWatchingRow(title: "Upcoming", items: app.upcomingItems)
+                if app.settings.showContinueWatching {
+                    ForEach(app.rowsBelowContinueWatching) { row in
+                        ContinueWatchingRow(title: row.title, items: row.items)
+                    }
                 }
                 NuvioCollectionRows(pinned: true)
                 ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0) }
@@ -440,26 +436,18 @@ struct ModernHomeView: View {
                                 onMoveUp: { homeFocus = .hero }
                             )
                         }
-                        if app.settings.showContinueWatching && !app.nextUpItems.isEmpty {
-                            ContinueWatchingRow(
-                                title: "Next Up",
-                                items: app.nextUpItems,
-                                onFocus: setFocus,
-                                focus: $homeFocus,
-                                lastFocusedId: $lastContinueWatchingId,
-                                // Top row when nothing is in progress: Up goes to the hero.
-                                onMoveUp: nextUpMoveUp
-                            )
-                        }
-                        if app.settings.showContinueWatching && !app.upcomingItems.isEmpty {
-                            ContinueWatchingRow(
-                                title: "Upcoming",
-                                items: app.upcomingItems,
-                                onFocus: setFocus,
-                                focus: $homeFocus,
-                                lastFocusedId: $lastContinueWatchingId,
-                                onMoveUp: upcomingMoveUp
-                            )
+                        if app.settings.showContinueWatching {
+                            ForEach(app.rowsBelowContinueWatching) { row in
+                                ContinueWatchingRow(
+                                    title: row.title,
+                                    items: row.items,
+                                    onFocus: setFocus,
+                                    focus: $homeFocus,
+                                    lastFocusedId: $lastContinueWatchingId,
+                                    // Top row when nothing is in progress: Up goes to the hero.
+                                    onMoveUp: moveUp(from: row)
+                                )
+                            }
                         }
                         NuvioCollectionRows(pinned: true)
                         ForEach(app.serverLibraries, id: \.key) { ServerLibraryRow(library: $0, onFocus: setFocus) }
@@ -494,8 +482,7 @@ struct ModernHomeView: View {
 
     /// The Continue Watching style row right above the catalogs: Next Up when shown, else Continue Watching.
     private var rowAboveCatalogs: [WatchProgress] {
-        if !app.upcomingItems.isEmpty { return app.upcomingItems }
-        return app.nextUpItems.isEmpty ? app.resumeItems : app.nextUpItems
+        app.rowsBelowContinueWatching.last?.items ?? app.resumeItems
     }
 
     /// First catalog: Up goes to Continue Watching, or to the hero when there is none.
@@ -511,15 +498,9 @@ struct ModernHomeView: View {
         }
     }
 
-    /// Upcoming is the top row when nothing else is above it: Up from it goes to the hero.
-    private var upcomingMoveUp: (() -> Void)? {
-        guard app.resumeItems.isEmpty, app.nextUpItems.isEmpty else { return nil }
-        return { homeFocus = .hero }
-    }
-
-    /// Next Up is the top row when nothing is in progress: Up from it goes to the hero.
-    private var nextUpMoveUp: (() -> Void)? {
-        guard app.resumeItems.isEmpty else { return nil }
+    /// Next Up / Upcoming as the top row (nothing in progress, first of the two): Up goes to the hero.
+    private func moveUp(from row: AppModel.ProgressRow) -> (() -> Void)? {
+        guard app.resumeItems.isEmpty, app.rowsBelowContinueWatching.first?.id == row.id else { return nil }
         return { homeFocus = .hero }
     }
 

@@ -400,6 +400,9 @@ private struct HomeSettingsPane: View {
                        isOn: s.bind({ $0.hideUnreleasedUpNext }, { $0.hideUnreleasedUpNext = $1; app.reloadContinueWatching() }))
                 Toggle("Separate Upcoming row",
                        isOn: s.bind({ $0.separateUpcomingRow }, { $0.separateUpcomingRow = $1; app.reloadContinueWatching() }))
+                Toggle("Upcoming above Next Up",
+                       isOn: s.bind({ $0.upcomingAboveNextUp }, { $0.upcomingAboveNextUp = $1; app.objectWillChange.send() }))
+                    .disabled(!binder.settings.separateUpcomingRow)
                 NavigationLink("Catalogs and hero sources") { HomeCatalogsSettings(binder: binder) }
                 NavigationLink("Nuvio collections") { NuvioCollectionsSettingsView() }
             }

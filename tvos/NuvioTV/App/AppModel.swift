@@ -42,6 +42,22 @@ final class AppModel: ObservableObject {
             .sorted { ($0.releasedAtMs?.int64Value ?? .max) < ($1.releasedAtMs?.int64Value ?? .max) }
     }
 
+    /// A row under Continue Watching (Next Up or Upcoming).
+    struct ProgressRow: Identifiable {
+        let id: String
+        let title: String
+        let items: [WatchProgress]
+    }
+
+    /// Next Up and Upcoming in the order chosen in Settings > Home (Upcoming first when
+    /// "Upcoming above Next Up" is on); empty rows left out.
+    var rowsBelowContinueWatching: [ProgressRow] {
+        let nextUp = ProgressRow(id: "nextup", title: "Next Up", items: nextUpItems)
+        let upcoming = ProgressRow(id: "upcoming", title: "Upcoming", items: upcomingItems)
+        let ordered = settings.upcomingAboveNextUp ? [upcoming, nextUp] : [nextUp, upcoming]
+        return ordered.filter { !$0.items.isEmpty }
+    }
+
     /// Re-reads Continue Watching after a setting that filters it changed.
     func reloadContinueWatching() {
         continueWatching = core.continueWatching()
