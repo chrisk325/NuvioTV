@@ -168,7 +168,8 @@ internal fun SubtitleSelectionOverlay(
             installedAddonOrder = sessionInstalledSubtitleAddonOrder,
             selectedOptionId = activeSelectedOptionId,
             builtInLabel = builtInLabel,
-            forcedLabel = forcedLabel
+            forcedLabel = forcedLabel,
+            unknownLabel = unknownLabel
         )
     }
 
@@ -1318,6 +1319,8 @@ private fun SubtitleOptionCard(
                         text = item.title,
                         style = MaterialTheme.typography.bodyLarge,
                         color = titleColor,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     item.formatBadge?.let { badge ->
@@ -1328,7 +1331,9 @@ private fun SubtitleOptionCard(
                     Text(
                         text = item.meta,
                         style = MaterialTheme.typography.bodySmall,
-                        color = metaColor
+                        color = metaColor,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -2043,7 +2048,8 @@ private fun buildSubtitleOptionRailItems(
     installedAddonOrder: List<String>,
     selectedOptionId: String?,
     builtInLabel: String,
-    forcedLabel: String
+    forcedLabel: String,
+    unknownLabel: String
 ): List<SubtitleOptionRailItem> {
     if (selectedLanguageKey == SubtitleOffLanguageKey) return emptyList()
 
@@ -2080,7 +2086,7 @@ private fun buildSubtitleOptionRailItems(
             SubtitleOptionRailItem(
                 id = "internal:${track.index}",
                 kind = SubtitleOptionKind.INTERNAL,
-                title = track.name,
+                title = internalSubtitleTitle(track, selectedLanguageKey, unknownLabel),
                 sourceLabel = builtInLabel,
                 meta = if (track.isForced) forcedLabel else null,
                 isSelected = "internal:${track.index}" == selectedOptionId,
@@ -2143,6 +2149,14 @@ private fun selectedSubtitleOptionId(
         }
 
     return null
+}
+
+private fun internalSubtitleTitle(track: TrackInfo, languageKey: String, unknownLabel: String): String {
+    track.name.takeUnless { it.isBlank() || it.equals(track.language, ignoreCase = true) }?.let { return it }
+    return languageKey
+        .takeUnless { track.language.isNullOrBlank() || it == SubtitleUnknownLanguageKey || it == "und" }
+        ?.let { Subtitle.languageCodeToName(it) }
+        ?: unknownLabel
 }
 
 private fun TrackInfo.subtitleFormatBadge(): String? =
