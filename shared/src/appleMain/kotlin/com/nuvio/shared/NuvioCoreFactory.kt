@@ -12,7 +12,7 @@ internal actual fun platformHttpClient(): HttpClient = HttpClient(Darwin) {
             // Stream lists ("…/stream/{type}/{id}.json") are never answered from the URL cache:
             // add-ons send cache headers for them, which kept an old list for minutes.
             if (URL?.path?.contains("/stream/") == true) {
-                cachePolicy = NSURLRequestReloadIgnoringLocalCacheData
+                setCachePolicy(NSURLRequestReloadIgnoringLocalCacheData)
             }
         }
     }
