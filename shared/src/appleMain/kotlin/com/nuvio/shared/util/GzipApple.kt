@@ -69,26 +69,29 @@ private class ZlibInflater : RawInflater {
     override fun feed(input: ByteArray, offset: Int, count: Int, out: (ByteArray, Int) -> Unit): Boolean {
         if (!open) return false
         if (count <= 0) return true
-        return input.usePinned { inPin ->
+        var more = true
+        input.usePinned { inPin ->
             buffer.usePinned { outPin ->
                 stream.next_in = inPin.addressOf(offset).reinterpret()
                 stream.avail_in = count.toUInt()
-                while (true) {
+                var going = true
+                while (going) {
                     stream.next_out = outPin.addressOf(0).reinterpret()
                     stream.avail_out = buffer.size.toUInt()
                     val result = inflate(stream.ptr, Z_NO_FLUSH)
                     val produced = buffer.size - stream.avail_out.toInt()
                     if (produced > 0) out(buffer, produced)
                     when (result) {
-                        Z_STREAM_END -> return false
+                        Z_STREAM_END -> { more = false; going = false }
                         // A full buffer may mean more output is waiting; otherwise all input is used.
-                        Z_OK -> if (stream.avail_out != 0u) return true
-                        Z_BUF_ERROR -> return true
+                        Z_OK -> if (stream.avail_out != 0u) going = false
+                        Z_BUF_ERROR -> going = false
                         else -> throw IllegalStateException("The guide is damaged (zlib $result)")
                     }
                 }
             }
         }
+        return more
     }
 
     override fun close() {
