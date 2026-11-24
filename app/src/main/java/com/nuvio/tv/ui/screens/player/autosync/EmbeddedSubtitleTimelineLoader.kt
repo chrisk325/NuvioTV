@@ -8,6 +8,7 @@ import androidx.media3.container.Mp4Box
 import androidx.media3.extractor.GaplessInfoHolder
 import androidx.media3.extractor.mp4.BoxParser
 import androidx.media3.extractor.mp4.TrackSampleTable
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.core.network.NoDelaySocketFactory
 import com.nuvio.tv.ui.screens.player.SubtitleSyncCue
 import kotlinx.coroutines.CancellationException
@@ -110,6 +111,7 @@ internal object EmbeddedSubtitleTimelineLoader {
     private const val ID_CUE_DURATION = 0xB2L
 
     private val httpClient = OkHttpClient.Builder()
+        .dns(FastDns.shared)
         .socketFactory(NoDelaySocketFactory)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)

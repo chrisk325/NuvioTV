@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.core.player.MatroskaAfrProbe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -29,6 +30,7 @@ internal object MatroskaChapterLoader {
     private const val MAX_CHAPTERS_BYTES = 1024 * 1024
 
     private val httpClient = OkHttpClient.Builder()
+        .dns(FastDns.shared)
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
         .followRedirects(true)

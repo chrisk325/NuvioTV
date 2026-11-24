@@ -1,4 +1,4 @@
-package com.nuvio.tv.reshaped.livetv
+package com.nuvio.tv.core.network
 
 import android.net.DnsResolver
 import android.os.Build
@@ -16,18 +16,19 @@ import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Dns
 
 /**
- * Address lookups for Live TV (channel lists, guides, logos and the channels themselves).
+ * Address lookups for playback: Live TV (channel lists, guides, logos and the channels
+ * themselves) and the player's streams (addon and debrid links, and the servers they redirect to).
  *
  * The system lookup asks for IPv4 and IPv6 addresses together and answers only once both are in.
  * On many home networks the DNS server never answers the IPv6 question, so every lookup waits for
- * the resolver's timeout and retry: about ten seconds before a channel even starts to connect.
+ * the resolver's timeout and retry: about ten seconds before a stream even starts to connect.
  * Here the IPv4 question is also asked on its own (Android 10 and later), and whichever answer
- * comes first is used. Answers are kept for a while, so a channel opened again, or another
- * channel on the same server, does not wait for a lookup at all.
+ * comes first is used. Answers are kept for a while, so a stream opened again, or another
+ * stream on the same server, does not wait for a lookup at all.
  *
  * Only the TV's own DNS server is asked, as before; nothing goes to another DNS provider.
  */
-internal class LiveTvDns(
+internal class FastDns(
     private val system: Dns = Dns.SYSTEM,
     private val ipv4Only: ((String) -> List<InetAddress>?)? = if (Build.VERSION.SDK_INT >= 29) ::queryIpv4 else null,
     private val nanoTime: () -> Long = System::nanoTime,
@@ -68,7 +69,7 @@ internal class LiveTvDns(
             } finally {
                 refreshing.remove(host)
             }
-        }, "LiveTvDns").apply { isDaemon = true }.start()
+        }, "FastDns").apply { isDaemon = true }.start()
     }
 
     /** The system lookup and the IPv4-only one side by side: the first with addresses wins. */
@@ -94,9 +95,9 @@ internal class LiveTvDns(
                 null
             }
             offer(addresses)
-        }, "LiveTvDns").apply { isDaemon = true }.start()
+        }, "FastDns").apply { isDaemon = true }.start()
         ipv4Only?.let { query ->
-            Thread({ offer(runCatching { query(host) }.getOrNull()) }, "LiveTvDns4").apply { isDaemon = true }.start()
+            Thread({ offer(runCatching { query(host) }.getOrNull()) }, "FastDns4").apply { isDaemon = true }.start()
         }
 
         try {
@@ -111,7 +112,7 @@ internal class LiveTvDns(
     }
 
     companion object {
-        private const val TAG = "LiveTvDns"
+        private const val TAG = "FastDns"
 
         /** Addresses this recent are used without a lookup. */
         private const val FRESH_NS = 10L * 60 * 1_000_000_000L
@@ -122,8 +123,8 @@ internal class LiveTvDns(
         /** As long as the system lookup could take before connecting gives up anyway. */
         private const val LOOKUP_TIMEOUT_S = 15L
 
-        /** The one Live TV uses. */
-        val shared = LiveTvDns()
+        /** The one Live TV and the player share, so a host either has looked up is ready for the other. */
+        val shared = FastDns()
 
         private val ipv4Literal = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
 

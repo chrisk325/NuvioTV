@@ -47,7 +47,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.extractor.DefaultExtractorsFactory
-import com.nuvio.tv.core.network.IPv4FirstDns
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.ui.screens.player.aiostreams.Thumbnails
 import okhttp3.OkHttpClient
 import java.nio.ByteBuffer
@@ -64,7 +64,7 @@ private const val NetworkTimeoutMs = 10_000
 
 private val seekPreviewHttpClient by lazy {
     OkHttpClient.Builder()
-        .dns(IPv4FirstDns())
+        .dns(FastDns.shared)
         .connectTimeout(NetworkTimeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
         .readTimeout(NetworkTimeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
         .followRedirects(true)
