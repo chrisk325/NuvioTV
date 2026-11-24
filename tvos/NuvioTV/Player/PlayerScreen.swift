@@ -19,7 +19,7 @@ struct PlayerContainer: View {
 }
 
 private enum PlayerFocus: Hashable {
-    case catcher, scrubber, playPause, audio, dialogue, subtitles, adjust, speed, aspect, next, panel, skip
+    case catcher, scrubber, playPause, audio, dialogue, subtitles, adjust, speed, aspect, next, panel, skip, errorBack
 }
 
 private enum PlayerPanel: Identifiable {
@@ -39,6 +39,10 @@ struct PlayerScreen: View {
     @State private var scrubBase: Double = 0
     @State private var hideTask: Task<Void, Never>?
     @State private var commitTask: Task<Void, Never>?
+    /// Closes the player a few seconds after playback fails.
+    @State private var errorCloseTask: Task<Void, Never>?
+    @State private var errorCountdown = 0
+    private static let errorCloseSeconds = 5
     @FocusState private var focus: PlayerFocus?
 
     private var seekStep: Double { Double(app.settings.seekStepSeconds) }
@@ -57,14 +61,14 @@ struct PlayerScreen: View {
                 .buttonStyle(InvisibleButtonStyle())
                 .focused($focus, equals: .catcher)
                 .onMoveCommand(perform: handleMoveWhileHidden)
-                .disabled(controlsVisible || panel != nil)
+                .disabled(controlsVisible || panel != nil || model.errorMessage != nil)
                 .ignoresSafeArea()
 
             if model.isBuffering && !model.isPaused && model.errorMessage == nil && !model.isStarting {
                 ProgressView().scaleEffect(1.6)
             }
 
-            if controlsVisible && panel == nil {
+            if controlsVisible && panel == nil && model.errorMessage == nil {
                 controls.transition(.opacity)
             } else if let scrubTarget {
                 VStack {
@@ -146,15 +150,23 @@ struct PlayerScreen: View {
             if model.isStarting { focus = .catcher } else { showControls(focusScrubber: true) }
         }
         .onChange(of: model.isStarting) { _, starting in
-            if !starting { showControls(focusScrubber: true) }
+            if !starting && model.errorMessage == nil { showControls(focusScrubber: true) }
         }
-        .onDisappear { model.stop() }
+        .onChange(of: model.errorMessage) { _, message in
+            if message != nil { showError() } else { cancelErrorClose() }
+        }
+        .onDisappear {
+            cancelErrorClose()
+            model.stop()
+        }
         .onPlayPauseCommand {
             model.togglePause()
             showControls(focusScrubber: false)
         }
         .onExitCommand {
-            if panel != nil {
+            if model.errorMessage != nil {
+                leaveAfterError()
+            } else if panel != nil {
                 panel = nil
                 showControls(focusScrubber: true)
             } else if controlsVisible && !model.isPaused {
@@ -508,11 +520,49 @@ struct PlayerScreen: View {
     }
 
     private func errorOverlay(_ message: String) -> some View {
-        VStack(spacing: 30) {
-            MessageView(title: "Playback failed", message: message)
-            Button("Back") { dismiss() }
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+            VStack(spacing: 30) {
+                MessageView(title: "Playback failed", message: message)
+                    .frame(maxHeight: 500)
+                Button(errorCountdown > 0 ? "Back (\(errorCountdown))" : "Back") { leaveAfterError() }
+                    .focused($focus, equals: .errorBack)
+            }
+            .focusSection()
         }
-        .background(Color.black.opacity(0.85))
+    }
+
+    /// Playback failed: nothing else on screen takes the remote, Back is focused, and the player
+    /// closes by itself after a few seconds.
+    private func showError() {
+        hideTask?.cancel()
+        panel = nil
+        controlsVisible = false
+        scrubTarget = nil
+        focus = .errorBack
+        errorCloseTask?.cancel()
+        errorCountdown = Self.errorCloseSeconds
+        errorCloseTask = Task { @MainActor in
+            while errorCountdown > 0 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                errorCountdown -= 1
+            }
+            leaveAfterError()
+        }
+        // Focus moves once the overlay is on screen.
+        DispatchQueue.main.async { focus = .errorBack }
+    }
+
+    private func cancelErrorClose() {
+        errorCloseTask?.cancel()
+        errorCloseTask = nil
+        errorCountdown = 0
+    }
+
+    private func leaveAfterError() {
+        cancelErrorClose()
+        dismiss()
     }
 
     // MARK: Input handling

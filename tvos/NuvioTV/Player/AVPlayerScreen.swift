@@ -9,25 +9,57 @@ struct AVPlayerScreen: View {
     let request: PlaybackRequest
 
     @StateObject private var model = AVPlayerModel()
+    @FocusState private var backFocused: Bool
+    @State private var countdown = 0
+    @State private var closeTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            PlayerViewController(player: model.player)
-                .ignoresSafeArea()
             if let message = model.errorMessage {
+                // The system player is removed so it can't hold the remote; Back is focused and
+                // the screen closes by itself after a few seconds.
                 VStack(spacing: 24) {
                     MessageView(
                         title: "Playback failed",
                         message: message + "\n\nApple TV's built-in player supports MP4/MOV/HLS. MKV and some codecs need a different stream."
                     )
-                    Button("Back") { dismiss() }
+                    .frame(maxHeight: 560)
+                    Button(countdown > 0 ? "Back (\(countdown))" : "Back") { leave() }
+                        .focused($backFocused)
                 }
-                .background(Color.black.opacity(0.85))
+                .onAppear { startClosing() }
+                .onExitCommand { leave() }
+            } else {
+                PlayerViewController(player: model.player)
+                    .ignoresSafeArea()
             }
         }
         .onAppear { model.start(request, core: app.core) }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            closeTask?.cancel()
+            model.stop()
+        }
+    }
+
+    private func startClosing() {
+        closeTask?.cancel()
+        countdown = 5
+        DispatchQueue.main.async { backFocused = true }
+        closeTask = Task { @MainActor in
+            while countdown > 0 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                countdown -= 1
+            }
+            leave()
+        }
+    }
+
+    private func leave() {
+        closeTask?.cancel()
+        closeTask = nil
+        dismiss()
     }
 }
 
