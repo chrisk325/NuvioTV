@@ -166,6 +166,7 @@ private fun libassRenderModeLabel(mode: LibassRenderMode): String = when (mode) 
     LibassRenderMode.VIDEO_EFFECT -> stringResource(R.string.sub_libass_render_mode_video_effect)
     LibassRenderMode.OVERLAY -> stringResource(R.string.sub_libass_render_mode_overlay)
     LibassRenderMode.OVERLAY_CPU_BLEND -> stringResource(R.string.sub_libass_render_mode_cpu_blend)
+    LibassRenderMode.OVERLAY_GPU_BLEND -> stringResource(R.string.sub_libass_render_mode_gpu_blend)
 }
 
 @Composable
@@ -254,6 +255,11 @@ internal fun SubtitleSettingsDialogs(
                     LibassRenderMode.OVERLAY_CPU_BLEND,
                     stringResource(R.string.sub_libass_render_mode_cpu_blend),
                     stringResource(R.string.sub_libass_render_mode_cpu_blend_sub)
+                ),
+                SettingsPickerOption(
+                    LibassRenderMode.OVERLAY_GPU_BLEND,
+                    stringResource(R.string.sub_libass_render_mode_gpu_blend),
+                    stringResource(R.string.sub_libass_render_mode_gpu_blend_sub)
                 )
             ),
             selectedValue = settings.effectiveLibassRenderMode,

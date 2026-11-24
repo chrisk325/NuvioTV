@@ -604,7 +604,11 @@ enum class LibassRenderMode {
     VIDEO_EFFECT,
     /** CPU-blended overlay via ANativeWindow. Zero GPU, NEON-optimized alpha blend.
      *  Same as OVERLAY but bypasses GL entirely */
-    OVERLAY_CPU_BLEND;
+    OVERLAY_CPU_BLEND,
+    /** GPU-blended overlay: libass's masks go up into an atlas and the GPU blends them as tinted
+     *  quads, each buffer stamped with its video frame's time. Ported from NuvioMobile's libmpv
+     *  libass overlay; falls back to CPU blending where GL can't start. */
+    OVERLAY_GPU_BLEND;
 
     companion object {
         val DEFAULT = OVERLAY
@@ -614,6 +618,7 @@ enum class LibassRenderMode {
             VIDEO_EFFECT.name -> VIDEO_EFFECT
             OVERLAY.name -> OVERLAY
             OVERLAY_CPU_BLEND.name -> OVERLAY_CPU_BLEND
+            OVERLAY_GPU_BLEND.name -> OVERLAY_GPU_BLEND
             // Previous app-side CPU blend mode; migrate to the library implementation.
             LEGACY_CPU_BLEND -> OVERLAY_CPU_BLEND
             else -> DEFAULT
