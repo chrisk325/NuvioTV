@@ -11,6 +11,7 @@ import com.nuvio.tv.core.debrid.DirectDebridResolveResult
 import com.nuvio.tv.core.debrid.DirectDebridResolver
 import com.nuvio.tv.core.debrid.DirectDebridStreamPreparer
 import com.nuvio.tv.core.plugin.PluginManager
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.torrent.TorrentSettings
 import com.nuvio.tv.core.torrent.TorrentService
@@ -76,6 +77,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import javax.inject.Inject
 
 private const val TAG = "StreamScreenViewModel"
@@ -708,6 +710,8 @@ class StreamScreenViewModel @Inject constructor(
                     )
                 }
                 scheduleStreamBadgePresentation(mergedAddonStreams)
+                // The listed servers are looked up now, so the stream picked does not wait for it.
+                FastDns.shared.prefetch(allStreams.mapNotNull { it.getStreamUrl()?.toHttpUrlOrNull()?.host })
             }
 
             if (shouldAttemptEmbeddedMetaStreamLookup()) {

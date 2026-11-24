@@ -59,6 +59,21 @@ internal class FastDns(
         cache.remove(hostname.lowercase())
     }
 
+    /**
+     * Looks up [hostnames] in the background (a stream list's servers), so the stream picked from
+     * it does not wait for its lookup. Only names not looked up recently are asked, at most
+     * [PREFETCH_MAX] per call. Only the DNS server is asked: nothing is sent to the servers.
+     */
+    fun prefetch(hostnames: Iterable<String>) {
+        hostnames.asSequence()
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() && it != "localhost" && !isIpLiteral(it) }
+            .distinct()
+            .filter { host -> cache[host]?.let { nanoTime() - it.atNanos >= FRESH_NS } ?: true }
+            .take(PREFETCH_MAX)
+            .forEach(::refreshInBackground)
+    }
+
     private fun refreshInBackground(host: String) {
         if (!refreshing.add(host)) return
         Thread({
@@ -119,6 +134,9 @@ internal class FastDns(
 
         /** Older ones, up to this age, are used while they are looked up again. */
         private const val STALE_NS = 6L * 60 * 60 * 1_000_000_000L
+
+        /** Most names [prefetch] looks up at once: a list's addons, not every stream's link. */
+        private const val PREFETCH_MAX = 8
 
         /** As long as the system lookup could take before connecting gives up anyway. */
         private const val LOOKUP_TIMEOUT_S = 15L
