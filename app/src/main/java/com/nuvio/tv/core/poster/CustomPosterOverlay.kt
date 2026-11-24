@@ -190,7 +190,8 @@ fun com.nuvio.tv.ui.screens.home.ContinueWatchingItem.withCustomPosterUrl(
             copy(
                 progress = progress.copy(poster = resolvedPoster ?: progress.poster),
                 originalPoster = originalPoster ?: progress.poster,
-                customLandscapePoster = resolvedLandscape
+                // A pattern without {shape} keeps the addon landscape poster.
+                customLandscapePoster = resolvedLandscape ?: customLandscapePoster
             )
         }
         is com.nuvio.tv.ui.screens.home.ContinueWatchingItem.NextUp -> {
@@ -204,7 +205,7 @@ fun com.nuvio.tv.ui.screens.home.ContinueWatchingItem.withCustomPosterUrl(
             copy(
                 info = info.copy(poster = resolvedPoster ?: info.poster),
                 originalPoster = originalPoster ?: info.poster,
-                customLandscapePoster = resolvedLandscape
+                customLandscapePoster = resolvedLandscape ?: customLandscapePoster
             )
         }
     }

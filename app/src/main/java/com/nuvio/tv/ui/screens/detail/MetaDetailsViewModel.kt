@@ -8,6 +8,8 @@ import com.nuvio.tv.core.player.StreamAutoPlayPolicy
 import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.poster.withCustomPosterUrls
+import com.nuvio.tv.core.poster.toAddonArtworkRequest
+import com.nuvio.tv.core.poster.withAddonPosters
 import com.nuvio.tv.core.tmdb.TmdbMetadataService
 import com.nuvio.tv.core.tmdb.TmdbMovieCollection
 import com.nuvio.tv.core.tmdb.TmdbService
@@ -79,6 +81,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 private const val TAG = "MetaDetailsViewModel"
+private const val MORE_LIKE_THIS_ARTWORK_TIMEOUT_MS = 4_000L
 
 /**
  * Whether pressing Back on the full-screen trailer should hand playback back to the
@@ -121,6 +124,7 @@ class MetaDetailsViewModel @Inject constructor(
     private val metaDetailsSessionState: MetaDetailsSessionState,
     private val watchedSeriesStateHolder: com.nuvio.tv.data.local.WatchedSeriesStateHolder,
     val posterOptions: com.nuvio.tv.ui.components.posteroptions.PosterOptionsController,
+    private val addonArtworkResolver: com.nuvio.tv.core.poster.AddonArtworkResolver,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val itemId: String = savedStateHandle["itemId"] ?: ""
@@ -1377,12 +1381,18 @@ class MetaDetailsViewModel @Inject constructor(
 
             val pattern = layoutPreferenceDataStore.customPosterUrlPattern.first()
             val enabledScreens = layoutPreferenceDataStore.customPosterEnabledScreens.first()
-            val recommendations = if (hideUnreleasedContent) {
+            val releasedRecommendations = if (hideUnreleasedContent) {
                 val today = LocalDate.now()
                 rawRecommendations.filterNot { it.isUnreleased(today) }
             } else {
                 rawRecommendations
-            }.withCustomPosterUrls(
+            }
+            // Show the posters the user's meta addons publish rather than the source's landscape art.
+            val addonArtwork = addonArtworkResolver.resolveAll(
+                requests = releasedRecommendations.map { it.toAddonArtworkRequest() },
+                timeoutMs = MORE_LIKE_THIS_ARTWORK_TIMEOUT_MS
+            )
+            val recommendations = releasedRecommendations.withAddonPosters(addonArtwork).withCustomPosterUrls(
                 com.nuvio.tv.core.poster.patternForScreen(pattern, com.nuvio.tv.core.poster.CustomPosterScreen.DETAILS, enabledScreens)
             )
 

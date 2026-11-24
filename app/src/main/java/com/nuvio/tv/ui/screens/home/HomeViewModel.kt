@@ -311,6 +311,8 @@ class HomeViewModel @Inject constructor(
     @Volatile internal var cwLastCycleStartedAtMs: Long = System.currentTimeMillis()
     /** In-memory cache of enriched InProgress items per contentId+episode key. */
     internal val cwEnrichedInProgressOverlay = ConcurrentHashMap<String, ContinueWatchingItem.InProgress>()
+    /** Landscape posters the meta addons publish, per contentId, shown on Continue Watching cards. */
+    internal val cwAddonLandscapePosters = ConcurrentHashMap<String, String>()
     /** Bumped to force the CW pipeline to re-run (e.g. after cache clear). */
     internal val cwPipelineRefreshTrigger = kotlinx.coroutines.flow.MutableStateFlow(0)
     /** Tracks the active CW pipeline coroutine so it can be cancelled on profile switch. */
@@ -441,6 +443,7 @@ class HomeViewModel @Inject constructor(
                     cwEnrichedNextUpOverlay.clear()
                     cwDiskSeededNextUpOverlayIds.clear()
                     cwEnrichedInProgressOverlay.clear()
+                    cwAddonLandscapePosters.clear()
                     cwLastBadgeEpisodeKeys = emptySet()
                     cwLastShowIdSiblings = emptyMap()
                     cwLocalContinueWatchingItems = null
@@ -500,6 +503,7 @@ class HomeViewModel @Inject constructor(
         cwEnrichedNextUpOverlay.clear()
         cwDiskSeededNextUpOverlayIds.clear()
         cwEnrichedInProgressOverlay.clear()
+        cwAddonLandscapePosters.clear()
         cwLastBadgeEpisodeKeys = emptySet()
         cwLastShowIdSiblings = emptyMap()
         watchedSeriesStateHolder.clearValidationState()
@@ -723,6 +727,7 @@ class HomeViewModel @Inject constructor(
                         cwEnrichedNextUpOverlay.clear()
                         cwDiskSeededNextUpOverlayIds.clear()
                         cwEnrichedInProgressOverlay.clear()
+                        cwAddonLandscapePosters.clear()
                         discoveredOlderNextUpItems.clear()
                         cwLastProcessedNextUpContentIds.clear()
                         // Clear disk cache for current profile.

@@ -34,7 +34,9 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.PosterShape
 import com.nuvio.tv.ui.components.GridContentCard
+import com.nuvio.tv.ui.components.LocalLandscapePosterMode
 import com.nuvio.tv.ui.components.PosterCardStyle
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
@@ -106,15 +108,28 @@ fun MoreLikeThisSection(
         Modifier
     }
 
-    val landscapeStyle = remember(posterCardCornerRadius) {
-        PosterCardStyle(
-            width = 260.dp,
-            height = 146.dp,
-            cornerRadius = posterCardCornerRadius,
-            focusedBorderWidth = NuvioTheme.spacing.xxs,
-            focusedScale = 1.02f
-        )
+    // Rows that picked up addon posters are portrait throughout; source art stays landscape.
+    val usePortraitCards = items.first().posterShape == PosterShape.POSTER
+    val focusedBorderWidth = NuvioTheme.spacing.xxs
+    val cardStyle = remember(posterCardCornerRadius, usePortraitCards, focusedBorderWidth) {
+        if (usePortraitCards) {
+            PosterCardStyle(
+                cornerRadius = posterCardCornerRadius,
+                focusedBorderWidth = focusedBorderWidth,
+                focusedScale = 1.02f
+            )
+        } else {
+            PosterCardStyle(
+                width = 260.dp,
+                height = 146.dp,
+                cornerRadius = posterCardCornerRadius,
+                focusedBorderWidth = focusedBorderWidth,
+                focusedScale = 1.02f
+            )
+        }
     }
+    // Portrait cards turn landscape in global landscape mode and take the style's height as width.
+    val cardWidth = if (usePortraitCards && LocalLandscapePosterMode.current) cardStyle.height else cardStyle.width
 
     Column(
         modifier = Modifier
@@ -166,7 +181,7 @@ fun MoreLikeThisSection(
                         item = item,
                         onClick = { onItemClick(item) },
                         onLongPress = { onItemLongPress(item) },
-                        posterCardStyle = landscapeStyle,
+                        posterCardStyle = cardStyle,
                         showLabel = true,
                         imageCrossfade = true,
                         isWatched = isItemWatched(item),
@@ -191,7 +206,7 @@ fun MoreLikeThisSection(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
-                                .width(landscapeStyle.width)
+                                .width(cardWidth)
                                 .padding(start = NuvioTheme.spacing.xxs, end = NuvioTheme.spacing.xxs, top = NuvioTheme.spacing.xxs)
                         )
                     }

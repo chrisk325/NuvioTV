@@ -96,6 +96,7 @@ internal fun HomeViewModel.continueWatchingRowsFor(
     mode: ContinueWatchingSortMode
 ): ContinueWatchingRows {
     val local = items.filterNot { it is ContinueWatchingItem.NextUp && it.info.fromServer }
+        .withAddonLandscapePosters(cwAddonLandscapePosters)
     val cards = serverNextUpCards
     val merged = if (cards == null) local else sortContinueWatchingItems(mergeServerNextUp(local, cards), mode)
     return splitContinueWatchingRows(merged, mode, separateNextUpRow).copy(local = local)
