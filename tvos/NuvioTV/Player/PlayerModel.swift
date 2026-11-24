@@ -313,12 +313,15 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     func seek(by seconds: Double) {
+        // Live TV can't be seeked (it crashed some streams).
+        guard request?.isLive != true, seconds.isFinite else { return }
         controller.seek(by: seconds)
         position = min(max(0, position + seconds), duration)
         clock.position = position
     }
 
     func seek(to seconds: Double) {
+        guard request?.isLive != true, seconds.isFinite else { return }
         controller.seek(to: seconds)
         position = seconds
         clock.position = seconds
@@ -487,7 +490,12 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
 
     // MARK: MPVControllerDelegate
 
-    func mpvDidUpdate(_ snapshot: MPVController.Snapshot) {
+    func mpvDidUpdate(_ rawSnapshot: MPVController.Snapshot) {
+        // Live streams can report NaN / infinite times; keep them out of the maths and the UI.
+        var snapshot = rawSnapshot
+        if !snapshot.position.isFinite || snapshot.position < 0 { snapshot.position = 0 }
+        if !snapshot.duration.isFinite || snapshot.duration < 0 { snapshot.duration = 0 }
+        if !snapshot.cacheSeconds.isFinite || snapshot.cacheSeconds < 0 { snapshot.cacheSeconds = 0 }
         // Backstop: if the playhead is moving, we're not buffering, whatever the flags say.
         let advancing = !snapshot.isPaused && snapshot.position > position + 0.05
         // While waiting for the display switch it shows as loading, not as paused.

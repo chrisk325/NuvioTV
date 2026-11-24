@@ -183,7 +183,8 @@ struct PlayerScreen: View {
                     model.togglePause()
                     scheduleHide()
                 }) {
-                    if model.request?.isLive == true && !model.hasDuration {
+                    // Live channels never show a seek bar (no scrubbing on live TV).
+                    if model.request?.isLive == true {
                         HStack(spacing: 16) {
                             Text("LIVE").font(.caption.bold()).padding(.horizontal, 14).padding(.vertical, 6)
                                 .liquidGlass(in: Capsule(), tint: .red.opacity(0.75))
@@ -538,6 +539,11 @@ struct PlayerScreen: View {
             default: break
             }
         }
+        // Live TV: left / right only bring up the controls; there is nothing to seek.
+        if model.request?.isLive == true {
+            showControls(focusScrubber: true)
+            return
+        }
         switch direction {
         case .left: stepScrub(-seekStep)
         case .right: stepScrub(seekStep)
@@ -546,6 +552,7 @@ struct PlayerScreen: View {
     }
 
     private func handleMoveOnScrubber(_ direction: MoveCommandDirection) {
+        if model.request?.isLive == true { scheduleHide(); return }
         switch direction {
         case .left: stepScrub(-seekStep)
         case .right: stepScrub(seekStep)
@@ -556,13 +563,14 @@ struct PlayerScreen: View {
 
     /// Accumulates d-pad presses into one seek, committed shortly after the last press.
     private func stepScrub(_ delta: Double) {
+        guard model.request?.isLive != true, model.duration.isFinite, model.position.isFinite else { return }
         let base = scrubTarget ?? model.position
         scrubTarget = min(max(0, base + delta), max(model.duration - 1, 0))
         commitScrubSoon()
     }
 
     private func handleSwipe(_ dx: CGFloat, _ state: UIGestureRecognizer.State) {
-        guard model.duration > 0 else { return }
+        guard model.request?.isLive != true, model.duration > 0, model.duration.isFinite else { return }
         switch state {
         case .began:
             scrubBase = scrubTarget ?? model.position
@@ -689,7 +697,10 @@ struct TimelineBar: View {
 /// "Play now (12s)" countdown, the other clock-driven bit.
 struct NextCountdownLabel: View {
     @ObservedObject var clock: PlaybackClock
-    var body: some View { Text("Play now (\(Int(clock.remaining))s)") }
+    var body: some View {
+        let remaining = clock.remaining.isFinite ? Int(min(clock.remaining, 86_400)) : 0
+        return Text("Play now (\(remaining)s)")
+    }
 }
 
 /// Circular translucent control that grows and turns white when focused.

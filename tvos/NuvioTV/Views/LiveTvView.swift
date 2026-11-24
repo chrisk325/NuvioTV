@@ -78,7 +78,7 @@ struct LiveTvView: View {
 
     private func content(_ state: LiveTvState) -> some View {
         let groups = state.groups
-        let current = groups.first { $0.name == selectedGroup } ?? groups.first!
+        let current = groups.first { $0.name == selectedGroup } ?? groups.first ?? LiveTvGroup(name: "", channels: [])
         return HStack(alignment: .top, spacing: 0) {
             List {
                 Section {
@@ -88,7 +88,8 @@ struct LiveTvView: View {
                     }
                 }
                 Section("\(state.channelCount) channels") {
-                    ForEach(groups, id: \.name) { group in
+                    // By position: identical names would crash the list (duplicate ids).
+                    ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
                         Button {
                             selectedGroup = group.name
                         } label: {
@@ -102,7 +103,9 @@ struct LiveTvView: View {
                 }
                 if !state.errors.isEmpty {
                     Section("Problems") {
-                        ForEach(state.errors, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(Array(state.errors.enumerated()), id: \.offset) { _, message in
+                            Text(message).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -170,7 +173,8 @@ struct ChannelRow: View {
 
     var body: some View {
         HStack(spacing: 24) {
-            RemoteImage(url: channel.logoUrl, contentMode: .fit)
+            // Logos decoded small: thousands of channels at full size ran the Apple TV out of memory.
+            RemoteImage(url: channel.logoUrl, contentMode: .fit, maxPixel: 240)
                 .frame(width: 120, height: 68)
             VStack(alignment: .leading, spacing: 6) {
                 HStack {

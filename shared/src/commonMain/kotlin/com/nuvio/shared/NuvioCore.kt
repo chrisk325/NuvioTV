@@ -114,6 +114,8 @@ class NuvioCore(
     internal val store = store
     internal val http = httpClient
     internal val scope = CoroutineScope(SupervisorJob() + dispatcher)
+    /** The thread callbacks run on (main on tvOS); Live TV state changes stay on it. */
+    private val mainDispatcher = dispatcher
     private val client = StremioClient(httpClient)
 
     val addonRepository = AddonRepository(client, store)
@@ -1579,7 +1581,10 @@ class NuvioCore(
     fun observeLiveTv(onChange: (com.nuvio.shared.livetv.LiveTvState) -> Unit): CoreSubscription = observe(liveTv.state, onChange)
 
     @Throws(Exception::class)
-    suspend fun loadLiveTv(force: Boolean) = liveTv.load(force)
+    suspend fun loadLiveTv(force: Boolean) =
+        // Heavy work (downloads, guide parsing, cache) moves off it inside; the channel list and
+        // guide are swapped on the main thread, where the screen reads them.
+        kotlinx.coroutines.withContext(mainDispatcher) { liveTv.load(force) }
 
     /** Placeholder meta so live channels can go through the same player (no progress is saved). */
     fun liveTvMeta(channel: com.nuvio.shared.livetv.LiveTvChannel): Meta = Meta(

@@ -258,9 +258,15 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
         guide = merged
         guideSavedAtMs = now
         guideUrlsKey = urlsKey(urls)
-        val saved = GuideCache(now, guideUrlsKey, merged)
-        withContext(Dispatchers.Default) {
-            runCatching { cache.putString(GUIDE_CACHE, json.encodeToString(GuideCache.serializer(), saved)) }
+        // A very large guide isn't saved: encoding it would need a lot of memory at once.
+        val programmeCount = merged.values.sumOf { it.size }
+        if (programmeCount <= MAX_CACHED_PROGRAMMES) {
+            val saved = GuideCache(now, guideUrlsKey, merged)
+            withContext(Dispatchers.Default) {
+                runCatching { cache.putString(GUIDE_CACHE, json.encodeToString(GuideCache.serializer(), saved)) }
+            }
+        } else {
+            runCatching { cache.putString(GUIDE_CACHE, null) }
         }
         _state.value = _state.value.copy(guideLoaded = true)
     }
@@ -331,6 +337,7 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
         private const val GUIDE_PAST_MS = 3 * 3_600_000L
         /** How far ahead the guide is kept: long enough to outlast the 6-hour refresh. */
         private const val GUIDE_AHEAD_MS = 36 * 3_600_000L
+        private const val MAX_CACHED_PROGRAMMES = 120_000
     }
 }
 
