@@ -8,6 +8,7 @@ import com.nuvio.shared.data.nonBlank
 import com.nuvio.shared.data.obj
 import com.nuvio.shared.data.str
 import com.nuvio.shared.util.encodeUrlComponent
+import com.nuvio.shared.util.GunzipStream
 import com.nuvio.shared.util.gunzip
 import com.nuvio.shared.util.isGzip
 import io.ktor.client.HttpClient
@@ -46,27 +47,30 @@ internal class LiveTvHttp(private val http: HttpClient) {
             val channel = response.bodyAsChannel()
             val buffer = ByteArray(CHUNK)
             val decoder = Utf8ChunkDecoder()
-            var first = true
-            var gzip: ByteArrayBuilder? = null
-            while (true) {
-                val read = channel.readAvailable(buffer, 0, buffer.size)
-                if (read < 0) break
-                if (read == 0) continue
-                if (first) {
-                    first = false
-                    if (read >= 2 && buffer[0] == 0x1f.toByte() && buffer[1] == 0x8b.toByte()) gzip = ByteArrayBuilder()
+            // .xml.gz guides are unpacked as they arrive, a piece at a time.
+            var gzip: GunzipStream? = null
+            var lead = ByteArray(0) // the first bytes, until we know whether it's gzip
+            var decided = false
+            try {
+                while (true) {
+                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    if (read < 0) break
+                    if (read == 0) continue
+                    if (!decided) {
+                        lead += buffer.copyOf(read)
+                        if (lead.size < 2) continue
+                        decided = true
+                        if (lead[0] == 0x1f.toByte() && lead[1] == 0x8b.toByte()) gzip = GunzipStream { bytes, count -> onText(decoder.decode(bytes, count)) }
+                        val first = lead
+                        lead = ByteArray(0)
+                        gzip?.feed(first, first.size) ?: onText(decoder.decode(first, first.size))
+                        continue
+                    }
+                    gzip?.feed(buffer, read) ?: onText(decoder.decode(buffer, read))
                 }
-                val packed = gzip
-                if (packed != null) packed.append(buffer, read) else onText(decoder.decode(buffer, read))
-            }
-            gzip?.let { packed ->
-                val data = gunzip(packed.toByteArray())
-                var offset = 0
-                while (offset < data.size) {
-                    val count = minOf(CHUNK * 4, data.size - offset)
-                    onText(decoder.decode(data.copyOfRange(offset, offset + count), count))
-                    offset += count
-                }
+                if (!decided && lead.isNotEmpty()) onText(decoder.decode(lead, lead.size))
+            } finally {
+                gzip?.close()
             }
             onText(decoder.finish())
         }
@@ -325,21 +329,6 @@ fun catchupUrl(channel: LiveTvChannel, source: LiveTvSource?, programme: LiveTvP
             if (channel.streamUrl.contains(".m3u8")) "$base/index-$startS-$durationS.m3u8" else "$base/timeshift_abs-$startS.ts"
         }
     }
-}
-
-
-/** Growable byte buffer (common code has no ByteArrayOutputStream). */
-internal class ByteArrayBuilder {
-    private var bytes = ByteArray(256 * 1024)
-    private var size = 0
-
-    fun append(source: ByteArray, count: Int) {
-        if (size + count > bytes.size) bytes = bytes.copyOf(maxOf(bytes.size * 2, size + count))
-        source.copyInto(bytes, size, 0, count)
-        size += count
-    }
-
-    fun toByteArray(): ByteArray = bytes.copyOf(size)
 }
 
 /** Decodes UTF-8 arriving in pieces: a character cut between two pieces is kept for the next. */

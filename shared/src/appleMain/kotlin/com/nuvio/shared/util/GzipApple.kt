@@ -2,6 +2,23 @@ package com.nuvio.shared.util
 
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.free
+import kotlinx.cinterop.nativeHeap
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.sizeOf
+import kotlinx.cinterop.toKString
+import platform.zlib.MAX_WBITS
+import platform.zlib.Z_BUF_ERROR
+import platform.zlib.Z_NO_FLUSH
+import platform.zlib.Z_OK
+import platform.zlib.Z_STREAM_END
+import platform.zlib.inflate
+import platform.zlib.inflateEnd
+import platform.zlib.inflateInit2_
+import platform.zlib.z_stream_s
+import platform.zlib.zlibVersion
 import kotlinx.cinterop.usePinned
 import platform.Foundation.NSData
 import platform.Foundation.NSDataCompressionAlgorithmZlib
@@ -23,4 +40,61 @@ actual fun gunzip(data: ByteArray): ByteArray {
     val result = ByteArray(size)
     if (size > 0) result.usePinned { memcpy(it.addressOf(0), out.bytes, out.length) }
     return result
+}
+
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun rawInflater(): RawInflater = ZlibInflater()
+
+/** Raw DEFLATE through the system zlib, a piece at a time. */
+@OptIn(ExperimentalForeignApi::class)
+private class ZlibInflater : RawInflater {
+    private val stream = nativeHeap.alloc<z_stream_s>()
+    private val buffer = ByteArray(256 * 1024)
+    private var open = false
+
+    init {
+        stream.zalloc = null
+        stream.zfree = null
+        stream.opaque = null
+        stream.next_in = null
+        stream.avail_in = 0u
+        val result = inflateInit2_(stream.ptr, -MAX_WBITS, zlibVersion()!!.toKString(), sizeOf<z_stream_s>().toInt())
+        if (result != Z_OK) {
+            nativeHeap.free(stream)
+            throw IllegalStateException("Couldn't unpack the guide (zlib $result)")
+        }
+        open = true
+    }
+
+    override fun feed(input: ByteArray, offset: Int, count: Int, out: (ByteArray, Int) -> Unit): Boolean {
+        if (!open) return false
+        if (count <= 0) return true
+        return input.usePinned { inPin ->
+            buffer.usePinned { outPin ->
+                stream.next_in = inPin.addressOf(offset).reinterpret()
+                stream.avail_in = count.toUInt()
+                while (true) {
+                    stream.next_out = outPin.addressOf(0).reinterpret()
+                    stream.avail_out = buffer.size.toUInt()
+                    val result = inflate(stream.ptr, Z_NO_FLUSH)
+                    val produced = buffer.size - stream.avail_out.toInt()
+                    if (produced > 0) out(buffer, produced)
+                    when (result) {
+                        Z_STREAM_END -> return false
+                        // A full buffer may mean more output is waiting; otherwise all input is used.
+                        Z_OK -> if (stream.avail_out != 0u) return true
+                        Z_BUF_ERROR -> return true
+                        else -> throw IllegalStateException("The guide is damaged (zlib $result)")
+                    }
+                }
+            }
+        }
+    }
+
+    override fun close() {
+        if (!open) return
+        open = false
+        inflateEnd(stream.ptr)
+        nativeHeap.free(stream)
+    }
 }
