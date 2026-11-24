@@ -25,9 +25,14 @@ class AddonHttpException(val url: String, val statusCode: Int) :
  */
 class StremioClient(private val http: HttpClient) {
 
-    suspend fun fetchText(url: String): String {
+    /** [fresh]: skip any HTTP cache (add-ons send cache headers; stream lists must be current). */
+    suspend fun fetchText(url: String, fresh: Boolean = false): String {
         val response = http.get(url) {
             header(HttpHeaders.Accept, "application/json")
+            if (fresh) {
+                header(HttpHeaders.CacheControl, "no-cache")
+                header(HttpHeaders.Pragma, "no-cache")
+            }
         }
         if (!response.status.isSuccess()) throw AddonHttpException(url, response.status.value)
         return response.bodyAsText()
@@ -58,7 +63,8 @@ class StremioClient(private val http: HttpClient) {
 
     suspend fun fetchStreams(addon: Addon, type: String, videoId: String): List<Stream> =
         parseStreamResponse(
-            fetchText(buildResourceUrl(addon.baseUrl, "stream", type, videoId)),
+            // Every visit to the streams page asks the add-ons again.
+            fetchText(buildResourceUrl(addon.baseUrl, "stream", type, videoId), fresh = true),
             addon.displayName,
             addon.logo
         )

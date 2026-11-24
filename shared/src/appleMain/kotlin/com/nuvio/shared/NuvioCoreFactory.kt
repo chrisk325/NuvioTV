@@ -4,8 +4,19 @@ import com.nuvio.shared.storage.UserDefaultsStore
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
 import kotlinx.coroutines.Dispatchers
+import platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
 
-internal actual fun platformHttpClient(): HttpClient = HttpClient(Darwin)
+internal actual fun platformHttpClient(): HttpClient = HttpClient(Darwin) {
+    engine {
+        configureRequest {
+            // Stream lists ("…/stream/{type}/{id}.json") are never answered from the URL cache:
+            // add-ons send cache headers for them, which kept an old list for minutes.
+            if (URL?.path?.contains("/stream/") == true) {
+                cachePolicy = NSURLRequestReloadIgnoringLocalCacheData
+            }
+        }
+    }
+}
 
 /** Swift: `NuvioCoreFactoryKt.createNuvioCore()` – UserDefaults storage, main-thread callbacks. */
 fun createNuvioCore(config: NuvioConfig): NuvioCore {
