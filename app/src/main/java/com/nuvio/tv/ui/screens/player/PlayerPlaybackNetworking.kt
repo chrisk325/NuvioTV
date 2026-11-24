@@ -4,7 +4,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
-import com.nuvio.tv.core.network.IPv4FirstDns
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.core.network.PlaybackSocketFactory
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -55,7 +55,7 @@ internal object PlayerPlaybackNetworking {
         }
         OkHttpClient.Builder()
             .dispatcher(dispatcher)
-            .dns(IPv4FirstDns())
+            .dns(FastDns.shared)
             .socketFactory(PlaybackSocketFactory)
             .eventListenerFactory(PlaybackConnectionEvents)
             .sslSocketFactory(sslContext.socketFactory, trustAllManager)
@@ -82,7 +82,7 @@ internal object PlayerPlaybackNetworking {
         }
         OkHttpClient.Builder()
             .dispatcher(dispatcher)
-            .dns(IPv4FirstDns())
+            .dns(FastDns.shared)
             .socketFactory(PlaybackSocketFactory)
             .eventListenerFactory(PlaybackConnectionEvents)
             .protocols(listOf(okhttp3.Protocol.HTTP_1_1))

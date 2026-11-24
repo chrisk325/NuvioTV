@@ -1,5 +1,6 @@
 package com.nuvio.tv.reshaped.livetv
 
+import com.nuvio.tv.core.network.FastDns
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
@@ -26,7 +27,7 @@ internal object LiveTvHttp {
             // As Nuvio's own clients, and the phone app's player: on a network whose IPv6 route is
             // slow or broken, a server with both kinds of address is otherwise tried over IPv6
             // first, and every channel waits for that attempt to give up.
-            .dns(LiveTvDns.shared)
+            .dns(FastDns.shared)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)

@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.player
 
 import android.os.SystemClock
+import com.nuvio.tv.core.network.FastDns
 import okhttp3.Call
 import okhttp3.Connection
 import okhttp3.EventListener
@@ -103,6 +104,8 @@ internal class PlaybackConnectionEventListener(
         val currentHost = host ?: "unknown"
         val msg = "NET_CONN id=$id connectFailed after ${connMs}ms host=$currentHost err=${ioe.message}"
         PlaybackConnectionEvents.recordEvent(msg)
+        // An address that could not be reached is looked up again next time.
+        FastDns.shared.forget(call.request().url.host)
     }
 
     override fun connectionAcquired(call: Call, connection: Connection) {

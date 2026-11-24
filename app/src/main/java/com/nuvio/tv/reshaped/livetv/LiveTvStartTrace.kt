@@ -23,6 +23,7 @@ import androidx.media3.extractor.PositionHolder
 import androidx.media3.extractor.SeekMap
 import androidx.media3.extractor.TrackOutput
 import androidx.media3.extractor.text.SubtitleParser
+import com.nuvio.tv.core.network.FastDns
 import com.nuvio.tv.R
 import java.io.IOException
 import java.net.InetAddress
@@ -397,8 +398,8 @@ internal class TracingNetworkEvents(private val trace: LiveTvStartTrace) : Event
         trace.netStepDone()
         trace.connectionFailed(ioe)
         // An address that could not be reached is looked up again next time.
-        inetSocketAddress.hostString?.let(LiveTvDns.shared::forget)
-        call.request().url.host.let(LiveTvDns.shared::forget)
+        inetSocketAddress.hostString?.let(FastDns.shared::forget)
+        call.request().url.host.let(FastDns.shared::forget)
     }
 
     override fun secureConnectEnd(call: Call, handshake: Handshake?) = Unit
