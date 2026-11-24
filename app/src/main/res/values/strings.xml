@@ -1041,6 +1041,8 @@
     <string name="sub_libass_render_mode_overlay_sub">Renders subtitles on a separate surface layer. Preserves HDR output. Subtitle timing may not be perfectly accurate on some devices.</string>
     <string name="sub_libass_render_mode_cpu_blend">Overlay (CPU Blend)</string>
     <string name="sub_libass_render_mode_cpu_blend_sub">Renders subtitles using NEON-optimized CPU blending directly into the overlay surface. Zero GPU usage, may perform better on devices with weak GPUs.</string>
+    <string name="sub_libass_render_mode_gpu_blend">Overlay (GPU Blend)</string>
+    <string name="sub_libass_render_mode_gpu_blend_sub">Blends subtitles on the graphics card into the overlay surface, timed to each video frame. Preserves HDR output and takes less CPU time than CPU Blend. Switch back if subtitles look wrong.</string>
     <string name="sub_org_none">None (default order)</string>
     <string name="sub_org_by_lang">By language</string>
     <string name="sub_org_by_addon">By addon</string>

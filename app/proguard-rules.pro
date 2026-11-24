@@ -152,3 +152,20 @@
 
 -dontwarn java.beans.ConstructorProperties
 -dontwarn java.beans.Transient
+# libass Overlay (GPU Blend): its JNI, and the nuvio-libass members AssGpuBlendSurfaceView reads by
+# reflection, as AssRender's CPU blend does natively.
+-keepclasseswithmembernames class com.nuvio.tv.core.player.libass.AssGpuBlendNative {
+    native <methods>;
+}
+-keepclassmembers class com.nuvio.tv.libass.AssRender {
+    private java.util.concurrent.locks.ReentrantLock lock;
+    private long nativeRender;
+    private com.nuvio.tv.libass.AssTrack track;
+}
+-keepclassmembers class com.nuvio.tv.libass.AssTrack {
+    public void drainPendingChunks$nuvio_libass_release();
+}
+-keep class com.nuvio.tv.libass.media.widget.AssAtlasPipelineConfig {
+    public static ** INSTANCE;
+    public float getRenderScale$nuvio_libass_release();
+}

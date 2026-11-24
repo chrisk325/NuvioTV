@@ -187,6 +187,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.media3.exoplayer.ExoPlayer
 import com.nuvio.tv.libass.media.widget.AssSubtitleSurfaceView
 import com.nuvio.tv.libass.media.widget.AssCpuBlendSurfaceView
+import com.nuvio.tv.core.player.libass.AssGpuBlendSurfaceView
 import kotlin.math.abs
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -2819,7 +2820,8 @@ private fun PlayerView.syncLibassOverlay(
     // OVERLAY mode skips setVideoEffects entirely so HDR passthrough is preserved.
     // VIDEO_EFFECT (default) draws subtitles onto the video frame - no overlay needed.
     val useCpuBlend = renderMode == LibassRenderMode.OVERLAY_CPU_BLEND
-    val needsOverlay = enabled && (renderMode == LibassRenderMode.OVERLAY || useCpuBlend)
+    val useGpuBlend = renderMode == LibassRenderMode.OVERLAY_GPU_BLEND
+    val needsOverlay = enabled && (renderMode == LibassRenderMode.OVERLAY || useCpuBlend || useGpuBlend)
     val boundPlayer = getTag(R.id.libass_overlay_bound_player) as? ExoPlayer
     val hasOverlayChild = overlayContainer.hasAssOverlayChild()
 
@@ -2835,7 +2837,9 @@ private fun PlayerView.syncLibassOverlay(
     }
 
     val assHandler = player.getAssHandlerCompat() ?: return
-    val overlayMatchesMode = (overlayContainer.findAssOverlayChild() is AssCpuBlendSurfaceView) == useCpuBlend
+    val currentOverlay = overlayContainer.findAssOverlayChild()
+    val overlayMatchesMode = (currentOverlay is AssCpuBlendSurfaceView) == useCpuBlend &&
+        (currentOverlay is AssGpuBlendSurfaceView) == useGpuBlend
     if (boundPlayer === player && hasOverlayChild && overlayMatchesMode) {
         return
     }
@@ -2849,6 +2853,23 @@ private fun PlayerView.syncLibassOverlay(
         }
         overlayContainer.addView(
             cpuBlendView,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        setTag(R.id.libass_overlay_bound_player, player)
+        post { syncLibassOverlayGeometry() }
+        return
+    }
+    if (useGpuBlend) {
+        // GPU-blended overlay: libass's masks in an atlas, blended as tinted quads, frame-stamped.
+        val gpuBlendView = AssGpuBlendSurfaceView(overlayContainer.context, assHandler)
+        assHandler.videoFrameCallback = { presentationTimeUs, releaseTimeNs ->
+            gpuBlendView.requestRender(presentationTimeUs, releaseTimeNs)
+        }
+        overlayContainer.addView(
+            gpuBlendView,
             android.widget.FrameLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -2879,7 +2900,7 @@ private fun PlayerView.syncLibassOverlay(
 private fun android.widget.FrameLayout.hasAssOverlayChild(): Boolean {
     for (index in 0 until childCount) {
         val child = getChildAt(index)
-        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView) {
+        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView || child is AssGpuBlendSurfaceView) {
             return true
         }
     }
@@ -2889,7 +2910,7 @@ private fun android.widget.FrameLayout.hasAssOverlayChild(): Boolean {
 private fun android.widget.FrameLayout.findAssOverlayChild(): android.view.View? {
     for (index in 0 until childCount) {
         val child = getChildAt(index)
-        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView) {
+        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView || child is AssGpuBlendSurfaceView) {
             return child
         }
     }
@@ -2900,13 +2921,14 @@ private fun android.view.View.invalidateAssOverlay() {
     when (this) {
         is AssSubtitleSurfaceView -> invalidateSubtitles()
         is AssCpuBlendSurfaceView -> invalidateSubtitles()
+        is AssGpuBlendSurfaceView -> invalidateSubtitles()
     }
 }
 
 private fun android.widget.FrameLayout.removeAssOverlayChildren() {
     for (index in childCount - 1 downTo 0) {
         val child = getChildAt(index)
-        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView) {
+        if (child is AssSubtitleSurfaceView || child is AssCpuBlendSurfaceView || child is AssGpuBlendSurfaceView) {
             removeViewAt(index)
         }
     }

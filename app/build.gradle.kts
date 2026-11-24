@@ -219,9 +219,11 @@ android {
         buildConfigField("String", "DEVICE_LOGIN_WEB_BASE_URL", "\"${localProperties.getProperty("DEVICE_LOGIN_WEB_BASE_URL", "https://nuvio.tv/link")}\"")
         buildConfigField("boolean", "DOVI_NATIVE_ENABLED", enableDoviNative.toString())
         buildConfigField("boolean", "DOVI_EXTRACTOR_HOOK_READY", doviExtractorHookReady.toString())
-        if (enableDoviNative) {
-            externalNativeBuild {
-                cmake {
+        externalNativeBuild {
+            cmake {
+                // libass's GPU blend is always built; the Dolby Vision bridge only where it is enabled.
+                arguments("-DNUVIO_DOVI_BRIDGE=${if (enableDoviNative) "ON" else "OFF"}")
+                if (enableDoviNative) {
                     arguments(
                         "-DDOVI_ENABLE_LIBDOVI=${if (doviEnableRealLink) "ON" else "OFF"}",
                         "-DDOVI_LIBDOVI_STATIC_LIB=${cmakePath(doviStaticLibPath)}",
@@ -268,11 +270,9 @@ android {
         }
     }
 
-    if (enableDoviNative) {
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-            }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
         }
     }
 

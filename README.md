@@ -46,6 +46,12 @@ This fork of [NuvioMedia/NuvioTV](https://github.com/NuvioMedia/NuvioTV) adds th
 - Subtitles are blended into the overlay surface with NEON-optimised CPU code and use no GPU. This can run better on devices with weak GPUs, and it keeps HDR output.
 - Choose it in the subtitle settings under **ASS Render Mode**.
 
+### 💬 libass GPU blend render mode
+- A new **Overlay (GPU Blend)** ASS render mode, ported from Nuvio Mobile's libmpv libass overlay.
+- libass's glyph masks are uploaded into a texture atlas and the GPU blends them as tinted quads. Each overlay buffer is stamped with its video frame's display time, so subtitles and video show together. HDR output is kept.
+- It uses less CPU than CPU Blend. If GL can't start on a device, it falls back to CPU blending.
+- Choose it in the subtitle settings under **ASS Render Mode**. The CPU Blend and other modes are unchanged.
+
 ###    • anilist as a tracker
 
 ### Other fixes

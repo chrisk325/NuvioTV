@@ -1,6 +1,21 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(dovi_bridge LANGUAGES C CXX)
 
+# libass's Overlay (GPU Blend) render mode, ported from NuvioMobile's libmpv libass overlay.
+# ass/ holds libass's public headers, 0.17.4's layout as nuvio-libass's libasskt.so carries it;
+# the library itself is loaded from libasskt.so at runtime.
+add_library(nuvio_ass_gpu SHARED
+    subtitles/gpu_blend.c subtitles/masks.c subtitles/blend.c subtitles/gl.c subtitles/gl_masks.c)
+target_compile_options(nuvio_ass_gpu PRIVATE -O3 -Wall -fvisibility=hidden)
+target_link_libraries(nuvio_ass_gpu PRIVATE android dl log EGL GLESv2)
+target_link_options(nuvio_ass_gpu PRIVATE "-Wl,-z,max-page-size=16384")
+
+# The Dolby Vision bridge is built only where the app enables it (it needs DV7/libdovi).
+option(NUVIO_DOVI_BRIDGE "Build the Dolby Vision native bridge" ON)
+if (NOT NUVIO_DOVI_BRIDGE)
+    return()
+endif()
+
 option(DOVI_ENABLE_LIBDOVI "Link against a real libdovi static library" OFF)
 set(DOVI_LIBDOVI_STATIC_LIB "" CACHE FILEPATH "Path to libdovi static archive (.a)")
 set(DOVI_LIBDOVI_INCLUDE_DIR "" CACHE PATH "Path to libdovi C headers")
