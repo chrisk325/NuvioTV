@@ -55,6 +55,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class CalendarEntry(val show: MetaPreview, val video: Video, val releaseEpochMs: Long)
@@ -92,7 +94,10 @@ private const val NUVIO_COLLECTIONS_KEY = "collections.imported.v1"
 /** Longest wait for a media server to describe a title before TMDB is used instead. */
 private const val SERVER_LOOKUP_MS = 8_000L
 /** Shows looked up per sync for up next air dates the trackers don't give. */
-private const val MAX_AIR_DATE_LOOKUPS = 40
+private const val MAX_AIR_DATE_LOOKUPS = 120
+private const val AIR_DATE_PARALLEL = 6
+private const val AIR_DATE_RETRIES = 2
+private const val AIR_DATE_RETRY_DELAY_MS = 30_000L
 
 /**
  * Single entry point for platform UIs (the tvOS SwiftUI app). Everything here is plain classes,
@@ -825,6 +830,9 @@ class NuvioCore(
         }?.toMap()?.toMutableMap() ?: mutableMapOf()
     /** Looked up this run without a date; asked again next launch. */
     private val airDateMisses = mutableSetOf<String>()
+    private val airDateLock = kotlinx.coroutines.sync.Mutex()
+    /** A refresh was asked for while one was running: run again when it ends (new up next entries). */
+    private var airDateRerun = false
     private val upNext = kotlinx.coroutines.flow.MutableStateFlow(loadUpNext())
     private var dismissedUpNext: Set<String> =
         store.getString("upnext.dismissed")?.split('\n')?.filter { it.isNotBlank() }?.toSet().orEmpty()
@@ -851,36 +859,75 @@ class NuvioCore(
     /**
      * Fills in air dates the trackers don't give, from each show's episode list (one lookup per
      * show, then kept), so unaired episodes can go to the Upcoming row and show "Airs …".
+     * Several shows are looked up at once and the row updates as dates come in. A lookup that
+     * fails (add-on slow or down) is tried again on the next refresh; only a show whose episode
+     * list really has no date waits for the next launch. One refresh runs at a time.
      */
-    private suspend fun refreshAirDates() {
+    internal suspend fun refreshAirDates() {
+        if (!airDateLock.tryLock()) {
+            airDateRerun = true
+            return
+        }
+        try {
+            var retries = 0
+            do {
+                airDateRerun = false
+                // Shows whose lookup failed are tried again shortly (twice), not only at the next sync.
+                if (lookUpAirDates() && retries++ < AIR_DATE_RETRIES) {
+                    kotlinx.coroutines.delay(AIR_DATE_RETRY_DELAY_MS)
+                    airDateRerun = true
+                }
+            } while (airDateRerun)
+        } finally {
+            airDateLock.unlock()
+        }
+    }
+
+    /** Returns true when some lookups failed (worth another try). */
+    private suspend fun lookUpAirDates(): Boolean {
         val missing = upNext.value
             .filter { it.releasedAtMs == null && it.episode != null && upNextKey(it) !in airDateMisses }
             .distinctBy { it.contentId }
             .take(MAX_AIR_DATE_LOOKUPS)
-        if (missing.isEmpty()) return
-        var found = false
-        for (show in missing) {
-            val meta = try {
-                meta(show.contentType, show.contentId, null)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
+        if (missing.isEmpty()) return false
+        var failed = false
+        for (batch in missing.chunked(AIR_DATE_PARALLEL)) {
+            val metas = kotlinx.coroutines.coroutineScope {
+                batch.map { show ->
+                    async {
+                        show to try {
+                            meta(show.contentType, show.contentId, null)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }.awaitAll()
             }
-            for (entry in upNext.value.filter { it.contentId == show.contentId && it.releasedAtMs == null }) {
-                val video = meta?.videos?.firstOrNull { it.id == entry.videoId }
-                    ?: meta?.videos?.firstOrNull { it.episode == entry.episode && (entry.season == null || it.season == entry.season) }
-                val released = video?.released?.let { com.nuvio.shared.util.parseReleaseEpochMs(it) }
-                if (released != null) {
-                    airDates[upNextKey(entry)] = released
-                    found = true
-                } else {
-                    airDateMisses += upNextKey(entry)
+            var found = false
+            for ((show, meta) in metas) {
+                // Lookup failed: no verdict, so it's asked again next time.
+                if (meta == null) { failed = true; continue }
+                for (entry in upNext.value.filter { it.contentId == show.contentId && it.releasedAtMs == null }) {
+                    val video = meta.videos.firstOrNull { it.id == entry.videoId }
+                        ?: meta.videos.firstOrNull { it.episode == entry.episode && (entry.season == null || it.season == entry.season) }
+                    val released = video?.released?.let { com.nuvio.shared.util.parseReleaseEpochMs(it) }
+                    if (released != null) {
+                        airDates[upNextKey(entry)] = released
+                        found = true
+                    } else {
+                        airDateMisses += upNextKey(entry)
+                    }
                 }
             }
+            if (found) saveAirDates()
         }
-        if (!found) return
-        // Only dates still in use are kept.
+        return failed
+    }
+
+    /** Keeps the dates still in use and shows them (the Upcoming row updates). */
+    private fun saveAirDates() {
         val keys = upNextSources.flatMap(::storedUpNext).map(::upNextKey).toSet()
         airDates.keys.retainAll(keys)
         store.putString("upnext.airdates", airDates.entries.joinToString("\n") { "${it.key}|${it.value}" })
