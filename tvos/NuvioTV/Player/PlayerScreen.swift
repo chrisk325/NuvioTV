@@ -53,14 +53,14 @@ struct PlayerScreen: View {
                 })
 
             // Invisible focus target while the controls are hidden.
-            Button(action: { showControls(focusScrubber: true) }) { Color.clear }
+            Button(action: { if !model.isStarting { showControls(focusScrubber: true) } }) { Color.clear }
                 .buttonStyle(InvisibleButtonStyle())
                 .focused($focus, equals: .catcher)
                 .onMoveCommand(perform: handleMoveWhileHidden)
                 .disabled(controlsVisible || panel != nil)
                 .ignoresSafeArea()
 
-            if model.isBuffering && !model.isPaused && model.errorMessage == nil {
+            if model.isBuffering && !model.isPaused && model.errorMessage == nil && !model.isStarting {
                 ProgressView().scaleEffect(1.6)
             }
 
@@ -124,16 +124,29 @@ struct PlayerScreen: View {
                 .transition(.move(edge: .trailing))
             }
 
+            // Opening a stream (loading, frame-rate / HDR switch, first frames): a cover instead of a
+            // frozen first frame; the video appears once it is really playing.
+            if model.isStarting && model.errorMessage == nil {
+                StartingCover(meta: (model.request ?? request).meta, title: (model.request ?? request).title)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
             if let error = model.errorMessage {
                 errorOverlay(error)
             }
         }
+        .animation(.easeOut(duration: 0.35), value: model.isStarting)
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: panel)
         .animation(.easeInOut(duration: 0.25), value: model.autoSkipNotice)
         .onAppear {
             model.start(request, core: app.core)
-            showControls(focusScrubber: true)
+            // The controls come up once the video is showing (see isStarting below).
+            if model.isStarting { focus = .catcher } else { showControls(focusScrubber: true) }
+        }
+        .onChange(of: model.isStarting) { _, starting in
+            if !starting { showControls(focusScrubber: true) }
         }
         .onDisappear { model.stop() }
         .onPlayPauseCommand {
@@ -532,6 +545,7 @@ struct PlayerScreen: View {
     }
 
     private func handleMoveWhileHidden(_ direction: MoveCommandDirection) {
+        if model.isStarting { return }
         if model.request?.isLive == true {
             switch direction {
             case .up: model.zap(by: -1); return
@@ -771,5 +785,36 @@ private struct PlayerControlLabel: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: expanded)
+    }
+}
+
+
+/// Shown while a stream opens: the title's artwork, its logo or name, and a spinner.
+private struct StartingCover: View {
+    let meta: Meta
+    let title: String
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if let backdrop = meta.backdropUrl {
+                RemoteImage(url: backdrop)
+                    .opacity(0.35)
+                    .blur(radius: 8)
+            }
+            VStack(spacing: 40) {
+                if let logo = meta.logo {
+                    RemoteImage(url: logo, contentMode: .fit)
+                        .frame(maxWidth: 700, maxHeight: 220)
+                } else {
+                    Text(title)
+                        .font(.title2.bold())
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 120)
+                }
+                ProgressView().scaleEffect(1.6)
+            }
+        }
+        .ignoresSafeArea()
     }
 }

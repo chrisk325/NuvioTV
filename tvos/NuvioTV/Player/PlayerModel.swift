@@ -119,6 +119,13 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     private var holdingForDisplay = false
     private var displayHoldTask: Task<Void, Never>?
 
+    /// A new stream is opening: loading, the TV's frame-rate / HDR switch, the first frames. The
+    /// screen covers the video until it really plays, so there's no frozen first frame or stall.
+    @Published private(set) var isStarting = false
+    /// Where playback was seen moving from (nil until it plays); start ends after 0.3 s of play.
+    private var startingAnchor: Double?
+    private var startingTimeout: Task<Void, Never>?
+
     private var playerWindow: UIWindow? {
         window ?? UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -222,6 +229,18 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         audioTracks = []
         subtitleTracks = []
         displayHoldTask?.cancel()
+        // Streams (not live channels, which zap quickly) open behind the starting cover.
+        isStarting = !request.isLive
+        startingAnchor = nil
+        startingTimeout?.cancel()
+        if isStarting {
+            // Never cover forever (a stream that never starts shows its error or the player).
+            startingTimeout = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 25_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.finishStarting()
+            }
+        }
         holdingForDisplay = playerWindow?.avDisplayManager.isDisplayCriteriaMatchingEnabled == true
         // Paused before loading, so the first frame waits for the display switch.
         controller.setPaused(holdingForDisplay)
@@ -253,6 +272,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         streamSubscription = nil
         displayHoldTask?.cancel()
         holdingForDisplay = false
+        finishStarting()
         controller.pause()
         controller.destroy()
         DisplayCriteria.reset(displayManager)
@@ -522,6 +542,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         if isBuffering != buffering { isBuffering = buffering }
         if speed != snapshot.speed { speed = snapshot.speed }
         updateDerivedState()
+        trackStart(snapshot)
         if duration > 0 { saveProgress() }
         if let request, request.tracksProgress, duration > 0, skipLoadedFor != request.id, let core {
             skipLoadedFor = request.id
@@ -569,6 +590,27 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         }
     }
 
+    private func finishStarting() {
+        startingTimeout?.cancel()
+        startingTimeout = nil
+        startingAnchor = nil
+        if isStarting { isStarting = false }
+    }
+
+    /// While starting: done once the video has really played for 0.3 s (after the display switch).
+    private func trackStart(_ snapshot: MPVController.Snapshot) {
+        guard isStarting else { return }
+        if holdingForDisplay || snapshot.isPaused || snapshot.isBuffering {
+            startingAnchor = nil
+            return
+        }
+        guard let anchor = startingAnchor else {
+            startingAnchor = snapshot.position
+            return
+        }
+        if snapshot.position >= anchor + 0.3 { finishStarting() }
+    }
+
     /// Starts playback after the display switch (or the safety timeout, or the user pressing play).
     private func endDisplayHold() {
         guard holdingForDisplay else { return }
@@ -588,6 +630,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     }
 
     func mpvDidFail(_ message: String) {
+        finishStarting()
         errorMessage = "mpv couldn't open this stream (\(message))."
     }
 }
