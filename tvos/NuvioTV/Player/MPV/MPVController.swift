@@ -199,6 +199,15 @@ final class MPVController {
         set(option: "demuxer-max-back-bytes", "100MiB")
         set(option: "demuxer-readahead-secs", "20")
         set(option: "network-timeout", "30")
+        // Faster start:
+        // - resuming jumps to the keyframe before the saved spot instead of decoding every frame
+        //   up to it (seconds on 4K HEVC); user seeks already go by keyframes.
+        set(option: "hr-seek", "no")
+        // - TS / HLS streams (live channels too) are probed for 1 s instead of ffmpeg's 5 s.
+        set(option: "demuxer-lavf-analyzeduration", "1")
+        // - playback starts once a little is buffered, so it doesn't stall right after starting.
+        set(option: "cache-pause-initial", "yes")
+        set(option: "cache-pause-wait", "1.5")
         set(option: "user-agent", "Mozilla/5.0 (AppleTV) NuvioTV")
         set(option: "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
 

@@ -118,6 +118,8 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     /// black flash mid-scene).
     private var holdingForDisplay = false
     private var displayHoldTask: Task<Void, Never>?
+    /// The display criteria the hold is waiting on ("fps|gamma"); the same values again don't restart it.
+    private var heldCriteria: String?
 
     /// A new stream is opening: loading, the TV's frame-rate / HDR switch, the first frames. The
     /// screen covers the video until it really plays, so there's no frozen first frame or stall.
@@ -229,6 +231,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         audioTracks = []
         subtitleTracks = []
         displayHoldTask?.cancel()
+        heldCriteria = nil
         // Streams (not live channels, which zap quickly) open behind the starting cover.
         isStarting = !request.isLive
         startingAnchor = nil
@@ -302,14 +305,30 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         let preferred = [settings.subtitleLanguage, settings.secondarySubtitleLanguage]
             .filter { !$0.isEmpty }
             .map { $0.lowercased() }
-        let ranked = list.sorted { a, b in
+        let ranked = Array(list.sorted { a, b in
             rank(a.lang, preferred) < rank(b.lang, preferred)
-        }.prefix(60)
-        for subtitle in ranked {
-            let label = "\(SubtitleLanguages.name(subtitle.lang)) · \(subtitle.addonName)"
-            controller.addSubtitle(url: subtitle.url, title: label, lang: subtitle.lang)
+        }.prefix(60))
+        // The files are fetched here, after the video is playing, and handed to mpv as local
+        // files: mpv fetching dozens of them itself competed with the stream while it started
+        // and could hold up the picture for seconds.
+        while isStarting && self.request?.id == request.id && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        addonSubtitleCount = ranked.count
+        guard self.request?.id == request.id else { return }
+        // Six at a time, best matches first; each batch shows in the menu as soon as it's in.
+        let folder = SubtitleFiles.newFolder()
+        var start = 0
+        while start < ranked.count {
+            let batch = Array(ranked[start..<min(start + 6, ranked.count)])
+            let files = await SubtitleFiles.download(batch.map(\.url), firstIndex: start, into: folder)
+            guard self.request?.id == request.id else { return }
+            for (offset, subtitle) in batch.enumerated() {
+                let label = "\(SubtitleLanguages.name(subtitle.lang)) · \(subtitle.addonName)"
+                controller.addSubtitle(url: files[offset] ?? subtitle.url, title: label, lang: subtitle.lang)
+            }
+            start += batch.count
+            addonSubtitleCount = start
+        }
         // Give mpv a moment to list the added files, then settle the remembered choice.
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         guard self.request?.id == request.id else { return }
@@ -565,16 +584,20 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
     func mpvVideoParamsChanged(fps: Double, gamma: String?, primaries: String?, frameReady: Bool) {
         // During the hold, wait for the first decoded frame so SDR / HDR is known: one switch, not two.
         if holdingForDisplay && !frameReady { return }
+        let criteria = "\(fps.isFinite ? Int((fps * 100).rounded()) : 0)|\(gamma ?? "")"
+        // mpv reports the same parameters several times while starting: don't restart the wait.
+        if holdingForDisplay && criteria == heldCriteria && displayHoldTask != nil { return }
         let manager = DisplayCriteria.apply(fps: fps, gamma: gamma, in: playerWindow)
         if let manager { displayManager = manager }
         guard holdingForDisplay else { return }
+        heldCriteria = criteria
         displayHoldTask?.cancel()
         displayHoldTask = Task { @MainActor [weak self] in
             if let manager {
                 // The switch starts shortly after the criteria change (none if the TV is already
                 // in that mode); then wait for it to finish, and a moment for the TV to show picture.
                 var waited = 0
-                while !manager.isDisplayModeSwitchInProgress && waited < 8 {
+                while !manager.isDisplayModeSwitchInProgress && waited < 5 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     waited += 1
                 }
@@ -583,7 +606,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     switching += 1
                 }
-                if switching > 0 { try? await Task.sleep(nanoseconds: 600_000_000) }
+                if switching > 0 { try? await Task.sleep(nanoseconds: 400_000_000) }
             }
             guard !Task.isCancelled else { return }
             self?.endDisplayHold()
@@ -597,7 +620,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
         if isStarting { isStarting = false }
     }
 
-    /// While starting: done once the video has really played for 0.3 s (after the display switch).
+    /// While starting: done once the video has really played for 0.15 s (after the display switch).
     private func trackStart(_ snapshot: MPVController.Snapshot) {
         guard isStarting else { return }
         if holdingForDisplay || snapshot.isPaused || snapshot.isBuffering {
@@ -608,7 +631,7 @@ final class PlayerModel: ObservableObject, MPVControllerDelegate {
             startingAnchor = snapshot.position
             return
         }
-        if snapshot.position >= anchor + 0.3 { finishStarting() }
+        if snapshot.position >= anchor + 0.15 { finishStarting() }
     }
 
     /// Starts playback after the display switch (or the safety timeout, or the user pressing play).
@@ -654,5 +677,53 @@ enum SubtitleLanguages {
     static func name(_ code: String) -> String {
         let normalized = normalize(code)
         return Locale.current.localizedString(forLanguageCode: normalized) ?? code
+    }
+}
+
+
+/// Add-on subtitle files fetched ahead of handing them to mpv (a few at a time, in the background).
+enum SubtitleFiles {
+    private static let root = FileManager.default.temporaryDirectory.appendingPathComponent("addon-subtitles", isDirectory: true)
+    private static let knownExtensions: Set<String> = ["srt", "vtt", "ass", "ssa", "sub", "smi", "ttml", "dfxp"]
+
+    /// A fresh folder for one video's subtitles (earlier videos' files are cleared).
+    static func newFolder() -> URL {
+        try? FileManager.default.removeItem(at: root)
+        let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    /// Downloads [urls] at once; local paths in the same order, nil where a download failed
+    /// (mpv then gets the address).
+    static func download(_ urls: [String], firstIndex: Int, into folder: URL) async -> [String?] {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        var results = [String?](repeating: nil, count: urls.count)
+        await withTaskGroup(of: (Int, String?).self) { group in
+            for (offset, address) in urls.enumerated() {
+                group.addTask { (offset, await fetch(address, name: firstIndex + offset, folder: folder, session: session)) }
+            }
+            for await (offset, path) in group { results[offset] = path }
+        }
+        return results
+    }
+
+    private static func fetch(_ address: String, name index: Int, folder: URL, session: URLSession) async -> String? {
+        guard let url = URL(string: address), url.scheme?.hasPrefix("http") == true else { return nil }
+        guard let (data, response) = try? await session.data(from: url),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+              !data.isEmpty else { return nil }
+        let ext = url.pathExtension.lowercased()
+        let name = knownExtensions.contains(ext) ? "\(index).\(ext)" : "\(index)"
+        let file = folder.appendingPathComponent(name)
+        do {
+            try data.write(to: file)
+            return file.path
+        } catch {
+            return nil
+        }
     }
 }
