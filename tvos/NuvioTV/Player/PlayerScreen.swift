@@ -249,13 +249,6 @@ struct PlayerScreen: View {
             .liquidGlass(in: RoundedRectangle(cornerRadius: 44, style: .continuous), tint: .black.opacity(0.2))
             .padding(.horizontal, 60)
             .padding(.bottom, 50)
-            // The shade spans the whole width (it used to stop at the dock's edge, a dark box).
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
-                    .padding(.top, -120) // a longer, softer fade above the dock
-                    .ignoresSafeArea()
-            )
         }
         .ignoresSafeArea()
     }
