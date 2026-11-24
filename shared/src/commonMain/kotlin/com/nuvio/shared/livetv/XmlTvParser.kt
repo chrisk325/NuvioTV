@@ -1,38 +1,105 @@
 package com.nuvio.shared.livetv
 
-/**
- * Small streaming-ish XMLTV reader (no XML library in common code): scans `<channel>` and
- * `<programme>` elements and keeps programmes for the wanted guide keys within a time window.
- */
+/** Parses a whole XMLTV document (kept for small guides and tests); see [XmlTvStreamParser]. */
 fun parseXmlTv(
     xml: String,
     wantedKeys: Set<String>,
     nameToKey: Map<String, String>,
     windowStartMs: Long,
     windowEndMs: Long
-): Map<String, List<LiveTvProgramme>> {
-    // A plain scan with indexOf (no regular expressions over the whole file): big guides parse
-    // fast, with little memory and no deep recursion on a background thread's small stack.
+): Map<String, List<LiveTvProgramme>> =
+    XmlTvStreamParser(wantedKeys, nameToKey, windowStartMs, windowEndMs).apply { feed(xml) }.finish()
+
+/**
+ * XMLTV read piece by piece: [feed] it text as it downloads; complete `<channel>` and
+ * `<programme>` elements are processed and dropped at once, so only the unfinished tail and the
+ * programmes kept (wanted channels, inside the time window) stay in memory — never the file.
+ * Channels come before programmes in XMLTV; a programme for a channel not seen yet still matches
+ * by its id.
+ */
+class XmlTvStreamParser(
+    private val wantedKeys: Set<String>,
+    private val nameToKey: Map<String, String>,
+    private val windowStartMs: Long,
+    private val windowEndMs: Long
+) {
     // Guide channel id → our guide keys (by id, or by display-name match).
-    val idToKeys = HashMap<String, MutableSet<String>>()
-    forEachElement(xml, "channel") { attrs, body ->
-        val id = parseM3uAttributes(attrs)["id"]?.trim()?.lowercase() ?: return@forEachElement
+    private val idToKeys = HashMap<String, MutableSet<String>>()
+    private val result = HashMap<String, MutableList<LiveTvProgramme>>()
+    private val pending = StringBuilder()
+
+    fun feed(text: String) {
+        if (text.isEmpty()) return
+        pending.append(text)
+        drain()
+    }
+
+    fun finish(): Map<String, List<LiveTvProgramme>> {
+        drain()
+        pending.clear()
+        return result.mapValues { (_, list) -> list.sortedBy { it.startEpochMs }.distinctBy { it.startEpochMs } }
+    }
+
+    /** Handles every complete element in [pending] and keeps only what may still be incomplete. */
+    private fun drain() {
+        var pos = 0
+        val text = pending
+        while (true) {
+            val channelAt = indexOfTag(text, "<channel", pos)
+            val programmeAt = indexOfTag(text, "<programme", pos)
+            val start = when {
+                channelAt < 0 -> programmeAt
+                programmeAt < 0 -> channelAt
+                else -> minOf(channelAt, programmeAt)
+            }
+            if (start < 0) {
+                // Nothing starts here; keep a short tail in case a tag name was cut in two.
+                pos = maxOf(pos, text.length - 16)
+                break
+            }
+            val isChannel = start == channelAt
+            val nameLength = if (isChannel) "<channel".length else "<programme".length
+            val tagEnd = text.indexOf(">", start + nameLength)
+            if (tagEnd < 0) { pos = start; break }
+            val attrs: String
+            val body: String
+            val next: Int
+            if (text[tagEnd - 1] == '/') {
+                attrs = text.substring(start + nameLength, tagEnd - 1)
+                body = ""
+                next = tagEnd + 1
+            } else {
+                val close = if (isChannel) "</channel>" else "</programme>"
+                val end = text.indexOf(close, tagEnd + 1)
+                if (end < 0) { pos = start; break }
+                attrs = text.substring(start + nameLength, tagEnd)
+                body = text.substring(tagEnd + 1, end)
+                next = end + close.length
+            }
+            if (isChannel) channel(attrs, body) else programme(attrs, body)
+            pos = next
+        }
+        if (pos > 0) pending.deleteRange(0, minOf(pos, pending.length))
+    }
+
+    private fun channel(attrText: String, body: String) {
+        val id = parseM3uAttributes(attrText)["id"]?.trim()?.lowercase() ?: return
         val keys = idToKeys.getOrPut(id) { HashSet() }
         if (id in wantedKeys) keys += id
         forEachElement(body, "display-name") { _, name ->
             nameToKey[liveTvNameKey(unescape(name))]?.let { keys += it }
         }
     }
-    val result = HashMap<String, MutableList<LiveTvProgramme>>()
-    forEachElement(xml, "programme") { attrText, body ->
+
+    private fun programme(attrText: String, body: String) {
         val attrs = parseM3uAttributes(attrText)
-        val channel = attrs["channel"]?.trim()?.lowercase() ?: return@forEachElement
-        val keys = idToKeys[channel] ?: if (channel in wantedKeys) setOf(channel) else return@forEachElement
-        if (keys.isEmpty()) return@forEachElement
-        val start = parseXmlTvTime(attrs["start"]) ?: return@forEachElement
+        val channel = attrs["channel"]?.trim()?.lowercase() ?: return
+        val keys = idToKeys[channel] ?: if (channel in wantedKeys) setOf(channel) else return
+        if (keys.isEmpty()) return
+        val start = parseXmlTvTime(attrs["start"]) ?: return
         val stop = parseXmlTvTime(attrs["stop"]) ?: (start + 3_600_000)
-        if (stop < windowStartMs || start > windowEndMs) return@forEachElement
-        val t = innerText(body, "title")?.let(::unescape)?.trim()?.takeIf(String::isNotEmpty) ?: return@forEachElement
+        if (stop < windowStartMs || start > windowEndMs) return
+        val t = innerText(body, "title")?.let(::unescape)?.trim()?.takeIf(String::isNotEmpty) ?: return
         val p = LiveTvProgramme(
             title = t,
             startEpochMs = start,
@@ -42,7 +109,20 @@ fun parseXmlTv(
         )
         keys.forEach { result.getOrPut(it) { ArrayList() } += p }
     }
-    return result.mapValues { (_, list) -> list.sortedBy { it.startEpochMs }.distinctBy { it.startEpochMs } }
+}
+
+/** Where `<name` starts as a whole tag name (not "<programmeX"), from [from]; -1 if not found. */
+private fun indexOfTag(text: CharSequence, open: String, from: Int): Int {
+    var at = from
+    while (true) {
+        val i = text.indexOf(open, at)
+        if (i < 0) return -1
+        val after = i + open.length
+        if (after >= text.length) return i // may be cut off: the caller waits for more text
+        val c = text[after]
+        if (c == '>' || c == '/' || c.isWhitespace()) return i
+        at = after
+    }
 }
 
 /** Calls [block] with each `<tag …>body</tag>` in [text] (attributes text, body); self-closing ones get "". */

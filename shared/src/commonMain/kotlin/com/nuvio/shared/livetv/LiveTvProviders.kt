@@ -12,6 +12,9 @@ import com.nuvio.shared.util.gunzip
 import com.nuvio.shared.util.isGzip
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsBytes
 import io.ktor.http.isSuccess
@@ -30,6 +33,48 @@ internal class LiveTvHttp(private val http: HttpClient) {
     }
 
     suspend fun text(url: String, headers: Map<String, String> = emptyMap()): String = bytes(url, headers).decodeToString()
+
+    /**
+     * Downloads [url] in pieces of about 64 KB and hands each one to [onText] as it arrives, so a
+     * large file (an XMLTV guide) never sits in memory whole. UTF-8 characters split between pieces
+     * are carried over. A gzip file (.xml.gz) is downloaded compressed, then unpacked and handed
+     * over in pieces too.
+     */
+    suspend fun streamText(url: String, headers: Map<String, String> = emptyMap(), onText: (String) -> Unit) {
+        http.prepareGet(url) { headers.forEach { (k, v) -> header(k, v) } }.execute { response ->
+            if (!response.status.isSuccess()) throw LiveTvException("HTTP ${response.status.value} from ${url.substringBefore('?')}")
+            val channel = response.bodyAsChannel()
+            val buffer = ByteArray(CHUNK)
+            val decoder = Utf8ChunkDecoder()
+            var first = true
+            var gzip: ByteArrayBuilder? = null
+            while (true) {
+                val read = channel.readAvailable(buffer, 0, buffer.size)
+                if (read < 0) break
+                if (read == 0) continue
+                if (first) {
+                    first = false
+                    if (read >= 2 && buffer[0] == 0x1f.toByte() && buffer[1] == 0x8b.toByte()) gzip = ByteArrayBuilder()
+                }
+                val packed = gzip
+                if (packed != null) packed.append(buffer, read) else onText(decoder.decode(buffer, read))
+            }
+            gzip?.let { packed ->
+                val data = gunzip(packed.toByteArray())
+                var offset = 0
+                while (offset < data.size) {
+                    val count = minOf(CHUNK * 4, data.size - offset)
+                    onText(decoder.decode(data.copyOfRange(offset, offset + count), count))
+                    offset += count
+                }
+            }
+            onText(decoder.finish())
+        }
+    }
+
+    private companion object {
+        const val CHUNK = 64 * 1024
+    }
 
     suspend fun json(url: String, headers: Map<String, String> = emptyMap()): JsonElement =
         AddonJson.parseToJsonElement(text(url, headers).removePrefix("﻿"))
@@ -280,4 +325,50 @@ fun catchupUrl(channel: LiveTvChannel, source: LiveTvSource?, programme: LiveTvP
             if (channel.streamUrl.contains(".m3u8")) "$base/index-$startS-$durationS.m3u8" else "$base/timeshift_abs-$startS.ts"
         }
     }
+}
+
+
+/** Growable byte buffer (common code has no ByteArrayOutputStream). */
+internal class ByteArrayBuilder {
+    private var bytes = ByteArray(256 * 1024)
+    private var size = 0
+
+    fun append(source: ByteArray, count: Int) {
+        if (size + count > bytes.size) bytes = bytes.copyOf(maxOf(bytes.size * 2, size + count))
+        source.copyInto(bytes, size, 0, count)
+        size += count
+    }
+
+    fun toByteArray(): ByteArray = bytes.copyOf(size)
+}
+
+/** Decodes UTF-8 arriving in pieces: a character cut between two pieces is kept for the next. */
+internal class Utf8ChunkDecoder {
+    private var carry = ByteArray(0)
+
+    fun decode(chunk: ByteArray, count: Int): String {
+        val data = if (carry.isEmpty()) chunk.copyOf(count) else carry + chunk.copyOf(count)
+        // Find where the last (possibly incomplete) character starts.
+        var cut = data.size
+        var back = 0
+        while (back < 4 && cut - back - 1 >= 0) {
+            val b = data[cut - back - 1].toInt() and 0xFF
+            if (b and 0xC0 != 0x80) {
+                val needed = when {
+                    b and 0x80 == 0 -> 1
+                    b and 0xE0 == 0xC0 -> 2
+                    b and 0xF0 == 0xE0 -> 3
+                    b and 0xF8 == 0xF0 -> 4
+                    else -> 1
+                }
+                if (back + 1 < needed) cut -= back + 1
+                break
+            }
+            back++
+        }
+        carry = data.copyOfRange(cut, data.size)
+        return data.decodeToString(0, cut)
+    }
+
+    fun finish(): String = carry.decodeToString().also { carry = ByteArray(0) }
 }

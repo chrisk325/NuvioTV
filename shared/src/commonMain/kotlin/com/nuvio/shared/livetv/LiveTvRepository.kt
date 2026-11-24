@@ -215,9 +215,12 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
             urls.map { (url, headers) ->
                 async {
                     try {
-                        val xml = net.text(url, headers)
+                        // Downloaded and parsed piece by piece, off the main thread: the guide
+                        // file is never held in memory whole.
                         withContext(Dispatchers.Default) {
-                            parseXmlTv(xml, wanted, byName, now - GUIDE_PAST_MS, now + GUIDE_AHEAD_MS)
+                            val parser = XmlTvStreamParser(wanted, byName, now - GUIDE_PAST_MS, now + GUIDE_AHEAD_MS)
+                            net.streamText(url, headers) { piece -> parser.feed(piece) }
+                            parser.finish()
                         }
                     } catch (e: CancellationException) {
                         throw e
