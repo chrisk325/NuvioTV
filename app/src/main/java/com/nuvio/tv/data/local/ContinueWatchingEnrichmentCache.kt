@@ -41,7 +41,9 @@ data class CachedNextUpItem(
     val seedSeason: Int? = null,
     val seedEpisode: Int? = null,
     val contentLanguage: String? = null,
-    val ratingVisible: Boolean = true
+    val ratingVisible: Boolean = true,
+    /** Landscape poster from the meta addon. */
+    val landscapePoster: String? = null
 )
 
 data class CachedInProgressItem(
@@ -65,7 +67,9 @@ data class CachedInProgressItem(
     val genres: List<String> = emptyList(),
     val releaseInfo: String? = null,
     val contentLanguage: String? = null,
-    val ratingVisible: Boolean = true
+    val ratingVisible: Boolean = true,
+    /** Landscape poster from the meta addon. */
+    val landscapePoster: String? = null
 )
 
 @Singleton

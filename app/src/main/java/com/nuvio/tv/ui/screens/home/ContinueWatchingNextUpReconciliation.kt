@@ -124,6 +124,7 @@ internal fun List<ContinueWatchingItem>.toCachedNextUpSnapshot(
     val info = (item as? ContinueWatchingItem.NextUp)?.info?.takeUnless { it.fromServer } ?: return@mapNotNull null
     CachedNextUpItem(
         contentId = info.contentId,
+        landscapePoster = (item as ContinueWatchingItem.NextUp).customLandscapePoster,
         contentType = info.contentType,
         name = info.name,
         poster = info.poster,

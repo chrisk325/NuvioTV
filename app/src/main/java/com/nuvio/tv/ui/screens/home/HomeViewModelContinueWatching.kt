@@ -93,7 +93,9 @@ internal data class CwMetaSummary(
     val imdbRating: Float?,
     val language: String?,
     val country: String?,
-    val videos: List<CwVideoSummary>
+    val videos: List<CwVideoSummary>,
+    /** The addon's landscape poster, shown on Continue Watching cards when present. */
+    val landscapePoster: String? = null
 ) {
     fun watchableEpisodes(): List<CwVideoSummary> {
         val candidates = videos.filter { it.season != null && it.episode != null && (it.season ?: 0) > 0 }
@@ -172,6 +174,7 @@ private fun Meta.toCwSummary(): CwMetaSummary = CwMetaSummary(
     id = id,
     name = name,
     poster = poster,
+    landscapePoster = landscapePoster?.takeIf { it.isNotBlank() },
     backdropUrl = backdropUrl,
     logo = logo,
     description = description,
@@ -395,6 +398,13 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                     cwNoNextUpSeeds.clear()
                     cwNoNextUpSeeds.putAll(storedNoNextUp)
                     cwNoNextUpSeedsProfileId = pipelineProfileId
+                }
+                // Addon landscape posters from the last launch, so cards don't start on the backdrop.
+                cachedInProgress.forEach { cached ->
+                    cached.landscapePoster?.let { cwAddonLandscapePosters.putIfAbsent(cached.contentId, it) }
+                }
+                cachedNextUp.forEach { cached ->
+                    cached.landscapePoster?.let { cwAddonLandscapePosters.putIfAbsent(cached.contentId, it) }
                 }
                 // Build enrichment lookup from cached snapshots (replaces old CwEnrichmentEntry)
                 val cachedEnrichmentFromInProgress = cachedInProgress.associateBy { it.contentId }
@@ -623,6 +633,7 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                             val ipSnap = inProgressOnly.map { item ->
                                 com.nuvio.tv.data.local.CachedInProgressItem(
                                     contentId = item.progress.contentId, contentType = item.progress.contentType,
+                                    landscapePoster = cwAddonLandscapePosters[item.progress.contentId],
                                     name = item.progress.name, poster = item.progress.poster,
                                     backdrop = item.progress.backdrop, logo = item.progress.logo,
                                     videoId = item.progress.videoId, season = item.progress.season,
@@ -1184,6 +1195,7 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                         val info = nu.info
                         com.nuvio.tv.data.local.CachedNextUpItem(
                             contentId = info.contentId, contentType = info.contentType, name = info.name,
+                            landscapePoster = cwAddonLandscapePosters[info.contentId],
                             poster = info.poster, backdrop = info.backdrop, logo = info.logo,
                             videoId = info.videoId, season = info.season, episode = info.episode,
                             episodeTitle = info.episodeTitle, episodeDescription = info.episodeDescription,
@@ -1203,6 +1215,7 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                         val isSeries = p.contentType.let { it == "series" || it == "anime" || it == "tv" }
                         com.nuvio.tv.data.local.CachedInProgressItem(
                             contentId = p.contentId, contentType = p.contentType, name = p.name,
+                            landscapePoster = cwAddonLandscapePosters[p.contentId],
                             poster = p.poster, backdrop = p.backdrop, logo = p.logo,
                             videoId = p.videoId, season = p.season, episode = p.episode,
                             episodeTitle = p.episodeTitle, position = p.position, duration = p.duration,
@@ -1970,7 +1983,7 @@ private suspend fun HomeViewModel.buildNextUpItem(
         contentId = progress.contentId,
         contentType = progress.contentType,
         name = name,
-        poster = progress.poster.normalizeImageUrl() ?: seedMeta?.poster.normalizeImageUrl(),
+        poster = seedMeta?.poster.normalizeImageUrl() ?: progress.poster.normalizeImageUrl(),
         backdrop = progress.backdrop.normalizeImageUrl() ?: seedMeta?.backdropUrl.normalizeImageUrl(),
         logo = progress.logo.normalizeImageUrl() ?: seedMeta?.logo.normalizeImageUrl(),
         videoId = nextUp.videoId,
@@ -2061,7 +2074,9 @@ private suspend fun HomeViewModel.enrichInProgressItem(
     } else null
 
     val settings = currentTmdbSettings
+    rememberAddonLandscapePoster(item.progress.contentId, meta.landscapePoster)
     item.copy(
+        customLandscapePoster = meta.landscapePoster ?: item.customLandscapePoster,
         progress = item.progress.copy(
             videoId = if (item.progress.source != WatchProgress.SOURCE_LOCAL && video != null) {
                 video.id.takeIf { it.isNotBlank() } ?: item.progress.videoId
@@ -2069,7 +2084,8 @@ private suspend fun HomeViewModel.enrichInProgressItem(
                 item.progress.videoId
             },
             name = if (settings.useBasicInfo) tmdbData?.name ?: meta.name else meta.name,
-            poster = item.progress.poster ?: meta.poster.normalizeImageUrl() ?: if (settings.useArtwork) tmdbData?.poster.normalizeImageUrl() else null,
+            // The meta addon's poster wins over the one stored with the progress entry.
+            poster = meta.poster.normalizeImageUrl() ?: item.progress.poster ?: if (settings.useArtwork) tmdbData?.poster.normalizeImageUrl() else null,
             backdrop = if (settings.useArtwork) tmdbData?.backdrop.normalizeImageUrl() ?: meta.backdropUrl.normalizeImageUrl() ?: item.progress.backdrop else meta.backdropUrl.normalizeImageUrl() ?: item.progress.backdrop,
             logo = if (settings.useArtwork) tmdbData?.logo.normalizeImageUrl() ?: meta.logo.normalizeImageUrl() ?: item.progress.logo else meta.logo.normalizeImageUrl() ?: item.progress.logo,
             episodeTitle = if (settings.useEpisodes) tmdbData?.episodeTitle
@@ -2165,9 +2181,11 @@ private suspend fun HomeViewModel.enrichNextUpItem(
     }
 
     val settings = currentTmdbSettings
+    rememberAddonLandscapePoster(item.info.contentId, meta.landscapePoster)
     val enrichedInfo = item.info.copy(
         name = if (settings.useBasicInfo) tmdbData?.name ?: meta.name else meta.name,
-        poster = item.info.poster ?: meta.poster.normalizeImageUrl() ?: if (settings.useArtwork) tmdbData?.poster else null,
+        // The meta addon's poster wins over the one stored with the progress entry.
+        poster = meta.poster.normalizeImageUrl() ?: item.info.poster ?: if (settings.useArtwork) tmdbData?.poster else null,
         backdrop = if (settings.useArtwork) tmdbData?.backdrop ?: meta.backdropUrl.normalizeImageUrl() ?: item.info.backdrop else meta.backdropUrl.normalizeImageUrl() ?: item.info.backdrop,
         logo = if (settings.useArtwork) tmdbData?.logo ?: meta.logo.normalizeImageUrl() ?: item.info.logo else meta.logo.normalizeImageUrl() ?: item.info.logo,
         season = video?.season ?: item.info.season,
@@ -2204,7 +2222,10 @@ private suspend fun HomeViewModel.enrichNextUpItem(
                 "released=${enrichedInfo.released} hasAired=${enrichedInfo.hasAired} title=${enrichedInfo.episodeTitle}"
         )
     }
-    item.copy(info = enrichedInfo)
+    item.copy(
+        info = enrichedInfo,
+        customLandscapePoster = meta.landscapePoster ?: item.customLandscapePoster
+    )
 }
 
 private suspend fun HomeViewModel.findNextUpEpisodeFromMetaSeed(
@@ -2719,6 +2740,7 @@ private fun HomeViewModel.persistLocalContinueWatchingMetadata(
             com.nuvio.tv.data.local.CachedNextUpItem(
                 contentId = info.contentId,
                 contentType = info.contentType,
+                landscapePoster = cwAddonLandscapePosters[info.contentId],
                 name = info.name,
                 poster = info.poster,
                 backdrop = info.backdrop,
@@ -2755,6 +2777,7 @@ private fun HomeViewModel.persistLocalContinueWatchingMetadata(
             com.nuvio.tv.data.local.CachedInProgressItem(
                 contentId = p.contentId,
                 contentType = p.contentType,
+                landscapePoster = cwAddonLandscapePosters[p.contentId],
                 name = p.name,
                 poster = p.poster,
                 backdrop = p.backdrop,
@@ -3458,3 +3481,36 @@ internal fun NextUpInfo.withSeriesFieldsFrom(source: ContinueWatchingItem.InProg
     contentLanguage = source.contentLanguage ?: contentLanguage,
     mdbListRatings = source.mdbListRatings ?: mdbListRatings
 )
+
+/**
+ * Puts the meta addon's landscape poster on each app-built card. Server Next Up cards carry the
+ * server's own artwork and are left alone.
+ */
+internal fun List<ContinueWatchingItem>.withAddonLandscapePosters(
+    posters: Map<String, String>
+): List<ContinueWatchingItem> {
+    if (posters.isEmpty()) return this
+    return map { item ->
+        when (item) {
+            is ContinueWatchingItem.InProgress -> {
+                val poster = posters[item.progress.contentId]
+                if (poster == null || poster == item.customLandscapePoster) item
+                else item.copy(customLandscapePoster = poster)
+            }
+            is ContinueWatchingItem.NextUp -> {
+                val poster = posters[item.info.contentId]
+                if (poster == null || item.info.fromServer || poster == item.customLandscapePoster) item
+                else item.copy(customLandscapePoster = poster)
+            }
+        }
+    }
+}
+
+/** Keeps the addon landscape poster for [contentId] in step with its latest meta. */
+private fun HomeViewModel.rememberAddonLandscapePoster(contentId: String, landscapePoster: String?) {
+    if (landscapePoster.isNullOrBlank()) {
+        cwAddonLandscapePosters.remove(contentId)
+    } else {
+        cwAddonLandscapePosters[contentId] = landscapePoster
+    }
+}

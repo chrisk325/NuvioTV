@@ -20,6 +20,11 @@ import com.nuvio.tv.core.debrid.supports
 import com.nuvio.tv.core.tracking.TrackingListManagementCapabilities
 import com.nuvio.tv.core.tracking.TrackingLibraryProviderRegistry
 import com.nuvio.tv.core.tracking.providerId
+import com.nuvio.tv.core.poster.AddonArtwork
+import com.nuvio.tv.core.poster.AddonArtworkRequest
+import com.nuvio.tv.core.poster.AddonArtworkResolver
+import com.nuvio.tv.core.poster.addonArtworkKey
+import com.nuvio.tv.core.poster.withAddonArtwork
 import com.nuvio.tv.core.poster.withCustomPosterUrls
 import com.nuvio.tv.data.local.DebridSettingsDataStore
 import com.nuvio.tv.data.local.LayoutPreferenceDataStore
@@ -43,6 +48,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -55,6 +61,7 @@ import java.util.Locale
 import javax.inject.Inject
 
 private val YEAR_REGEX = Regex("""\b(19|20)\d{2}\b""")
+private const val ADDON_ARTWORK_DEBOUNCE_MS = 300L
 
 data class LibraryTypeTab(
     val key: String,
@@ -154,7 +161,9 @@ data class LibraryUiState(
     val pendingOperation: Boolean = false,
     val customPosterUrlPattern: String = "",
     val customPosterEnabledScreens: Set<com.nuvio.tv.core.poster.CustomPosterScreen> =
-        com.nuvio.tv.core.poster.CustomPosterScreen.ALL
+        com.nuvio.tv.core.poster.CustomPosterScreen.ALL,
+    /** Posters published by the user's meta addons, keyed by [addonArtworkKey]. */
+    val addonArtwork: Map<String, AddonArtwork> = emptyMap()
 )
 
 @HiltViewModel
@@ -174,6 +183,7 @@ class LibraryViewModel @Inject constructor(
     private val watchedSeriesStateHolder: com.nuvio.tv.data.local.WatchedSeriesStateHolder,
     private val profileManager: com.nuvio.tv.core.profile.ProfileManager,
     val posterOptions: com.nuvio.tv.ui.components.posteroptions.PosterOptionsController,
+    private val addonArtworkResolver: AddonArtworkResolver,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -199,9 +209,15 @@ class LibraryViewModel @Inject constructor(
             profileManager.activeProfileId.collect { profileId ->
                 if (selectedSortOverride?.first != profileId) selectedSortOverride = null
                 onCloseManageLists()
+                // Another profile can have other addons, so its posters are looked up again.
+                _uiState.update { current ->
+                    if (current.addonArtwork.isEmpty()) current
+                    else current.copy(addonArtwork = emptyMap()).withVisibleItems()
+                }
             }
         }
         observeCloudLibrarySettings()
+        observeAddonArtwork()
         viewModelScope.launch {
             watchProgressRepository.observeWatchedMovieIds()
                 .collect { ids ->
@@ -773,6 +789,33 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Looks up the meta addon poster for every title on the visible tab, so the library shows
+     * the same artwork as addon catalogs instead of whatever the tracking provider stored.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun observeAddonArtwork() {
+        viewModelScope.launch {
+            _uiState
+                .map { state ->
+                    // Only ids, so swapping in artwork does not restart the lookup.
+                    state.visibleItems.map { AddonArtworkRequest(type = it.type, id = it.id, imdbId = it.imdbId) }
+                }
+                .distinctUntilChanged()
+                .debounce(ADDON_ARTWORK_DEBOUNCE_MS)
+                .collectLatest { requests ->
+                    if (requests.isEmpty()) return@collectLatest
+                    addonArtworkResolver.resolveInBatches(requests) { batch ->
+                        _uiState.update { current ->
+                            val fresh = batch.filter { (key, artwork) -> current.addonArtwork[key] != artwork }
+                            if (fresh.isEmpty()) current
+                            else current.copy(addonArtwork = current.addonArtwork + fresh).withVisibleItems()
+                        }
+                    }
+                }
+        }
+    }
+
     private fun observeCloudLibrarySettings() {
         viewModelScope.launch {
             debridSettingsDataStore.settings
@@ -1049,7 +1092,9 @@ class LibraryViewModel @Inject constructor(
         val validYear = selectedYear?.takeIf { y -> yearOptions.any { it.key == y } }
 
         return copy(
-            visibleItems = sorted.withCustomPosterUrls(
+            visibleItems = sorted.map { entry ->
+                entry.withAddonArtwork(addonArtwork[addonArtworkKey(entry.type, entry.id)])
+            }.withCustomPosterUrls(
                 com.nuvio.tv.core.poster.patternForScreen(customPosterUrlPattern, com.nuvio.tv.core.poster.CustomPosterScreen.LIBRARY, customPosterEnabledScreens)
             ),
             availableTypeTabs = typeTabsWithCounts,
