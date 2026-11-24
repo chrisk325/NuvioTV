@@ -316,6 +316,7 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
             val currentState = _uiState.value
             val showOnlyPreferredLanguagesChanged =
                 currentState.subtitleStyle.showOnlyPreferredLanguages != settings.subtitleStyle.showOnlyPreferredLanguages
+            val chaptersJustEnabled = !currentState.chaptersEnabled && settings.exoChaptersEnabled
             val wasRememberingAudioDelayPerDevice = rememberAudioDelayPerDeviceEnabled
             rememberAudioDelayPerDeviceEnabled = settings.rememberAudioDelayPerDevice
             // A ClearKey HLS stream plays on ExoPlayer whatever the setting: see initializePlayer.
@@ -373,7 +374,11 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
                     chaptersEnabled = settings.exoChaptersEnabled,
                     showChapterTitle = settings.chapterTitleEnabled,
                     // Turning chapters off hides them at once; skip intro keeps its own copy.
-                    chapters = if (settings.exoChaptersEnabled) state.chapters else emptyList(),
+                    chapters = when {
+                        !settings.exoChaptersEnabled -> emptyList()
+                        state.chapters.isNotEmpty() -> state.chapters
+                        else -> skipDetectionChapters
+                    },
                     showChaptersPanel = state.showChaptersPanel && settings.exoChaptersEnabled,
                     internalPlayerEngine = resolvedInternalPlayerEngine,
                     frameRateMatchingMode = settings.frameRateMatchingMode,
@@ -388,6 +393,13 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
                 )
             }
 
+            if (chaptersJustEnabled && _uiState.value.chapters.isEmpty()) {
+                if (isUsingMpvEngine()) {
+                    markMpvChaptersStale()
+                } else if (hasRenderedFirstFrame) {
+                    loadExoChapters()
+                }
+            }
             if (settings.subtitleStyle.usesStyledRenderer != currentState.subtitleStyle.usesStyledRenderer) {
                 refreshStyledSubtitles()
             }
