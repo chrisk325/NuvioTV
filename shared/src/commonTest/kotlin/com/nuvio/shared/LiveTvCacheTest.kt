@@ -58,18 +58,21 @@ class LiveTvCacheTest {
         val channel = first.state.value.groups.flatMap { it.channels }.single()
         assertEquals("Headlines", first.nowPlaying(channel)?.title)
 
-        // Next launch, server unreachable: channels and guide still show, from the cache.
+        // Next launch, server unreachable: the channels still show, from the cache (the guide is
+        // kept in memory only, so it comes back with the next download).
         val offline = HttpClient(MockEngine { respond("", HttpStatusCode.ServiceUnavailable) })
         val second = LiveTvRepository(offline, store, cache)
         second.load(force = false)
         val cached = second.state.value.groups.flatMap { it.channels }.single()
         assertEquals("News One", cached.name)
-        assertTrue(second.state.value.guideLoaded)
-        assertEquals("Headlines", second.nowPlaying(cached)?.title)
+        assertEquals(null, cache.getString("livetv.cache.guide.v1"))
 
-        // A forced reload that fails keeps them too.
+        // A forced reload that fails keeps the channels too.
         second.load(force = true)
         assertEquals(1, second.state.value.groups.flatMap { it.channels }.size)
-        assertEquals("Headlines", second.nowPlaying(cached)?.title)
+
+        // In the same run, a failed guide refresh keeps the guide already in memory.
+        first.load(force = true)
+        assertEquals("Headlines", first.nowPlaying(channel)?.title)
     }
 }

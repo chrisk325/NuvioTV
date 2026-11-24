@@ -27,14 +27,6 @@ private data class ChannelsCache(
     val epgUrls: Map<String, Map<String, String>>
 )
 
-/** The parsed guide (guide key → programmes), kept on the device. */
-@Serializable
-private data class GuideCache(
-    val savedAtMs: Long,
-    val urlsKey: String,
-    val guide: Map<String, List<LiveTvProgramme>>
-)
-
 data class LiveTvState(
     val groups: List<LiveTvGroup>,
     val isLoading: Boolean,
@@ -46,9 +38,10 @@ data class LiveTvState(
 
 /**
  * Sources, channels, guide, favourites and recents (port of LiveTvRepository, simplified).
- * Channels and the parsed guide are cached in [cache] (files in Caches on Apple TV): Live TV shows
- * them straight away and refreshes in the background — channels after 30 minutes, the guide
- * after 6 hours or when it is about to run out.
+ * The channel list is cached in [cache] (a file in Caches on Apple TV) so Live TV shows it at
+ * once and refreshes it in the background after 30 minutes. The guide is kept in memory only
+ * (a large one read back from disk ran the Apple TV out of memory) and downloaded again after
+ * 6 hours or when it is about to run out.
  */
 class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, private val cache: KeyValueStore = store) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -131,29 +124,17 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
     private suspend fun restoreCache(sourcesKey: String) {
         if (restored) return
         restored = true
-        // Reading and decoding a large guide stays off the main thread.
-        val (savedChannels, savedGuide) = withContext(Dispatchers.Default) {
-            val c = cache.getString(CHANNELS_CACHE)?.let {
+        // The guide is no longer kept on disk: reading a big one back ran the Apple TV out of
+        // memory as Live TV opened. Remove the file an earlier version saved.
+        runCatching { cache.putString(GUIDE_CACHE, null) }
+        val savedChannels = withContext(Dispatchers.Default) {
+            cache.getString(CHANNELS_CACHE)?.let {
                 runCatching { json.decodeFromString(ChannelsCache.serializer(), it) }.getOrNull()
             }?.takeIf { it.sourcesKey == sourcesKey && it.channels.isNotEmpty() }
-            val g = c?.let {
-                cache.getString(GUIDE_CACHE)?.let { raw ->
-                    runCatching { json.decodeFromString(GuideCache.serializer(), raw) }.getOrNull()
-                }
-            }
-            c to g
-        }
-        savedChannels ?: return
+        } ?: return
         channels = savedChannels.channels
         epgUrls = savedChannels.epgUrls
         lastLoadMs = savedChannels.savedAtMs
-        savedGuide?.takeIf { it.urlsKey == urlsKey(epgUrls) }?.let { saved ->
-            // Programmes that ended long ago are dropped; the rest is still a valid guide.
-            val cutoff = currentTimeMillis() - GUIDE_PAST_MS
-            guide = saved.guide.mapValues { (_, list) -> list.filter { it.stopEpochMs > cutoff } }.filterValues { it.isNotEmpty() }
-            guideSavedAtMs = saved.savedAtMs
-            guideUrlsKey = saved.urlsKey
-        }
         _state.value = LiveTvState(groupsFor(channels), isLoading = false, errors = emptyList(), guideLoaded = guide.isNotEmpty())
     }
 
@@ -258,16 +239,6 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
         guide = merged
         guideSavedAtMs = now
         guideUrlsKey = urlsKey(urls)
-        // A very large guide isn't saved: encoding it would need a lot of memory at once.
-        val programmeCount = merged.values.sumOf { it.size }
-        if (programmeCount <= MAX_CACHED_PROGRAMMES) {
-            val saved = GuideCache(now, guideUrlsKey, merged)
-            withContext(Dispatchers.Default) {
-                runCatching { cache.putString(GUIDE_CACHE, json.encodeToString(GuideCache.serializer(), saved)) }
-            }
-        } else {
-            runCatching { cache.putString(GUIDE_CACHE, null) }
-        }
         _state.value = _state.value.copy(guideLoaded = true)
     }
 
@@ -336,8 +307,8 @@ class LiveTvRepository(http: HttpClient, private val store: KeyValueStore, priva
         private const val GUIDE_TTL_MS = 6 * 3_600_000L
         private const val GUIDE_PAST_MS = 3 * 3_600_000L
         /** How far ahead the guide is kept: long enough to outlast the 6-hour refresh. */
-        private const val GUIDE_AHEAD_MS = 36 * 3_600_000L
-        private const val MAX_CACHED_PROGRAMMES = 120_000
+        /** How far ahead the guide is kept in memory (24 h keeps a large guide light). */
+        private const val GUIDE_AHEAD_MS = 24 * 3_600_000L
     }
 }
 

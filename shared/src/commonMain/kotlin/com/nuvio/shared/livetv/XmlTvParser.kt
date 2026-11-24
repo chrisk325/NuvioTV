@@ -11,43 +11,82 @@ fun parseXmlTv(
     windowStartMs: Long,
     windowEndMs: Long
 ): Map<String, List<LiveTvProgramme>> {
+    // A plain scan with indexOf (no regular expressions over the whole file): big guides parse
+    // fast, with little memory and no deep recursion on a background thread's small stack.
     // Guide channel id → our guide keys (by id, or by display-name match).
     val idToKeys = HashMap<String, MutableSet<String>>()
-    val channelRegex = Regex("""<channel\s+id="([^"]*)"[^>]*>(.*?)</channel>""", RegexOption.DOT_MATCHES_ALL)
-    val displayName = Regex("""<display-name[^>]*>(.*?)</display-name>""", RegexOption.DOT_MATCHES_ALL)
-    for (m in channelRegex.findAll(xml)) {
-        val id = m.groupValues[1].trim().lowercase()
+    forEachElement(xml, "channel") { attrs, body ->
+        val id = parseM3uAttributes(attrs)["id"]?.trim()?.lowercase() ?: return@forEachElement
         val keys = idToKeys.getOrPut(id) { HashSet() }
         if (id in wantedKeys) keys += id
-        displayName.findAll(m.groupValues[2]).forEach { dn ->
-            nameToKey[liveTvNameKey(unescape(dn.groupValues[1]))]?.let { keys += it }
+        forEachElement(body, "display-name") { _, name ->
+            nameToKey[liveTvNameKey(unescape(name))]?.let { keys += it }
         }
     }
     val result = HashMap<String, MutableList<LiveTvProgramme>>()
-    val programme = Regex("""<programme\s+([^>]*)>(.*?)</programme>""", RegexOption.DOT_MATCHES_ALL)
-    val title = Regex("""<title[^>]*>(.*?)</title>""", RegexOption.DOT_MATCHES_ALL)
-    val desc = Regex("""<desc[^>]*>(.*?)</desc>""", RegexOption.DOT_MATCHES_ALL)
-    val icon = Regex("""<icon\s+src="([^"]+)"""")
-    for (m in programme.findAll(xml)) {
-        val attrs = parseM3uAttributes(m.groupValues[1])
-        val channel = attrs["channel"]?.trim()?.lowercase() ?: continue
-        val keys = idToKeys[channel] ?: if (channel in wantedKeys) setOf(channel) else continue
-        if (keys.isEmpty()) continue
-        val start = parseXmlTvTime(attrs["start"]) ?: continue
+    forEachElement(xml, "programme") { attrText, body ->
+        val attrs = parseM3uAttributes(attrText)
+        val channel = attrs["channel"]?.trim()?.lowercase() ?: return@forEachElement
+        val keys = idToKeys[channel] ?: if (channel in wantedKeys) setOf(channel) else return@forEachElement
+        if (keys.isEmpty()) return@forEachElement
+        val start = parseXmlTvTime(attrs["start"]) ?: return@forEachElement
         val stop = parseXmlTvTime(attrs["stop"]) ?: (start + 3_600_000)
-        if (stop < windowStartMs || start > windowEndMs) continue
-        val body = m.groupValues[2]
-        val t = title.find(body)?.groupValues?.get(1)?.let(::unescape)?.trim()?.takeIf(String::isNotEmpty) ?: continue
+        if (stop < windowStartMs || start > windowEndMs) return@forEachElement
+        val t = innerText(body, "title")?.let(::unescape)?.trim()?.takeIf(String::isNotEmpty) ?: return@forEachElement
         val p = LiveTvProgramme(
             title = t,
             startEpochMs = start,
             stopEpochMs = stop,
-            description = desc.find(body)?.groupValues?.get(1)?.let(::unescape)?.trim()?.take(400),
-            image = icon.find(body)?.groupValues?.get(1)
+            description = innerText(body, "desc")?.let(::unescape)?.trim()?.take(400),
+            image = iconSrc(body)
         )
         keys.forEach { result.getOrPut(it) { ArrayList() } += p }
     }
     return result.mapValues { (_, list) -> list.sortedBy { it.startEpochMs }.distinctBy { it.startEpochMs } }
+}
+
+/** Calls [block] with each `<tag …>body</tag>` in [text] (attributes text, body); self-closing ones get "". */
+private inline fun forEachElement(text: String, tag: String, block: (attrs: String, body: String) -> Unit) {
+    val open = "<$tag"
+    val close = "</$tag>"
+    var from = 0
+    while (true) {
+        val start = text.indexOf(open, from)
+        if (start < 0) return
+        val after = start + open.length
+        // "<programme" must not match "<programmeX": the tag name has to end here.
+        if (after < text.length && !(text[after] == '>' || text[after] == '/' || text[after].isWhitespace())) {
+            from = after
+            continue
+        }
+        val tagEnd = text.indexOf('>', after)
+        if (tagEnd < 0) return
+        if (text[tagEnd - 1] == '/') {
+            block(text.substring(after, tagEnd - 1), "")
+            from = tagEnd + 1
+            continue
+        }
+        val end = text.indexOf(close, tagEnd + 1)
+        if (end < 0) return
+        block(text.substring(after, tagEnd), text.substring(tagEnd + 1, end))
+        from = end + close.length
+    }
+}
+
+/** The text inside the first `<tag …>…</tag>` of [body], or null. */
+private fun innerText(body: String, tag: String): String? {
+    var result: String? = null
+    forEachElement(body, tag) { _, inner -> if (result == null) result = inner }
+    return result
+}
+
+/** The first `<icon src="…">`'s address. */
+private fun iconSrc(body: String): String? {
+    var result: String? = null
+    forEachElement(body, "icon") { attrs, _ ->
+        if (result == null) result = parseM3uAttributes(attrs)["src"]?.takeIf { it.isNotBlank() }
+    }
+    return result
 }
 
 /** "20261113203000 +0100" → epoch ms. */
