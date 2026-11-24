@@ -103,4 +103,43 @@ class FastDnsTest {
         assertEquals("10.1.2.3", dns.lookup("10.1.2.3").single().hostAddress)
         assertEquals(0, system.calls.get())
     }
+
+    private fun waitFor(what: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!condition()) {
+            if (System.nanoTime() > deadline) fail(what)
+            Thread.sleep(10)
+        }
+    }
+
+    @Test(timeout = 10_000)
+    fun `a prefetched name is looked up in the background and then used`() {
+        val system = SlowDns(0, listOf(v4))
+        val dns = FastDns(system, ipv4Only = null)
+        dns.prefetch(listOf("PANEL.example", "panel.example"))
+        waitFor("not looked up") { system.calls.get() >= 1 }
+        Thread.sleep(100)
+        assertEquals(listOf(v4), dns.lookup("panel.example"))
+        assertEquals(1, system.calls.get())
+    }
+
+    @Test(timeout = 10_000)
+    fun `prefetch skips recent names, numbers and localhost`() {
+        val system = SlowDns(0, listOf(v4))
+        val dns = FastDns(system, ipv4Only = null)
+        dns.lookup("panel.example")
+        dns.prefetch(listOf("panel.example", "10.0.0.1", "localhost", ""))
+        Thread.sleep(200)
+        assertEquals(1, system.calls.get())
+    }
+
+    @Test(timeout = 10_000)
+    fun `prefetch asks for a handful of names at most`() {
+        val system = SlowDns(0, listOf(v4))
+        val dns = FastDns(system, ipv4Only = null)
+        dns.prefetch((1..20).map { "addon$it.example" })
+        waitFor("not looked up") { system.calls.get() >= 8 }
+        Thread.sleep(200)
+        assertEquals(8, system.calls.get())
+    }
 }
