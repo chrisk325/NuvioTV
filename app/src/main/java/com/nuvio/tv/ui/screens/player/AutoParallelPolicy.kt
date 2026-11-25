@@ -34,8 +34,16 @@ internal object AutoParallelPolicy {
      */
     fun stepDown(current: Int): Int = if (current > FALLBACK_CONNECTIONS) FALLBACK_CONNECTIONS else 1
 
-    /** 404/410 say the file is gone, not that the server refused the connections. */
-    fun shouldStepDownFor(httpStatus: Int?): Boolean = httpStatus != 404 && httpStatus != 410
+    /**
+     * Whether a source error on automatic connections should replay the stream with fewer.
+     *
+     * 404/410 say the file is gone, not that the server refused the connections. An unexpected
+     * failure (a runtime exception in the loading code, such as the parser rejecting the data,
+     * which Media3 reports as an I/O error) is not a network problem either: fewer connections
+     * fetch the same bytes, so replaying would only restart playback and fail at the same spot.
+     */
+    fun shouldStepDownFor(httpStatus: Int?, unexpectedLoaderFailure: Boolean = false): Boolean =
+        !unexpectedLoaderFailure && httpStatus != 404 && httpStatus != 410
 
     fun shouldUse(
         customNetworkEnabled: Boolean,
