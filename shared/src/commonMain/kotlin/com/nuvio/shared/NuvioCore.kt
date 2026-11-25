@@ -100,6 +100,8 @@ private const val UPCOMING_SOURCE = "upcoming"
 /** Shows watched within this many days are checked for an upcoming episode (Android's default cap). */
 private const val UPCOMING_SEED_WINDOW_MS = 60L * 86_400_000L
 private const val MAX_UPCOMING_LOOKUPS = 60
+private const val LOCAL_SEEDS_KEY = "upcoming.seeds.local"
+private const val MAX_LOCAL_SEEDS = 300
 private const val AIR_DATE_PARALLEL = 6
 private const val AIR_DATE_RETRIES = 2
 private const val AIR_DATE_RETRY_DELAY_MS = 30_000L
@@ -952,6 +954,53 @@ class NuvioCore(
     private val upcomingLock = kotlinx.coroutines.sync.Mutex()
     private var upcomingRerun = false
 
+    /**
+     * Kept on the device, per show: the furthest episode finished or marked watched in the app
+     * (and when), so the Upcoming row works without any tracker. Marking an episode watched
+     * drops its progress entry, so progress alone can't tell how far a show was watched.
+     */
+    private var localSeeds: List<WatchProgress> =
+        store.getString(LOCAL_SEEDS_KEY)?.let { runCatching { progressJson.decodeFromString(progressListSerializer, it) }.getOrNull() }
+            .orEmpty()
+
+    private fun saveLocalSeeds(list: List<WatchProgress>) {
+        localSeeds = list.sortedByDescending { it.updatedAtMs }.take(MAX_LOCAL_SEEDS)
+        store.putString(LOCAL_SEEDS_KEY, progressJson.encodeToString(progressListSerializer, localSeeds))
+    }
+
+    /** An episode was finished or marked watched here: the show's furthest point moves on if it's further. */
+    private fun recordWatchedSeed(seed: WatchProgress) {
+        val season = seed.season ?: return
+        val episode = seed.episode ?: return
+        if (season <= 0 || seed.contentId.isBlank()) return
+        val current = localSeeds.firstOrNull { it.contentId == seed.contentId }
+        val further = current == null || season > (current.season ?: 0) ||
+            (season == current.season && episode >= (current.episode ?: 0))
+        // Watching an earlier episode again keeps the furthest point, but counts as activity.
+        val updated = if (further) seed else current!!.copy(updatedAtMs = seed.updatedAtMs)
+        saveLocalSeeds(listOf(updated) + localSeeds.filterNot { it.contentId == seed.contentId })
+    }
+
+    /**
+     * Unwatched: an episode at or before the show's furthest point means it isn't caught up any
+     * more, so the show leaves the Upcoming row (it comes back when watched again).
+     */
+    private fun forgetWatchedSeed(contentId: String, season: Int?, episode: Int?) {
+        val current = localSeeds.firstOrNull { it.contentId == contentId }
+        val reaches = current == null || season == null || episode == null ||
+            season < (current.season ?: 0) || (season == current.season && episode <= (current.episode ?: 0))
+        if (!reaches) return
+        if (current != null) saveLocalSeeds(localSeeds.filterNot { it.contentId == contentId })
+        val upcoming = storedUpNext(UPCOMING_SOURCE)
+        if (upcoming.any { it.contentId == contentId }) setUpNext(UPCOMING_SOURCE, upcoming.filterNot { it.contentId == contentId })
+    }
+
+    private fun episodeSeed(meta: Meta, video: Video, at: Long) = WatchProgress(
+        contentId = meta.id, contentType = meta.apiType, videoId = video.id, name = meta.name,
+        poster = meta.poster, background = meta.backdropUrl, season = video.season, episode = video.episode,
+        positionMs = 0, durationMs = 0, updatedAtMs = at
+    )
+
     private class UpcomingSeed(val progress: WatchProgress, val inclusive: Boolean)
 
     /** Looks up the Upcoming row's episodes again (one run at a time; a request meanwhile reruns it). */
@@ -978,7 +1027,8 @@ class NuvioCore(
         val covered = upNextSources.filter { it != UPCOMING_SOURCE }.flatMap(::storedUpNext).map { it.contentId }.toSet() +
             progress.filter { it.isResumable }.map { it.contentId }
         // Episodes finished here (and progress synced from the Nuvio account).
-        val local = progress.filter { it.isCompleted && it.season != null && it.episode != null && isSeriesLikeType(it.contentType) }
+        val local = progress.filter { it.isCompleted && it.season != null && it.episode != null && isSeriesLikeType(it.contentType) } +
+            localSeeds
         val seeds = (lastWatchedBySource.values.flatten() + local).map { UpcomingSeed(it, inclusive = false) } +
             simklCaughtUp.map { UpcomingSeed(it, inclusive = true) }
         val chosen = seeds
@@ -1059,6 +1109,7 @@ class NuvioCore(
      */
     private fun queueNextEpisode(meta: Meta, video: Video?) {
         if (video == null || !meta.isSeriesLike) return
+        recordWatchedSeed(episodeSeed(meta, video, currentTimeMillis()))
         val episodes = meta.watchableEpisodes()
         val index = episodes.indexOfFirst { it.id == video.id }
         if (index < 0) return
@@ -1066,11 +1117,7 @@ class NuvioCore(
             setUpNext("local", storedUpNext("local").filterNot { it.contentId == meta.id })
             // Caught up: the next episode to air goes to the Upcoming row right away.
             val now = currentTimeMillis()
-            val seed = WatchProgress(
-                contentId = meta.id, contentType = meta.apiType, videoId = video.id, name = meta.name,
-                poster = meta.poster, background = meta.backdropUrl, season = video.season, episode = video.episode,
-                positionMs = 0, durationMs = 0, updatedAtMs = now
-            )
+            val seed = episodeSeed(meta, video, now)
             val others = storedUpNext(UPCOMING_SOURCE).filterNot { it.contentId == meta.id }
             setUpNext(UPCOMING_SOURCE, listOfNotNull(upcomingEntry(meta, seed, inclusive = false, nowMs = now)) + others)
             return
@@ -1312,6 +1359,7 @@ class NuvioCore(
             watchProgress.apply(emptyList(), setOf(video?.id ?: meta.defaultVideoId))
             queueNextEpisode(meta, video)
         }
+        if (!isWatched && video != null && meta.isSeriesLike) forgetWatchedSeed(meta.id, video.season, video.episode)
         if (video != null) refreshSeriesWatched(meta)
         if (!meta.isSeriesLike || video != null) {
             setPlayedOnServers(meta.id, meta.imdbId, meta.isSeriesLike, video?.id ?: meta.defaultVideoId,
@@ -1589,9 +1637,21 @@ class NuvioCore(
         val showKeys = seriesKeys(preview.id, preview.imdbId) + seriesKeys(meta.id, meta.imdbId)
         if (isWatched) {
             watched.addAll(episodeKeys + showKeys)
+            // Caught up to the latest aired episode: the next one to air goes to the Upcoming row.
+            val now = currentTimeMillis()
+            episodes.filter { !com.nuvio.shared.util.isReleaseInFuture(it.released) }
+                .maxWithOrNull(compareBy<Video>({ it.season }, { it.episode }))
+                ?.let { last ->
+                    val seed = episodeSeed(meta, last, now)
+                    recordWatchedSeed(seed)
+                    val others = storedUpNext(UPCOMING_SOURCE).filterNot { it.contentId == meta.id }
+                    setUpNext(UPCOMING_SOURCE, listOfNotNull(upcomingEntry(meta, seed, inclusive = false, nowMs = now)) + others)
+                }
         } else {
             forgetTrackerCompleted(showKeys)
             watched.removeAll(episodeKeys + showKeys)
+            forgetWatchedSeed(meta.id, null, null)
+            if (preview.id != meta.id) forgetWatchedSeed(preview.id, null, null)
         }
         val numbers = episodes.map { it.season!! to it.episode!! }
         val show = TrackedMedia.from(meta, null)
@@ -1641,6 +1701,11 @@ class NuvioCore(
         setPlayedOnServers(progress.contentId, null, isEpisode, progress.videoId, progress.season, progress.episode, true)
         watchProgress.remove(progress.contentId)
         dismissFromContinueWatching(progress.contentId)
+        if (isEpisode && progress.season != null) {
+            recordWatchedSeed(progress.copy(positionMs = 0, durationMs = 0, releasedAtMs = null, updatedAtMs = currentTimeMillis()))
+            // Caught up now? Its next episode may go to the Upcoming row.
+            scope.launch { runCatching { refreshUpcoming() }.onFailure { if (it is CancellationException) throw it } }
+        }
         val media = TrackedMedia(
             isEpisode = isEpisode,
             imdbId = progress.contentId.takeIf { it.startsWith("tt") }?.substringBefore(':'),

@@ -120,4 +120,55 @@ class UpcomingEpisodesTest {
         assertEquals(listOf("tt9:1:3"), core.continueWatching().filter { core.isUpcoming(it) }.map { it.videoId })
         core.close()
     }
+
+    @Test
+    fun markedWatchedWithoutTrackerStaysUpcomingAfterRefresh() = runTest {
+        // No tracker signed in: marking the latest aired episode watched is all there is.
+        val core = NuvioCore(InMemoryStore(), client(), StandardTestDispatcher(testScheduler))
+        core.refreshAddons()
+        core.setWatched(meta, meta.videos[1], true)
+        assertEquals(listOf("tt9:1:3"), core.continueWatching().filter { core.isUpcoming(it) }.map { it.videoId })
+        // The marked episode left no progress entry; the refresh after a sync still finds it.
+        core.refreshUpcoming()
+        assertEquals(listOf("tt9:1:3"), core.continueWatching().filter { core.isUpcoming(it) }.map { it.videoId })
+        // Unwatched again: not caught up any more.
+        core.setWatched(meta, meta.videos[1], false)
+        assertTrue(core.continueWatching().none { core.isUpcoming(it) })
+        core.refreshUpcoming()
+        assertTrue(core.continueWatching().none { core.isUpcoming(it) })
+        core.close()
+    }
+
+    @Test
+    fun earlierEpisodeWatchedAgainKeepsTheFurthestPoint() = runTest {
+        val core = NuvioCore(InMemoryStore(), client(), StandardTestDispatcher(testScheduler))
+        core.refreshAddons()
+        core.setWatched(meta, meta.videos[1], true)
+        core.setWatched(meta, meta.videos[0], true)
+        core.refreshUpcoming()
+        assertEquals(listOf("tt9:1:3"), core.continueWatching().filter { core.isUpcoming(it) }.map { it.videoId })
+        core.close()
+    }
+
+    @Test
+    fun continueWatchingMarkWatchedIsRemembered() = runTest {
+        val core = NuvioCore(InMemoryStore(), client(), StandardTestDispatcher(testScheduler))
+        core.refreshAddons()
+        core.markProgressWatched(
+            com.nuvio.shared.model.WatchProgress(
+                contentId = "tt9", contentType = "series", videoId = "tt9:1:2", name = "Show",
+                season = 1, episode = 2, positionMs = 600_000, durationMs = 3_000_000, updatedAtMs = 5L
+            )
+        )
+        // Its progress entry is gone; only the remembered furthest episode can find the next one.
+        assertTrue(core.watchProgress.entries.value.none { it.contentId == "tt9" })
+        // The refresh it starts runs in the background (its network call on another thread).
+        for (attempt in 0 until 200) {
+            testScheduler.advanceUntilIdle()
+            if (core.continueWatching().any { core.isUpcoming(it) }) break
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(10) }
+        }
+        assertEquals(listOf("tt9:1:3"), core.continueWatching().filter { core.isUpcoming(it) }.map { it.videoId })
+        core.close()
+    }
 }
