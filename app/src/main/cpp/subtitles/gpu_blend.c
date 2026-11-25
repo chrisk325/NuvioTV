@@ -28,11 +28,16 @@
 
 // libass as nuvio-libass carries it, loaded by its Ass class before any renderer exists.
 static __typeof__(ass_render_frame) *render_frame;
+static __typeof__(ass_set_frame_size) *set_frame_size;
+static __typeof__(ass_set_storage_size) *set_storage_size;
 
 static int load_libass(void) {
     if (render_frame) return 1;
     void *library = dlopen("libasskt.so", RTLD_NOW);
     if (!library) return 0;
+    set_frame_size = (__typeof__(ass_set_frame_size) *) dlsym(library, "ass_set_frame_size");
+    set_storage_size = (__typeof__(ass_set_storage_size) *) dlsym(library, "ass_set_storage_size");
+    if (!set_frame_size || !set_storage_size) return 0;
     render_frame = (__typeof__(ass_render_frame) *) dlsym(library, "ass_render_frame");
     return render_frame != NULL;
 }
@@ -188,12 +193,21 @@ static long long now_nanos(void) {
 
 // Renders `track` at `timeMs` with `renderer`, both the AssHandler's and held under its lock, into a
 // picture of masks copied out of libass, so drawing it needs no lock. 1 when the picture changed, 0
-// when it didn't, -1 when it couldn't be made.
+// when it didn't, -1 when it couldn't be made. `videoWidth` by `videoHeight` is the video's storage
+// size, or 0 when it isn't known yet.
 JNIEXPORT jint JNICALL METHOD(render)(
-        JNIEnv *env, jclass clazz, jlong handle, jlong renderer, jlong track, jlong timeMs) {
+        JNIEnv *env, jclass clazz, jlong handle, jlong renderer, jlong track, jlong timeMs,
+        jint videoWidth, jint videoHeight) {
     Surface *surface = (Surface *) handle;
     int changed = 0;
     ASS_Image *images = NULL;
+    if (renderer && surface->width > 0 && surface->height > 0) {
+        // libass lays out on the frame these buffers draw, as the atlas overlay pins it: the
+        // AssHandler's own frame size can still be the video surface's, which would place the
+        // subtitles outside the video. Neither call does anything when the size is unchanged.
+        set_frame_size((ASS_Renderer *) renderer, surface->width, surface->height);
+        if (videoWidth > 0 && videoHeight > 0) set_storage_size((ASS_Renderer *) renderer, videoWidth, videoHeight);
+    }
     if (renderer && track) {
         images = render_frame((ASS_Renderer *) renderer, (ASS_Track *) track, timeMs, &changed);
     } else {
