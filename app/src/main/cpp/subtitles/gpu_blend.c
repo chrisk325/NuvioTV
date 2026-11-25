@@ -261,6 +261,18 @@ JNIEXPORT jboolean JNICALL METHOD(stamped)(JNIEnv *env, jclass clazz, jlong hand
     return ((Surface *) handle)->presentation_time != NULL;
 }
 
+// How many threads `renderer` renders with, from its next frame: nuvio-libass's libass is the threaded
+// build, and asks for one per core. The count it took, or 0 when this libass has no threads.
+JNIEXPORT jint JNICALL METHOD(setThreads)(JNIEnv *env, jclass clazz, jlong renderer, jint threads) {
+    static int (*set_threads)(ASS_Renderer *, int);
+    if (!set_threads) {
+        void *library = dlopen("libasskt.so", RTLD_NOW);
+        if (library) set_threads = (int (*)(ASS_Renderer *, int)) dlsym(library, "ass_set_threads");
+    }
+    if (!set_threads || !renderer || threads < 1) return 0;
+    return set_threads((ASS_Renderer *) renderer, threads);
+}
+
 // Once the worker no longer uses it.
 JNIEXPORT void JNICALL METHOD(release)(JNIEnv *env, jclass clazz, jlong handle) {
     Surface *surface = (Surface *) handle;

@@ -5,17 +5,12 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Process
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.nuvio.tv.libass.AssRender
-import com.nuvio.tv.libass.AssTrack
 import com.nuvio.tv.libass.media.AssHandler
-import java.lang.reflect.Field
-import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.roundToInt
 
 /**
@@ -84,7 +79,7 @@ class AssGpuBlendSurfaceView(
         surfaceWidth = frame.width()
         surfaceHeight = frame.height()
         assHandler.setOverlaySurfaceSize(surfaceWidth, surfaceHeight)
-        val thread = HandlerThread(TAG, Process.THREAD_PRIORITY_DISPLAY).also { it.start() }
+        val thread = HandlerThread(TAG, LibassRenderThreads.WORKER_PRIORITY).also { it.start() }
         workerThread = thread
         val handler = Handler(thread.looper)
         workerHandler = handler
@@ -189,35 +184,6 @@ class AssGpuBlendSurfaceView(
             )
         } finally {
             lock.unlock()
-        }
-    }
-
-    /** nuvio-libass keeps AssRender's libass pointers to itself; this reads them as its CPU blend does. */
-    private class LibassAccess private constructor(
-        private val lockField: Field,
-        private val nativeRenderField: Field,
-        private val trackField: Field,
-        private val drainMethod: Method
-    ) {
-        fun lock(render: AssRender) = lockField.get(render) as ReentrantLock
-        fun nativeRender(render: AssRender) = nativeRenderField.getLong(render)
-        fun track(render: AssRender) = trackField.get(render) as AssTrack?
-        fun drainPendingChunks(track: AssTrack) {
-            drainMethod.invoke(track)
-        }
-
-        companion object {
-            val instance: LibassAccess? by lazy {
-                runCatching {
-                    val render = AssRender::class.java
-                    LibassAccess(
-                        render.getDeclaredField("lock").apply { isAccessible = true },
-                        render.getDeclaredField("nativeRender").apply { isAccessible = true },
-                        render.getDeclaredField("track").apply { isAccessible = true },
-                        AssTrack::class.java.getMethod("drainPendingChunks\$nuvio_libass_release")
-                    )
-                }.onFailure { Log.e(TAG, "nuvio-libass's AssRender has changed", it) }.getOrNull()
-            }
         }
     }
 
