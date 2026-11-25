@@ -78,6 +78,15 @@ object SubtitleCharsetDetector {
         length: Int = bytes.size - offset,
         languageHint: String? = null
     ): ByteArray {
+        // UTF-8 with no BOM comes back as it is unless the mojibake repair changes it, which only
+        // happens to text with characters from U+00E0 to U+00FA (0xC3 0xA0 to 0xC3 0xBA). Most lines
+        // skip the decode, the repair's regex split and the encode: an embedded ASS track's lines
+        // all come through here, on the loader thread.
+        if (length > 0 && !hasUtf8Bom(bytes, offset, length) && !containsByte(bytes, offset, length, 0xC3) &&
+            isFastValidUtf8(bytes, offset, length)
+        ) {
+            return if (offset == 0 && length == bytes.size) bytes else bytes.copyOfRange(offset, offset + length)
+        }
         val decoded = decode(bytes, offset, length, languageHint)
         return decoded.toByteArray(StandardCharsets.UTF_8)
     }
@@ -191,6 +200,18 @@ object SubtitleCharsetDetector {
             if (b == 0xCF || b == 0xC1 || b == 0xC5 || b == 0xC9 || b == 0xD5 || b == 0xDF) koi8Vowels++
         }
         return koi8Vowels > russianVowels && koi8Vowels >= 3
+    }
+
+    private fun hasUtf8Bom(bytes: ByteArray, offset: Int, length: Int): Boolean =
+        length >= 3 && (bytes[offset].toInt() and 0xFF) == 0xEF &&
+            (bytes[offset + 1].toInt() and 0xFF) == 0xBB &&
+            (bytes[offset + 2].toInt() and 0xFF) == 0xBF
+
+    private fun containsByte(bytes: ByteArray, offset: Int, length: Int, value: Int): Boolean {
+        for (i in offset until offset + length) {
+            if ((bytes[i].toInt() and 0xFF) == value) return true
+        }
+        return false
     }
 
     private fun isFastValidUtf8(bytes: ByteArray, offset: Int, length: Int): Boolean {

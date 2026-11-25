@@ -350,4 +350,38 @@ class SubtitleCharsetDetectorTest {
         val decoded = SubtitleCharsetDetector.decode(rawBytes, languageHint = null)
         assertEquals(elText, decoded)
     }
+
+    @Test
+    fun normalizeToUtf8_utf8AssLine_isReturnedAsItIs() {
+        val line = "0,0,Sign,,0,0,0,,{\\an7\\pos(320,180)\\clip(m 0 0 l 100 0 100 50 0 50)\\blur2}\u65e5\u672c Sign".toByteArray(Charsets.UTF_8)
+        assertTrue(line.contentEquals(SubtitleCharsetDetector.normalizeToUtf8(line)))
+    }
+
+    @Test
+    fun normalizeToUtf8_fastPath_matchesTheDecodedText() {
+        val lines = listOf(
+            "Plain dialogue line",
+            "{\\k20}Ka{\\k15}ra{\\k30}oke",
+            "\u041f\u0440\u0438\u0432\u0435\u0442, \u043c\u0438\u0440",
+            "\u3053\u3093\u306b\u3061\u306f\u4e16\u754c \ud83c\udf38",
+            "Caf\u00e9 cr\u00e8me br\u00fbl\u00e9e",
+        )
+        for (text in lines) {
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            val expected = SubtitleCharsetDetector.decode(bytes, languageHint = null).toByteArray(Charsets.UTF_8)
+            assertTrue(text, expected.contentEquals(SubtitleCharsetDetector.normalizeToUtf8(bytes)))
+        }
+    }
+
+    @Test
+    fun normalizeToUtf8_rangeOfALargerArray_isCopied() {
+        val bytes = "xxHelloyy".toByteArray(Charsets.UTF_8)
+        assertEquals("Hello", String(SubtitleCharsetDetector.normalizeToUtf8(bytes, 2, 5), Charsets.UTF_8))
+    }
+
+    @Test
+    fun normalizeToUtf8_bom_isStillStripped() {
+        val bytes = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + "Hi".toByteArray(Charsets.UTF_8)
+        assertEquals("Hi", String(SubtitleCharsetDetector.normalizeToUtf8(bytes), Charsets.UTF_8))
+    }
 }
