@@ -64,7 +64,7 @@ import androidx.compose.ui.platform.LocalContext
 
 @Composable
 internal fun StreamSourcesSidePanel(
-    uiState: PlayerUiState,
+    uiState: SourcesPanelUiState,
     currentFilename: String?,
     streamsFocusRequester: FocusRequester,
     onClose: () -> Unit,

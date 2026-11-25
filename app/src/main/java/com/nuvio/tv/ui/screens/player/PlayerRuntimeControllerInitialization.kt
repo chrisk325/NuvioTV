@@ -703,7 +703,13 @@ internal fun PlayerRuntimeController.initializePlayer(
             }
             _loadControl = loadControl
             // Live TV's load control already starts after a second of video (LiveTvStartLoadControl).
-            val playerLoadControl = loadControl
+            // Live TV keeps a thin edge buffer, so it never gets the interaction hold. _loadControl
+            // stays the unwrapped instance, which the allocator and budget code read.
+            val playerLoadControl = if (isLiveTvStream) {
+                loadControl
+            } else {
+                com.nuvio.tv.core.player.InteractionAwareLoadControl(loadControl)
+            }
 
             // The cache wraps whichever upstream data source it is given, so it does not depend on
             // either buffer engine. The low-RAM plus confirmed DV7 case is handled dynamically at

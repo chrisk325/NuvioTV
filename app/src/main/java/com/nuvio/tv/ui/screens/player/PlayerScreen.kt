@@ -162,6 +162,7 @@ import com.nuvio.tv.core.party.PartySync
 import com.nuvio.tv.ui.screens.party.ConfirmDialog
 import com.nuvio.tv.ui.screens.party.PartyPanel
 import com.nuvio.tv.ui.screens.party.PartyStatusPill
+import com.nuvio.tv.core.player.PlaybackInteractionGate
 import com.nuvio.tv.core.player.PlayerWindowBackdrop
 import com.nuvio.tv.ui.util.keepLtr
 import com.nuvio.tv.ui.util.localizeEpisodeTitle
@@ -560,6 +561,30 @@ fun PlayerScreen(
         }
     }
 
+    // While the user is working a menu, buffer top-up backs off once the buffer is healthy so
+    // network and demux work do not compete with drawing the UI (InteractionAwareLoadControl).
+    val playerUiActive = uiState.showControls ||
+        uiState.showSeekOverlay ||
+        uiState.showMoreDialog ||
+        uiState.showSpeedDialog ||
+        uiState.showDiscTitlesDialog ||
+        uiState.showAudioOverlay ||
+        uiState.showSubtitleOverlay ||
+        uiState.showSubtitleStylePanel ||
+        uiState.showSubtitleTimingDialog ||
+        uiState.showSubtitleDelayOverlay ||
+        uiState.showEpisodesPanel ||
+        uiState.showSourcesPanel ||
+        uiState.showChaptersPanel ||
+        uiState.showPartyPanel ||
+        uiState.showStreamInfoOverlay
+    LaunchedEffect(playerUiActive) {
+        PlaybackInteractionGate.setUiActive(playerUiActive)
+    }
+    DisposableEffect(Unit) {
+        onDispose { PlaybackInteractionGate.reset() }
+    }
+
     // Frame rate matching lifecycle.
     val activity = LocalContext.current as? android.app.Activity
     LaunchedEffect(activity) {
@@ -695,6 +720,7 @@ fun PlayerScreen(
             .focusRequester(containerFocusRequester)
             .focusable(enabled = uiState.error == null)
             .onPreviewKeyEvent { keyEvent ->
+                PlaybackInteractionGate.noteInteraction()
                 if (liveTvPlayer.onPreviewKey(keyEvent.nativeKeyEvent, uiState)) return@onPreviewKeyEvent true
                 // Consume the confirm KEY_UP that opened the subtitle timing dialog before
                 // the newly focused "Sync" button can treat it as a second click. Preview
@@ -1293,6 +1319,9 @@ fun PlayerScreen(
                             keepZoomInsideScreen = uiState.keepZoomInsideScreen,
                             useLibass = uiState.useLibass,
                             libassRenderMode = uiState.libassRenderMode,
+                            libassSubtitleActive = uiState.selectedSubtitleTrackIndex >= 0 ||
+                                uiState.selectedAddonSubtitle != null ||
+                                uiState.subtitleTracks.any { it.isSelected },
                             letterboxMaskEnabled = !(transparentLetterbox && playerSurfaceIsFullscreen),
                             subtitleStyle = uiState.effectiveSubtitleStyle,
                             subtitleLiftPx = subtitleLiftPx,
@@ -1649,7 +1678,7 @@ fun PlayerScreen(
         ) {
             val context = LocalContext.current
             PlayerControlsOverlay(
-                uiState = uiState,
+                uiState = uiState.toControlsUiState(),
                 playerBadges = playerBadges,
                 viewModel = viewModel,
                 seekPreview = seekPreview,
@@ -1951,7 +1980,7 @@ fun PlayerScreen(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 EpisodesSidePanel(
-                    uiState = uiState,
+                    uiState = uiState.toEpisodesPanelUiState(),
                     episodesFocusRequester = episodesFocusRequester,
                     streamsFocusRequester = streamsFocusRequester,
                     onClose = { viewModel.onEvent(PlayerEvent.OnDismissEpisodesPanel) },
@@ -1997,7 +2026,7 @@ fun PlayerScreen(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 StreamSourcesSidePanel(
-                    uiState = uiState,
+                    uiState = uiState.toSourcesPanelUiState(),
                     currentFilename = viewModel.playerStreamFilename(),
                     streamsFocusRequester = sourceStreamsFocusRequester,
                     onClose = {
@@ -2337,6 +2366,12 @@ private fun ExoPlayerSurface(
     keepZoomInsideScreen: Boolean,
     useLibass: Boolean,
     libassRenderMode: LibassRenderMode,
+    /**
+     * A subtitle track is selected. Without one the overlay modes would keep a full-screen
+     * SurfaceView (an extra composition layer over the video) and its render thread alive for
+     * nothing, so the overlay is only attached while there is something to draw.
+     */
+    libassSubtitleActive: Boolean,
     letterboxMaskEnabled: Boolean,
     subtitleStyle: SubtitleStyleSettings,
     subtitleLiftPx: Float,
@@ -2372,7 +2407,7 @@ private fun ExoPlayerSurface(
         update = {
             it.syncLibassOverlay(
                 player = player,
-                enabled = useLibass,
+                enabled = useLibass && libassSubtitleActive,
                 renderMode = libassRenderMode
             )
             it.syncLetterboxMask(
@@ -2510,10 +2545,10 @@ private fun ExoPlayerSurface(
         }
     }
 
-    LaunchedEffect(playerView, player, useLibass, libassRenderMode) {
+    LaunchedEffect(playerView, player, useLibass, libassRenderMode, libassSubtitleActive) {
         playerView.syncLibassOverlay(
             player = player,
-            enabled = useLibass,
+            enabled = useLibass && libassSubtitleActive,
             renderMode = libassRenderMode
         )
     }
@@ -2952,7 +2987,7 @@ private fun PlayerView.setAssOverlayVisibility(visibility: Int) {
 
 @Composable
 private fun PlayerControlsOverlay(
-    uiState: PlayerUiState,
+    uiState: PlayerControlsUiState,
     playerBadges: List<StreamBadge>,
     viewModel: PlayerViewModel,
     seekPreview: SeekPreviewController? = null,

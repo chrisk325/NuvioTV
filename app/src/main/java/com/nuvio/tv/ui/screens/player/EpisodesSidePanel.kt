@@ -96,7 +96,7 @@ import com.nuvio.tv.R
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 internal fun EpisodesSidePanel(
-    uiState: PlayerUiState,
+    uiState: EpisodesPanelUiState,
     episodesFocusRequester: FocusRequester,
     streamsFocusRequester: FocusRequester,
     onClose: () -> Unit,
@@ -176,7 +176,7 @@ internal fun EpisodesSidePanel(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun EpisodeStreamsView(
-    uiState: PlayerUiState,
+    uiState: EpisodesPanelUiState,
     onBackToEpisodes: () -> Unit,
     onReload: () -> Unit,
     onAddonFilterSelected: (String?) -> Unit,
@@ -515,7 +515,7 @@ private fun EpisodeStreamsView(
 
 @Composable
 private fun EpisodesListView(
-    uiState: PlayerUiState,
+    uiState: EpisodesPanelUiState,
     episodesFocusRequester: FocusRequester,
     onSeasonSelected: (Int) -> Unit,
     onEpisodeSelected: (Video) -> Unit,
