@@ -3,6 +3,7 @@ package com.nuvio.tv.ui.screens.settings
 import androidx.media3.common.util.UnstableApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,5 +43,29 @@ class MemoryBudgetTierTest {
     @Test
     fun `unknown physical RAM keeps the heap`() {
         assertEquals(512L, MemoryBudget.budgetHeapMb(maxHeapMb = 512L, physicalRamBytes = 0L))
+    }
+
+    @Test
+    fun `default engine fills the managed budget on a high-RAM heap`() {
+        val snapshot = MemoryBudget.snapshotFor(maxHeapMb = 512L, physicalRamBytes = twoGbRam)
+        assertEquals(435 * 1024 * 1024, MemoryBudget.defaultEngineTargetBufferBytes(snapshot, parallelOverheadMb = 0))
+    }
+
+    @Test
+    fun `default engine leaves room for parallel chunks`() {
+        val snapshot = MemoryBudget.snapshotFor(maxHeapMb = 512L, physicalRamBytes = twoGbRam)
+        assertEquals(371 * 1024 * 1024, MemoryBudget.defaultEngineTargetBufferBytes(snapshot, parallelOverheadMb = 64))
+    }
+
+    @Test
+    fun `default engine keeps the Media3 target on low-RAM`() {
+        val snapshot = MemoryBudget.snapshotFor(maxHeapMb = 512L, physicalRamBytes = oneGbTvRam)
+        assertNull(MemoryBudget.defaultEngineTargetBufferBytes(snapshot, parallelOverheadMb = 0))
+    }
+
+    @Test
+    fun `default engine never goes below the Media3 target`() {
+        val snapshot = MemoryBudget.snapshotFor(maxHeapMb = 512L, physicalRamBytes = twoGbRam)
+        assertNull(MemoryBudget.defaultEngineTargetBufferBytes(snapshot, parallelOverheadMb = 320))
     }
 }

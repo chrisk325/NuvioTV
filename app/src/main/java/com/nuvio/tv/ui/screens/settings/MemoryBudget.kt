@@ -3,6 +3,7 @@ package com.nuvio.tv.ui.screens.settings
 import android.content.Context
 import android.util.Log
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import com.nuvio.tv.data.local.BufferSettings
 import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.ui.screens.player.NuvioExoPlayerPerformanceHelper
@@ -145,6 +146,28 @@ object MemoryBudget {
         } else {
             maxHeapMb
         }
+
+    // Media3's stock byte target for one video and one audio track (about 138 MB).
+    private val STOCK_TARGET_BUFFER_BYTES: Long =
+        DefaultLoadControl.DEFAULT_VIDEO_BUFFER_SIZE.toLong() + DefaultLoadControl.DEFAULT_AUDIO_BUFFER_SIZE
+
+    /**
+     * Byte target for the default load control (buffer engine off), or null to keep Media3's own.
+     *
+     * Media3's target holds only about 13 s of an 80 Mbps UHD remux, so a brief dip in throughput
+     * stalls playback. On high-RAM devices the default fills up to the same managed budget the
+     * buffer engine uses instead. Low-RAM keeps Media3's target, which those devices already run
+     * with, leaving headroom for DV7 conversion and the decoders.
+     */
+    fun defaultEngineTargetBufferBytes(parallelOverheadMb: Int): Int? =
+        defaultEngineTargetBufferBytes(current, parallelOverheadMb)
+
+    internal fun defaultEngineTargetBufferBytes(snapshot: Snapshot, parallelOverheadMb: Int): Int? {
+        if (snapshot.isLowRamTier) return null
+        val budgetBytes = (snapshot.budgetMb - parallelOverheadMb).toLong() * 1024L * 1024L
+        if (budgetBytes <= STOCK_TARGET_BUFFER_BYTES) return null
+        return budgetBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
 
     fun effectiveBufferMb(stored: Int): Int =
         if (stored > 0) stored else defaultBufferSizeMb

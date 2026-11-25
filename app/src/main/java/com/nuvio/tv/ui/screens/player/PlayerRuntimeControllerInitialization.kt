@@ -548,6 +548,7 @@ internal fun PlayerRuntimeController.initializePlayer(
 
             // ── Buffer & Network ──
             // Master toggles off => stock Media3 (DefaultLoadControl, single connection,
+            // byte target raised to the memory budget on high-RAM devices,
             // no cache). DV7 to DV8.1 conversion runs libdovi off-heap, outside the heap
             // budget; a large heap buffer on top of that is what pushed the Fire TV into the
             // lowmemorykiller spiral, so for confirmed DV7 on low-RAM we drop the back buffer
@@ -662,16 +663,22 @@ internal fun PlayerRuntimeController.initializePlayer(
                     allocator = allocator
                 ).also { currentBitrateAwareLoadControl = it }
             } else {
-                // Stock LoadControl: DefaultLoadControl configured with 1.5s back buffer so 1s rewind doesn't clear buffer.
+                // Default LoadControl: Media3's stock durations with a 1.5s back buffer so 1s rewind
+                // doesn't clear buffer. High-RAM devices raise the byte target to the managed budget
+                // so high-bitrate remuxes keep more than Media3's ~13 s at 80 Mbps in reserve.
                 effectiveBackBufferDurationMs = 1_500
                 currentBitrateAwareLoadControl = null
+                val defaultTargetBytes = MemoryBudget.defaultEngineTargetBufferBytes(parallelOverheadMb)
                 Log.i(
                     PlayerRuntimeController.TAG,
                     "BUFFER_GATE: engine=exo-stock master=off; DefaultLoadControl " +
-                            "(1.5s back buffer, no VOD cache) host=${url.safeHost()}"
+                            "(1.5s back buffer, no VOD cache) " +
+                            "targetMb=${defaultTargetBytes?.let { it / (1024 * 1024) } ?: "media3"} " +
+                            "lowRam=${MemoryBudget.isLowRamTier} host=${url.safeHost()}"
                 )
                 DefaultLoadControl.Builder()
                     .setBackBuffer(1_500, /* retainBackBufferFromKeyframe = */ true)
+                    .apply { defaultTargetBytes?.let { setTargetBufferBytes(it) } }
                     .build()
             }
             _loadControl = loadControl
