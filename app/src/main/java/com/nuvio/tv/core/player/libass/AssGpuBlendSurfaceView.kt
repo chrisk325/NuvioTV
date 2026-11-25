@@ -178,7 +178,11 @@ class AssGpuBlendSurfaceView(
             } else {
                 0L
             }
-            return AssGpuBlendNative.render(nativeHandle, nativeRender, nativeTrack, timeMs)
+            val videoSize = assHandler.videoSize
+            return AssGpuBlendNative.render(
+                nativeHandle, nativeRender, nativeTrack, timeMs,
+                videoSize.width, videoSize.height
+            )
         } finally {
             lock.unlock()
         }

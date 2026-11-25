@@ -20,10 +20,18 @@ internal object AssGpuBlendNative {
 
     /**
      * Renders with the AssHandler's raw libass pointers, under its lock, into masks copied out of
-     * libass: 1 when the picture changed, 0 when it didn't, -1 when it couldn't be made.
+     * libass: 1 when the picture changed, 0 when it didn't, -1 when it couldn't be made. libass's
+     * frame is pinned to the window's buffers and its storage to the video's size (0 when unknown).
      */
     @JvmStatic
-    external fun render(handle: Long, renderer: Long, track: Long, timeMs: Long): Int
+    external fun render(
+        handle: Long,
+        renderer: Long,
+        track: Long,
+        timeMs: Long,
+        videoWidth: Int,
+        videoHeight: Int
+    ): Int
 
     /** Draws the rendered picture, with no lock, for the screen to show at `atNanos`, or at once when 0. */
     @JvmStatic
