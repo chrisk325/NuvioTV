@@ -32,11 +32,12 @@ internal fun ExoPlayer.Builder.buildWithAssSupportCompat(
     dataSourceFactory: DataSource.Factory = PlayerPlaybackNetworking.createDataSourceFactory(context),
     extractorsFactory: ExtractorsFactory = DefaultExtractorsFactory(),
     renderersFactory: RenderersFactory = DefaultRenderersFactory(context),
-    assHandlerConfig: com.nuvio.tv.libass.media.AssHandlerConfig = com.nuvio.tv.libass.media.AssHandlerConfig()
+    assHandlerConfig: com.nuvio.tv.libass.media.AssHandlerConfig = com.nuvio.tv.libass.media.AssHandlerConfig(),
+    libassThreads: Int = 0
 ): ExoPlayer {
     val assHandler = AssHandler(assHandlerConfig)
     // nuvio-libass renders on every core; heavy .ass tracks then starve the loader and stall playback.
-    LibassRenderThreads.install(assHandler)
+    LibassRenderThreads.install(assHandler, libassThreads)
     val assSubtitleParserFactory = CompatAssSubtitleParserFactory(assHandler)
     val assExtractorsFactory = extractorsFactory.withAssMkvSupportCompat(
         subtitleParserFactory = assSubtitleParserFactory,

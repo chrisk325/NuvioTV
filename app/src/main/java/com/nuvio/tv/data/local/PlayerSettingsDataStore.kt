@@ -316,6 +316,7 @@ data class PlayerSettings(
     val useLibass: Boolean = true,
     val libassRenderType: LibassRenderType = LibassRenderType.OVERLAY_OPEN_GL,
     val libassRenderScale: LibassRenderScale = LibassRenderScale.FULL,
+    val libassThreads: LibassThreads = LibassThreads.AUTO,
     val libassRenderMode: LibassRenderMode = LibassRenderMode.DEFAULT,
     val subtitleStyle: SubtitleStyleSettings = SubtitleStyleSettings(),
     val bufferSettings: BufferSettings = BufferSettings(),
@@ -585,6 +586,18 @@ enum class LibassRenderScale(val scale: Float, val label: String) {
 }
 
 /**
+ * How many threads libass renders subtitles with. More threads draw heavy typesetting faster but take
+ * the cores the stream's loader and software decoding need. [AUTO] uses half the cores; a count above
+ * the device's cores uses every core.
+ */
+enum class LibassThreads(val count: Int) {
+    AUTO(0),
+    ONE(1),
+    TWO(2),
+    FOUR(4)
+}
+
+/**
  * How libass subtitles are rendered relative to the video surface.
  *
  * setVideoEffects forces DefaultVideoFrameProcessor into the ExoPlayer pipeline.
@@ -683,6 +696,7 @@ class PlayerSettingsDataStore @Inject constructor(
     private val useLibassKey = booleanPreferencesKey("use_libass")
     private val libassRenderTypeKey = stringPreferencesKey("libass_render_type")
     private val libassRenderScaleKey = stringPreferencesKey("libass_render_scale")
+    private val libassThreadsKey = stringPreferencesKey("libass_threads")
     private val libassRenderModeKey = stringPreferencesKey("libass_render_mode")
     private val decoderPriorityKey = intPreferencesKey("decoder_priority")
     private val downmixEnabledKey = booleanPreferencesKey("downmix_enabled")
@@ -1074,6 +1088,9 @@ class PlayerSettingsDataStore @Inject constructor(
                 libassRenderScale = prefs[libassRenderScaleKey]?.let {
                     try { LibassRenderScale.valueOf(it) } catch (e: Exception) { LibassRenderScale.FULL }
                 } ?: LibassRenderScale.FULL,
+                libassThreads = prefs[libassThreadsKey]?.let {
+                    try { LibassThreads.valueOf(it) } catch (e: Exception) { LibassThreads.AUTO }
+                } ?: LibassThreads.AUTO,
                 libassRenderMode = LibassRenderMode.fromStoredString(prefs[libassRenderModeKey]),
                 decoderPriority = prefs[decoderPriorityKey] ?: 1,
                 downmixEnabled =
@@ -1844,6 +1861,15 @@ class PlayerSettingsDataStore @Inject constructor(
     suspend fun setLibassRenderScale(scale: LibassRenderScale) {
         store().edit { prefs ->
             prefs[libassRenderScaleKey] = scale.name
+        }
+    }
+
+    /**
+     * Set how many threads libass renders subtitles with.
+     */
+    suspend fun setLibassThreads(threads: LibassThreads) {
+        store().edit { prefs ->
+            prefs[libassThreadsKey] = threads.name
         }
     }
 

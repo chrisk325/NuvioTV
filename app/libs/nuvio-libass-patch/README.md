@@ -1,8 +1,9 @@
 # nuvio-libass patches
 
 `nuvio-libass-release.aar` is a prebuilt library. These are classes rebuilt from its decompiled
-bytecode with fixes, which `build.sh` compiles and swaps into the AAR's `classes.jar`. Nothing else
-in the AAR changes: the other classes and every `libasskt.so` stay byte for byte as they were.
+bytecode with fixes, which `build.sh` compiles and swaps into the AAR's `classes.jar`, plus a
+one-byte priority patch to two more classes (below). Nothing else in the AAR changes: the other
+classes and every `libasskt.so` stay byte for byte as they were.
 
 ## `AssCpuBlendSurfaceView` (Overlay (CPU Blend))
 
@@ -22,6 +23,18 @@ Same public API and the same `AssRender.nativeCpuBlend*` natives. The patched cl
   view now pins libass's frame to its buffers and its storage to the video, as the atlas overlay
   pins its frame. It re-pins only when `AssRender.stateGeneration` moves.
 
+The worker also starts at the default thread priority, not `THREAD_PRIORITY_DISPLAY`: see below.
+
+## Worker priority (`AtlasLibassThread`, `AssVideoEffectAsyncProgram`)
+
+nuvio-libass's libass is the threaded build. Its render threads start from the worker that renders
+and take that worker's priority. At `THREAD_PRIORITY_DISPLAY` they took the CPU the stream's loader
+needs, and heavy .ass tracks made playback buffer. `patch_aar.py` changes the `bipush -4` that
+`AssLibassThread` (Overlay) and `AssRenderGL` (Video Effect) are created with to `bipush 0`, the same
+length, so nothing else in those classes moves. `AssSurfaceGlThread` keeps the display priority: it
+only draws, and never runs libass. The app caps libass's thread count itself
+(`LibassRenderThreads`, the "Subtitle Render Threads" setting).
+
 ## Rebuilding
 
 ```
@@ -29,4 +42,5 @@ app/libs/nuvio-libass-patch/build.sh
 ```
 
 If a new nuvio-libass AAR comes in, check its `AssCpuBlendSurfaceView` before running this script:
-the patch replaces that class whole.
+the patch replaces that class whole. The priority patch fails rather than guess if a worker's
+`new HandlerThread(name, priority)` can't be found once.

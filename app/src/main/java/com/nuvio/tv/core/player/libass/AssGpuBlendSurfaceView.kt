@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Process
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -80,7 +79,7 @@ class AssGpuBlendSurfaceView(
         surfaceWidth = frame.width()
         surfaceHeight = frame.height()
         assHandler.setOverlaySurfaceSize(surfaceWidth, surfaceHeight)
-        val thread = HandlerThread(TAG, Process.THREAD_PRIORITY_DISPLAY).also { it.start() }
+        val thread = HandlerThread(TAG, LibassRenderThreads.WORKER_PRIORITY).also { it.start() }
         workerThread = thread
         val handler = Handler(thread.looper)
         workerHandler = handler
