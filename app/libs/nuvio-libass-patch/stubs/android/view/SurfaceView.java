@@ -1,0 +1,1 @@
+package android.view; public class SurfaceView extends View { public SurfaceView(android.content.Context c) { super(c); } public void setZOrderMediaOverlay(boolean b) {} public SurfaceHolder getHolder() { return null; } }
