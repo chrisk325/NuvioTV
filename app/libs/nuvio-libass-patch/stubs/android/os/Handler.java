@@ -1,1 +1,1 @@
-package android.os; public class Handler { public Handler(Looper l) {} public final boolean post(Runnable r) { return true; } }
+package android.os; public class Handler { public Handler(Looper l) {} public final boolean post(Runnable r) { return true; } public final boolean postAtTime(Runnable r, long uptimeMillis) { return true; } public final void removeCallbacks(Runnable r) {} }

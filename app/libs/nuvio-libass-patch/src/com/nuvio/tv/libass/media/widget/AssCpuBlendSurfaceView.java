@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -27,6 +28,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *   pins its frame: AssHandler can keep the video surface's size, placing subtitles off the video.
  * - The worker runs at the default priority, not the display's: libass's render threads start from it
  *   and take its priority, and at the display's they took the CPU the stream's loader needs.
+ * - Renders are paced: after one longer than FREE_MS the next waits as long again, so on heavy
+ *   typesetting libass works half the time at most instead of at every frame without a break.
  */
 public final class AssCpuBlendSurfaceView extends SurfaceView implements SurfaceHolder.Callback {
     private static final String TAG = "AssCpuBlend";
@@ -45,6 +48,19 @@ public final class AssCpuBlendSurfaceView extends SurfaceView implements Surface
     private volatile long renderCount;
     private volatile long changedRenderCount;
     private final Runnable renderRunnable = () -> doRender(false);
+
+    // The worker's: render pacing, as the app's LibassRenderPacer. After a render longer than
+    // FREE_MS the next waits as long again (at most MAX_IDLE_MS), so on heavy typesetting libass's
+    // threads are busy half the time at most and the stream's loader and decoders keep the rest.
+    private static final long FREE_MS = 8;
+    private static final long MAX_IDLE_MS = 500;
+    private static final long REPORT_MS = 10_000;
+    private long nextRenderAtMs;
+    private int pacedRenders;
+    private int pacedDeferred;
+    private long pacedTotalMs;
+    private long pacedMaxMs;
+    private long reportedAtMs;
 
     // The worker's.
     private long lastSubtitleTimeUs;
@@ -179,8 +195,48 @@ public final class AssCpuBlendSurfaceView extends SurfaceView implements Surface
         pinnedVideoHeight = videoHeight;
     }
 
+    /** The worker's. A request is paced; a forced redraw isn't. */
     private void doRender(boolean force) {
         if (nativeHandle == 0L) return;
+        if (!force && pendingRequest.get() == null) return;
+        long startMs = SystemClock.uptimeMillis();
+        if (!force && startMs < nextRenderAtMs) {
+            pacedDeferred++;
+            // One render, of the newest frame by then, once libass has had its break.
+            Handler handler = workerHandler;
+            if (handler != null) {
+                handler.removeCallbacks(renderRunnable);
+                handler.postAtTime(renderRunnable, nextRenderAtMs);
+            }
+            return;
+        }
+        try {
+            renderAndPost(force);
+        } finally {
+            long endMs = SystemClock.uptimeMillis();
+            long took = Math.max(0, endMs - startMs);
+            pacedRenders++;
+            pacedTotalMs += took;
+            if (took > pacedMaxMs) pacedMaxMs = took;
+            nextRenderAtMs = took <= FREE_MS ? 0 : endMs + Math.min(took, MAX_IDLE_MS);
+            report(endMs);
+        }
+    }
+
+    /** The worker's: every REPORT_MS, the render times since the last report. */
+    private void report(long nowMs) {
+        if (reportedAtMs == 0) reportedAtMs = nowMs;
+        if (nowMs - reportedAtMs < REPORT_MS || pacedRenders == 0) return;
+        Log.i(TAG, "renders=" + pacedRenders + " avg=" + (pacedTotalMs / pacedRenders) + "ms max=" +
+                pacedMaxMs + "ms deferred=" + pacedDeferred + " in " + (nowMs - reportedAtMs) + "ms");
+        pacedRenders = 0;
+        pacedDeferred = 0;
+        pacedTotalMs = 0;
+        pacedMaxMs = 0;
+        reportedAtMs = nowMs;
+    }
+
+    private void renderAndPost(boolean force) {
         long[] request = pendingRequest.getAndSet(null);
         if (request == null && !force) return;
         long subtitleTimeUs = request != null ? request[0] : lastSubtitleTimeUs;

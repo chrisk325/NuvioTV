@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -51,6 +52,9 @@ class AssGpuBlendSurfaceView(
     @Volatile
     var gpuActive = false
         private set
+
+    /** The worker's. */
+    private val pacer = LibassRenderPacer()
 
     private val renderRunnable = Runnable { doRender(force = false) }
 
@@ -142,11 +146,35 @@ class AssGpuBlendSurfaceView(
         doRender(force = true)
     }
 
-    /** The worker's. */
+    /** The worker's. A request is paced by [pacer]; a forced redraw isn't. */
     private fun doRender(force: Boolean) {
         if (nativeHandle == 0L) return
+        if (!force && pendingRequest.get() == null) return
+        val startMs = SystemClock.uptimeMillis()
+        if (!force) {
+            val waitMs = pacer.waitMs(startMs)
+            if (waitMs > 0) {
+                // One render, of the newest frame by then, once libass has had its break.
+                workerHandler?.let { handler ->
+                    handler.removeCallbacks(renderRunnable)
+                    handler.postAtTime(renderRunnable, startMs + waitMs)
+                }
+                return
+            }
+        }
         val request = pendingRequest.getAndSet(null)
         if (request == null && !force) return
+        try {
+            renderAndPost(request, force)
+        } finally {
+            val endMs = SystemClock.uptimeMillis()
+            pacer.rendered(startMs, endMs)
+            pacer.report(endMs)?.let { Log.i(TAG, it) }
+        }
+    }
+
+    /** The worker's. */
+    private fun renderAndPost(request: LongArray?, force: Boolean) {
         val presentationTimeUs = request?.get(0) ?: lastPresentationTimeUs
         val releaseTimeNs = request?.get(1) ?: 0L
         lastPresentationTimeUs = presentationTimeUs
