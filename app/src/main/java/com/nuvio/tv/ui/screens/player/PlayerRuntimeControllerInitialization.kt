@@ -1190,8 +1190,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                         renderersFactory = renderersFactory,
                         assHandlerConfig = com.nuvio.tv.libass.media.AssHandlerConfig(
                             useCpuBlend = playerSettings.effectiveLibassRenderMode == com.nuvio.tv.data.local.LibassRenderMode.OVERLAY_CPU_BLEND
-                        ),
-                        libassThreads = playerSettings.libassThreads.count
+                        )
                     )
             } else {
                 buildDefaultPlayer()

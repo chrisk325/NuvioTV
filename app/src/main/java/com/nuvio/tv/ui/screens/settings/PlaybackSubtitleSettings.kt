@@ -8,7 +8,6 @@ import androidx.compose.ui.unit.dp
 import com.nuvio.tv.R
 import com.nuvio.tv.data.local.AVAILABLE_SUBTITLE_LANGUAGES
 import com.nuvio.tv.data.local.LibassRenderScale
-import com.nuvio.tv.data.local.LibassThreads
 import com.nuvio.tv.data.local.LibassRenderMode
 import com.nuvio.tv.data.local.PlayerPreference
 import com.nuvio.tv.data.local.PlayerSettings
@@ -151,19 +150,7 @@ internal fun PlaybackSubtitlesSection(
             value = settings.libassRenderScale.label,
             onClick = { onOpenDialog(PlaybackDialog.LIBASS_RENDER_SCALE) }
         )
-        SettingsActionRow(
-            title = stringResource(R.string.sub_libass_threads),
-            subtitle = stringResource(R.string.sub_libass_threads_sub),
-            value = libassThreadsLabel(settings.libassThreads),
-            onClick = { onOpenDialog(PlaybackDialog.LIBASS_THREADS) }
-        )
     }
-}
-
-@Composable
-private fun libassThreadsLabel(threads: LibassThreads): String = when (threads) {
-    LibassThreads.AUTO -> stringResource(R.string.sub_libass_threads_auto)
-    else -> threads.count.toString()
 }
 
 @Composable
@@ -243,22 +230,6 @@ internal fun SubtitleSettingsDialogs(
             selectedValue = settings.libassRenderScale,
             onOptionSelected = { scale ->
                 onUpdate { setLibassRenderScale(scale) }
-                onDismiss()
-            },
-            onDismiss = onDismiss
-        )
-        PlaybackDialog.LIBASS_THREADS -> SettingsSingleChoiceDialog(
-            title = stringResource(R.string.sub_libass_threads),
-            options = LibassThreads.entries.map { threads ->
-                SettingsPickerOption(
-                    threads,
-                    libassThreadsLabel(threads),
-                    if (threads == LibassThreads.AUTO) stringResource(R.string.sub_libass_threads_auto_sub) else null
-                )
-            },
-            selectedValue = settings.libassThreads,
-            onOptionSelected = { threads ->
-                onUpdate { setLibassThreads(threads) }
                 onDismiss()
             },
             onDismiss = onDismiss

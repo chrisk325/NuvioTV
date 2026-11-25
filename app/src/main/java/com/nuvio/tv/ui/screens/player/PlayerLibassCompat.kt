@@ -15,7 +15,6 @@ import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor as StockMatroskaExtractor
 import androidx.media3.extractor.text.SubtitleParser
 import com.nuvio.tv.core.player.dvmkv.MatroskaExtractor as DvMatroskaExtractor
-import com.nuvio.tv.core.player.libass.LibassRenderThreads
 import com.nuvio.tv.libass.media.AssHandler
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncLibassSubtitles
 import com.nuvio.tv.libass.media.parser.AssSubtitleParserFactory
@@ -32,12 +31,9 @@ internal fun ExoPlayer.Builder.buildWithAssSupportCompat(
     dataSourceFactory: DataSource.Factory = PlayerPlaybackNetworking.createDataSourceFactory(context),
     extractorsFactory: ExtractorsFactory = DefaultExtractorsFactory(),
     renderersFactory: RenderersFactory = DefaultRenderersFactory(context),
-    assHandlerConfig: com.nuvio.tv.libass.media.AssHandlerConfig = com.nuvio.tv.libass.media.AssHandlerConfig(),
-    libassThreads: Int = 0
+    assHandlerConfig: com.nuvio.tv.libass.media.AssHandlerConfig = com.nuvio.tv.libass.media.AssHandlerConfig()
 ): ExoPlayer {
     val assHandler = AssHandler(assHandlerConfig)
-    // nuvio-libass renders on every core; heavy .ass tracks then starve the loader and stall playback.
-    LibassRenderThreads.install(assHandler, libassThreads)
     val assSubtitleParserFactory = CompatAssSubtitleParserFactory(assHandler)
     val assExtractorsFactory = extractorsFactory.withAssMkvSupportCompat(
         subtitleParserFactory = assSubtitleParserFactory,
