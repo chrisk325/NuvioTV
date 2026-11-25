@@ -734,6 +734,9 @@ class PlayerRuntimeController(
     internal val vc1SoftwareDecodeStreamUrls: MutableSet<String> = mutableSetOf()
     internal val safeAudioForcedStreamUrls: MutableSet<String> = mutableSetOf()
     internal val audioDisabledForcedStreamUrls: MutableSet<String> = mutableSetOf()
+    // Streams that failed while automatic parallel connections were on; replayed on one connection.
+    internal val singleConnectionForcedStreamUrls: MutableSet<String> = mutableSetOf()
+    internal var isAutoParallelActiveForCurrentPlayback: Boolean = false
     internal var isMapDv7ToHevcActiveForCurrentPlayback: Boolean = false
     internal var isManualDv81Mode2ActiveForCurrentPlayback: Boolean = false
     internal var isExperimentalDv7ToDv81ActiveForCurrentPlayback: Boolean = false
