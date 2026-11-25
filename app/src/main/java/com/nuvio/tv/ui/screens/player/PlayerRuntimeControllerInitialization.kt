@@ -587,7 +587,8 @@ internal fun PlayerRuntimeController.initializePlayer(
             val isLiveTvStream = liveTvPlayback
             // With Custom Network off, large remote files still get parallel connections where
             // a single connection is the likely bottleneck (see AutoParallelPolicy).
-            val autoParallel = url !in singleConnectionForcedStreamUrls && AutoParallelPolicy.shouldUse(
+            val autoParallelCap = autoParallelConnectionCaps[url] ?: AutoParallelPolicy.CONNECTIONS
+            val autoParallel = autoParallelCap > 1 && AutoParallelPolicy.shouldUse(
                 customNetworkEnabled = playerSettings.parallelNetworkEnabled,
                 lowRamTier = MemoryBudget.isLowRamTier,
                 singleConnectionWindowRaised = com.nuvio.tv.core.network.ReceiveWindow.bytes > 0,
@@ -598,9 +599,9 @@ internal fun PlayerRuntimeController.initializePlayer(
                 sanitizedHeaders = PlayerMediaSourceFactory.sanitizeHeaders(headers),
                 fileSizeBytes = currentVideoSize
             )
-            isAutoParallelActiveForCurrentPlayback = autoParallel
+            autoParallelConnectionsForCurrentPlayback = if (autoParallel) autoParallelCap else 0
             val parallelConnectionCount =
-                if (autoParallel) AutoParallelPolicy.CONNECTIONS else playerSettings.parallelConnectionCount
+                if (autoParallel) autoParallelCap else playerSettings.parallelConnectionCount
             val parallelChunkSizeKb =
                 if (autoParallel) AutoParallelPolicy.CHUNK_SIZE_KB else playerSettings.parallelChunkSizeKb
             val parallelActive = (autoParallel ||
@@ -1780,16 +1781,20 @@ internal fun PlayerRuntimeController.initializePlayer(
                         }
 
                         // Automatic parallel connections are an optimisation the user never chose, so a
-                        // source error (2xxx) on them replays the stream once on a single connection
-                        // before any other recovery treats the link itself as the problem.
-                        if (isAutoParallelActiveForCurrentPlayback &&
+                        // source error (2xxx) on them replays the stream with fewer connections (4, 2,
+                        // then one) before any other recovery treats the link itself as the problem.
+                        val autoConnections = autoParallelConnectionsForCurrentPlayback
+                        if (autoConnections > 1 &&
                             error.errorCode in PlaybackException.ERROR_CODE_IO_UNSPECIFIED until 3000 &&
-                            singleConnectionForcedStreamUrls.add(currentStreamUrl)
+                            AutoParallelPolicy.shouldStepDownFor(error.findInvalidResponseCodeException()?.responseCode)
                         ) {
+                            val nextConnections = AutoParallelPolicy.stepDown(autoConnections)
+                            autoParallelConnectionCaps[currentStreamUrl] = nextConnections
+                            autoParallelConnectionsForCurrentPlayback = 0
                             Log.i(
                                 PlayerRuntimeController.TAG,
-                                "AUTO_PARALLEL_FALLBACK: ${error.errorCodeName} on automatic parallel " +
-                                        "connections; retrying on one connection host=${currentStreamUrl.safeHost()}"
+                                "AUTO_PARALLEL_FALLBACK: ${error.errorCodeName} on $autoConnections automatic " +
+                                        "connections; retrying with $nextConnections host=${currentStreamUrl.safeHost()}"
                             )
                             scheduleDeferredPlayerReinitialize(fromPositionMs = currentPosition)
                             return
@@ -2339,7 +2344,7 @@ internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     isVc1TrackSelectionBypassActiveForCurrentPlayback = false
     isSafeAudioModeActiveForCurrentPlayback = false
     isAudioDisabledForCurrentPlayback = false
-    isAutoParallelActiveForCurrentPlayback = false
+    autoParallelConnectionsForCurrentPlayback = 0
     dv7ToDv81BridgeVersionForCurrentPlayback = null
     dv7ToDv81LastProbeReasonForCurrentPlayback = null
     playerInitializationStartedAtMs = 0L

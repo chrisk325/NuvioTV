@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,5 +75,22 @@ class AutoParallelPolicyTest {
         assertTrue(AutoParallelPolicy.isRemoteHttps("https://203.0.113.7/movie.mkv"))
         assertTrue(AutoParallelPolicy.isRemoteHttps("https://172.32.0.1/movie.mkv"))
         assertTrue(AutoParallelPolicy.isRemoteHttps("https://download.real-debrid.com/d/abc/movie.mkv"))
+    }
+
+    @Test
+    fun `refused connections step down from four to two to one`() {
+        assertEquals(4, AutoParallelPolicy.CONNECTIONS)
+        assertEquals(2, AutoParallelPolicy.stepDown(4))
+        assertEquals(1, AutoParallelPolicy.stepDown(2))
+        assertEquals(2, AutoParallelPolicy.stepDown(3))
+    }
+
+    @Test
+    fun `a missing file does not step down`() {
+        assertFalse(AutoParallelPolicy.shouldStepDownFor(404))
+        assertFalse(AutoParallelPolicy.shouldStepDownFor(410))
+        assertTrue(AutoParallelPolicy.shouldStepDownFor(403))
+        assertTrue(AutoParallelPolicy.shouldStepDownFor(509))
+        assertTrue(AutoParallelPolicy.shouldStepDownFor(null))
     }
 }

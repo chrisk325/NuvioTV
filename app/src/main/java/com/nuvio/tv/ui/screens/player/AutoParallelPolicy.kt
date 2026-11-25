@@ -13,7 +13,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  *
  * Left off wherever it cannot help or the parallel path is not proven: low-RAM devices, a box
  * that already gives a single connection a raised receive window (the parallel sockets keep the
- * kernel's own, so two of them could fetch less), Live TV, torrents, HLS/DASH, streams that carry
+ * kernel's own, so a few of them could fetch less), Live TV, torrents, HLS/DASH, streams that carry
  * addon headers (the parallel path has no HTTP/2-on-403 retry), cleartext and local servers, and
  * files whose size is unknown or below [MIN_FILE_BYTES].
  */
@@ -21,9 +21,21 @@ internal object AutoParallelPolicy {
     /** Roughly 25 Mbps over two hours: below this one connection already keeps up. */
     const val MIN_FILE_BYTES: Long = 20L * 1024L * 1024L * 1024L
 
-    // The values a user gets by switching Parallel Connections on without changing anything else.
-    const val CONNECTIONS = 2
+    /** The most connections the app allows anywhere; each one multiplies the window. */
+    const val CONNECTIONS = 4
+    /** Step tried when a server refuses [CONNECTIONS] but may still take fewer. */
+    const val FALLBACK_CONNECTIONS = 2
+    /** The chunk size Parallel Connections starts with. */
     const val CHUNK_SIZE_KB = 16 * 1024
+
+    /**
+     * Connections to retry with after a source error on [current] automatic connections:
+     * 4 steps down to 2, then 1, which means a single plain connection (automatic mode off).
+     */
+    fun stepDown(current: Int): Int = if (current > FALLBACK_CONNECTIONS) FALLBACK_CONNECTIONS else 1
+
+    /** 404/410 say the file is gone, not that the server refused the connections. */
+    fun shouldStepDownFor(httpStatus: Int?): Boolean = httpStatus != 404 && httpStatus != 410
 
     fun shouldUse(
         customNetworkEnabled: Boolean,
