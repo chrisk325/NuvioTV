@@ -734,6 +734,10 @@ class PlayerRuntimeController(
     internal val vc1SoftwareDecodeStreamUrls: MutableSet<String> = mutableSetOf()
     internal val safeAudioForcedStreamUrls: MutableSet<String> = mutableSetOf()
     internal val audioDisabledForcedStreamUrls: MutableSet<String> = mutableSetOf()
+    // Connection cap for streams that failed on automatic parallel connections (1 = single connection).
+    internal val autoParallelConnectionCaps: MutableMap<String, Int> = mutableMapOf()
+    // Connections automatic mode opened for the current playback, or 0 when it is off.
+    internal var autoParallelConnectionsForCurrentPlayback: Int = 0
     internal var isMapDv7ToHevcActiveForCurrentPlayback: Boolean = false
     internal var isManualDv81Mode2ActiveForCurrentPlayback: Boolean = false
     internal var isExperimentalDv7ToDv81ActiveForCurrentPlayback: Boolean = false

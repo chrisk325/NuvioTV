@@ -3479,7 +3479,7 @@
     <string name="playback_cache_write_warning">On devices with built-in storage write activity is steady and can add wear over time.</string>
     <string name="playback_reset_to_default">Reset to Default</string>
     <string name="playback_net_custom">Custom Network</string>
-    <string name="playback_net_custom_sub">Use multiple parallel connections to fetch progressive streams. When off, a single connection is used.</string>
+    <string name="playback_net_custom_sub">Use multiple parallel connections to fetch progressive streams. When off, remote files of 20 GB and up use four connections automatically where one connection is likely to be the limit (fewer if the server refuses); everything else uses a single connection.</string>
     <string name="playback_net_parallel">Parallel Connections</string>
     <string name="playback_net_parallel_sub">Use multiple connections in parallel for fetching streams. Activate when you experience buffering although your download speed is definitely more than sufficient.</string>
     <string name="playback_net_connection_count">Connection Count</string>

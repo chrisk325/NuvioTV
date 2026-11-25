@@ -585,14 +585,34 @@ internal fun PlayerRuntimeController.initializePlayer(
             // Live TV streams never end and IPTV accounts usually allow one connection, so ranged
             // parallel requests can't play them: they get the single connection the preview uses.
             val isLiveTvStream = liveTvPlayback
-            val parallelActive = playerSettings.parallelNetworkEnabled && playerSettings.useParallelConnections && !isLiveTvStream
+            // With Custom Network off, large remote files still get parallel connections where
+            // a single connection is the likely bottleneck (see AutoParallelPolicy).
+            val autoParallelCap = autoParallelConnectionCaps[url] ?: AutoParallelPolicy.CONNECTIONS
+            val autoParallel = autoParallelCap > 1 && AutoParallelPolicy.shouldUse(
+                customNetworkEnabled = playerSettings.parallelNetworkEnabled,
+                lowRamTier = MemoryBudget.isLowRamTier,
+                singleConnectionWindowRaised = com.nuvio.tv.core.network.ReceiveWindow.bytes > 0,
+                liveTv = isLiveTvStream,
+                torrent = isTorrentStream,
+                adaptive = isHlsStream || isDashStream,
+                url = url,
+                sanitizedHeaders = PlayerMediaSourceFactory.sanitizeHeaders(headers),
+                fileSizeBytes = currentVideoSize
+            )
+            autoParallelConnectionsForCurrentPlayback = if (autoParallel) autoParallelCap else 0
+            val parallelConnectionCount =
+                if (autoParallel) autoParallelCap else playerSettings.parallelConnectionCount
+            val parallelChunkSizeKb =
+                if (autoParallel) AutoParallelPolicy.CHUNK_SIZE_KB else playerSettings.parallelChunkSizeKb
+            val parallelActive = (autoParallel ||
+                (playerSettings.parallelNetworkEnabled && playerSettings.useParallelConnections)) && !isLiveTvStream
             val useChunkSessionSource = parallelActive && !isHlsStream && !isDashStream
 
             val parallelOverheadMb = if (useChunkSessionSource) {
-                val chunkMb = Math.ceil(playerSettings.parallelChunkSizeKb / 1024.0)
+                val chunkMb = Math.ceil(parallelChunkSizeKb / 1024.0)
                     .toInt()
                     .coerceAtMost(MemoryBudget.tierMaxChunkMb)
-                MemoryBudget.parallelOverheadMb(playerSettings.parallelConnectionCount, chunkMb)
+                MemoryBudget.parallelOverheadMb(parallelConnectionCount, chunkMb)
             } else {
                 0
             }
@@ -696,7 +716,11 @@ internal fun PlayerRuntimeController.initializePlayer(
             mediaSourceFactory.nativeEngineEnabled = playerSettings.nuvioPerformanceModeEnabled
 
             mediaSourceFactory.nuvioPerformanceModeEnabled = playerSettings.nuvioPerformanceModeEnabled
-            if (playerSettings.parallelNetworkEnabled && !isTorrentStream && !isLiveTvStream) {
+            if (autoParallel) {
+                mediaSourceFactory.useParallelConnections = true
+                mediaSourceFactory.parallelConnectionCount = parallelConnectionCount
+                mediaSourceFactory.parallelChunkSizeKb = parallelChunkSizeKb
+            } else if (playerSettings.parallelNetworkEnabled && !isTorrentStream && !isLiveTvStream) {
                 mediaSourceFactory.useParallelConnections = playerSettings.useParallelConnections
                 mediaSourceFactory.parallelConnectionCount = playerSettings.parallelConnectionCount
                 mediaSourceFactory.parallelChunkSizeKb = playerSettings.parallelChunkSizeKb
@@ -713,6 +737,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                 "BUFFER_NETWORK: bufferEngine=${playerSettings.bufferEngineEnabled} " +
                         "parallelNetwork=${playerSettings.parallelNetworkEnabled} " +
                         "useParallel=${mediaSourceFactory.useParallelConnections} " +
+                        "autoParallel=$autoParallel " +
                         "nuvioPerf=${mediaSourceFactory.nuvioPerformanceModeEnabled} " +
                         "engineNative=$engineNative useNativeEffective=$effectiveNative " +
                         "vodCache=${mediaSourceFactory.vodCacheEnabled} " +
@@ -1755,6 +1780,26 @@ internal fun PlayerRuntimeController.initializePlayer(
                             if (tryNextAudioFallbackStep(currentPosition)) return
                         }
 
+                        // Automatic parallel connections are an optimisation the user never chose, so a
+                        // source error (2xxx) on them replays the stream with fewer connections (4, 2,
+                        // then one) before any other recovery treats the link itself as the problem.
+                        val autoConnections = autoParallelConnectionsForCurrentPlayback
+                        if (autoConnections > 1 &&
+                            error.errorCode in PlaybackException.ERROR_CODE_IO_UNSPECIFIED until 3000 &&
+                            AutoParallelPolicy.shouldStepDownFor(error.findInvalidResponseCodeException()?.responseCode)
+                        ) {
+                            val nextConnections = AutoParallelPolicy.stepDown(autoConnections)
+                            autoParallelConnectionCaps[currentStreamUrl] = nextConnections
+                            autoParallelConnectionsForCurrentPlayback = 0
+                            Log.i(
+                                PlayerRuntimeController.TAG,
+                                "AUTO_PARALLEL_FALLBACK: ${error.errorCodeName} on $autoConnections automatic " +
+                                        "connections; retrying with $nextConnections host=${currentStreamUrl.safeHost()}"
+                            )
+                            scheduleDeferredPlayerReinitialize(fromPositionMs = currentPosition)
+                            return
+                        }
+
                         val timeoutError = error.findCause<SocketTimeoutException>()
                         if (timeoutError != null && timeoutRecoveryAttempts < PlayerRuntimeController.MAX_TIMEOUT_RECOVERY_ATTEMPTS) {
                             retryCurrentStreamAfterTimeout(currentPosition)
@@ -2299,6 +2344,7 @@ internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     isVc1TrackSelectionBypassActiveForCurrentPlayback = false
     isSafeAudioModeActiveForCurrentPlayback = false
     isAudioDisabledForCurrentPlayback = false
+    autoParallelConnectionsForCurrentPlayback = 0
     dv7ToDv81BridgeVersionForCurrentPlayback = null
     dv7ToDv81LastProbeReasonForCurrentPlayback = null
     playerInitializationStartedAtMs = 0L
