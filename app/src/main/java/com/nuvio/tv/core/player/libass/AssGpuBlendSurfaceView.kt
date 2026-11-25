@@ -83,7 +83,7 @@ class AssGpuBlendSurfaceView(
         surfaceWidth = frame.width()
         surfaceHeight = frame.height()
         assHandler.setOverlaySurfaceSize(surfaceWidth, surfaceHeight)
-        val thread = HandlerThread(TAG, LibassRenderThreads.WORKER_PRIORITY).also { it.start() }
+        val thread = HandlerThread(TAG, LibassWorker.PRIORITY).also { it.start() }
         workerThread = thread
         val handler = Handler(thread.looper)
         workerHandler = handler

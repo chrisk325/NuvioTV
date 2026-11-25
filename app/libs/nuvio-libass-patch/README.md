@@ -23,8 +23,7 @@ which is why this AAR has `AssCpuBlendSurfaceView`, `replaceTrack` and `AssHandl
 - the `nativeCpuBlend*` natives that `AssCpuBlendSurfaceView` needs, which upstream's v0.0.14 AAR lacks.
 
 The fork has no `ass_set_threads`. It runs its own event threads, at most 4 and never more than the
-cores, and only on expensive frames. So `AssGpuBlendNative.setThreads` finds no `ass_set_threads`
-and returns 0, and the "Subtitle Render Threads" setting has no effect with this libass. The worker
+cores, and only on expensive frames, so the app no longer sets libass's thread count. The worker
 priority patch below still applies: the fork's threads are pthreads started from the rendering
 worker, and they take its priority.
 
@@ -50,13 +49,12 @@ The worker also starts at the default thread priority, not `THREAD_PRIORITY_DISP
 
 ## Worker priority (`AtlasLibassThread`, `AssVideoEffectAsyncProgram`)
 
-nuvio-libass's libass is the threaded build. Its render threads start from the worker that renders
-and take that worker's priority. At `THREAD_PRIORITY_DISPLAY` they took the CPU the stream's loader
+libass's render threads start from the worker that renders and take that worker's priority. At `THREAD_PRIORITY_DISPLAY` they took the CPU the stream's loader
 needs, and heavy .ass tracks made playback buffer. `patch_aar.py` changes the `bipush -4` that
 `AssLibassThread` (Overlay) and `AssRenderGL` (Video Effect) are created with to `bipush 0`, the same
 length, so nothing else in those classes moves. `AssSurfaceGlThread` keeps the display priority: it
-only draws, and never runs libass. The app caps libass's thread count itself
-(`LibassRenderThreads`, the "Subtitle Render Threads" setting).
+only draws, and never runs libass. The app's own GPU Blend worker starts at the same priority
+(`LibassWorker`).
 
 ## Rebuilding
 

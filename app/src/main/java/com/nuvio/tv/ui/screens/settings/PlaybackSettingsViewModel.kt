@@ -5,7 +5,6 @@ import androidx.media3.common.util.UnstableApi
 import com.nuvio.tv.core.plugin.PluginManager
 import com.nuvio.tv.data.local.DeviceLocalPlayerPreferences
 import com.nuvio.tv.data.local.LibassRenderScale
-import com.nuvio.tv.data.local.LibassThreads
 import com.nuvio.tv.data.local.LibassRenderType
 import com.nuvio.tv.data.local.LibassRenderMode
 import com.nuvio.tv.data.local.InternalPlayerEngine
@@ -287,10 +286,6 @@ class PlaybackSettingsViewModel @Inject constructor(
 
     suspend fun setLibassRenderScale(scale: LibassRenderScale) {
         playerSettingsDataStore.setLibassRenderScale(scale)
-    }
-
-    suspend fun setLibassThreads(threads: LibassThreads) {
-        playerSettingsDataStore.setLibassThreads(threads)
     }
 
     suspend fun setLibassRenderMode(mode: LibassRenderMode) {

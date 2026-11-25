@@ -43,11 +43,4 @@ internal object AssGpuBlendNative {
 
     @JvmStatic
     external fun release(handle: Long)
-
-    /**
-     * Sets how many threads libass's `renderer` renders with, under its lock, from its next frame.
-     * The count libass took, or 0 when its libass isn't the threaded build.
-     */
-    @JvmStatic
-    external fun setThreads(renderer: Long, threads: Int): Int
 }
