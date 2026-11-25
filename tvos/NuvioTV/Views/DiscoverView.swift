@@ -128,11 +128,21 @@ struct DiscoverView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
                 } else {
-                    filterRow(types, selected: type, label: typeLabel) { select(type: $0) }
-                    filterRow(catalogs.map(\.id), selected: current?.id ?? "", label: catalogLabel) { select(catalog: $0) }
-                    if !genreOptions.isEmpty {
-                        filterRow(genreOptions, selected: genre, label: { $0.isEmpty ? "All genres" : $0 }) { select(genre: $0) }
+                    // Type, catalog and genre as dropdowns, side by side (one focus section, so Down
+                    // goes to the posters and Up from the posters comes back here).
+                    HStack(alignment: .top, spacing: 28) {
+                        filterMenu("Type", values: types, selected: type, label: typeLabel, maxLength: 20) { select(type: $0) }
+                        filterMenu("Catalog", values: catalogs.map(\.id), selected: current?.id ?? "",
+                                   label: catalogLabel, maxLength: 40) { select(catalog: $0) }
+                        if !genreOptions.isEmpty {
+                            filterMenu("Genre", values: genreOptions, selected: genre,
+                                       label: { $0.isEmpty ? "All genres" : $0 }, maxLength: 26) { select(genre: $0) }
+                        }
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 60)
+                    .padding(.vertical, 14)
+                    .focusSection()
 
                     if let error, items.isEmpty {
                         MessageView(title: "Couldn't load catalog", message: error)
@@ -170,20 +180,42 @@ struct DiscoverView: View {
         }
     }
 
-    /// A row of pill buttons, scrolling sideways.
-    private func filterRow(_ values: [String], selected: String, label: @escaping (String) -> String,
-                           action: @escaping (String) -> Void) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(values, id: \.self) { value in
-                    Button { action(value) } label: { Text(label(value)).lineLimit(1) }
-                        .buttonStyle(SeasonTabStyle(isSelected: value == selected))
+    /// A dropdown: shows the current choice; the list opens in the system menu (focus returns to
+    /// the button when it closes). The chosen entry is ticked.
+    private func filterMenu(_ title: String, values: [String], selected: String, label: @escaping (String) -> String,
+                            maxLength: Int, action: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+            Menu {
+                // By position: a list may repeat a name, and repeated ids upset SwiftUI.
+                ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                    Button { action(value) } label: {
+                        if value == selected {
+                            Label(label(value), systemImage: "checkmark")
+                        } else {
+                            Text(label(value))
+                        }
+                    }
                 }
+            } label: {
+                // The button fits its text; very long names are shortened so the three stay on one line.
+                HStack(spacing: 14) {
+                    Text(Self.shortened(values.contains(selected) ? label(selected) : title, to: maxLength))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                }
+                .fixedSize()
             }
-            .padding(.horizontal, 60)
-            .padding(.vertical, 14)
+            .disabled(values.isEmpty)
         }
-        .focusSection()
+    }
+
+    static func shortened(_ text: String, to limit: Int) -> String {
+        text.count <= limit ? text : String(text.prefix(max(1, limit - 1))).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     private func typeLabel(_ value: String) -> String {
