@@ -21,6 +21,7 @@ import static java.lang.annotation.ElementType.TYPE_USE;
 import androidx.annotation.IntDef;
 import androidx.media3.common.C;
 import androidx.media3.common.ParserException;
+import androidx.media3.common.util.Log;
 import androidx.media3.extractor.ExtractorInput;
 import java.io.EOFException;
 import java.io.IOException;
@@ -38,12 +39,25 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @Target(TYPE_USE)
-  @IntDef({ELEMENT_STATE_READ_ID, ELEMENT_STATE_READ_CONTENT_SIZE, ELEMENT_STATE_READ_CONTENT})
+  @IntDef({
+    ELEMENT_STATE_READ_ID,
+    ELEMENT_STATE_READ_CONTENT_SIZE,
+    ELEMENT_STATE_READ_CONTENT,
+    ELEMENT_STATE_RESYNC
+  })
   private @interface ElementState {}
+
+  private static final String TAG = "DefaultEbmlReader";
 
   private static final int ELEMENT_STATE_READ_ID = 0;
   private static final int ELEMENT_STATE_READ_CONTENT_SIZE = 1;
   private static final int ELEMENT_STATE_READ_CONTENT = 2;
+  // Searching byte by byte for the next level 1 element after an element whose size cannot be
+  // valid. Kept as a state so a read error during the search resumes the search, not ID parsing.
+  private static final int ELEMENT_STATE_RESYNC = 3;
+
+  /** Matroska Segment, the only master element kept on the stack across a resync. */
+  private static final int ID_SEGMENT = 0x18538067;
 
   private static final int MAX_ID_BYTES = 4;
   private static final int MAX_LENGTH_BYTES = 8;
@@ -87,6 +101,15 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       if (head != null && input.getPosition() >= head.elementEndPosition) {
         processor.endMasterElement(masterElementsStack.pop().elementId);
         return true;
+      }
+
+      if (elementState == ELEMENT_STATE_RESYNC) {
+        long result = maybeResyncToNextLevel1Element(input);
+        if (result == C.RESULT_END_OF_INPUT) {
+          return false;
+        }
+        elementId = (int) result;
+        elementState = ELEMENT_STATE_READ_CONTENT_SIZE;
       }
 
       if (elementState == ELEMENT_STATE_READ_ID) {
@@ -142,10 +165,18 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           elementState = ELEMENT_STATE_READ_ID;
           return true;
         case EbmlProcessor.ELEMENT_TYPE_BINARY:
+          if (elementContentSize > Integer.MAX_VALUE) {
+            startResync(input);
+            break;
+          }
           processor.binaryElement(elementId, (int) elementContentSize, input);
           elementState = ELEMENT_STATE_READ_ID;
           return true;
         case EbmlProcessor.ELEMENT_TYPE_UNKNOWN:
+          if (elementContentSize > Integer.MAX_VALUE) {
+            startResync(input);
+            break;
+          }
           input.skipFully((int) elementContentSize);
           elementState = ELEMENT_STATE_READ_ID;
           elementContentSize = 0;
@@ -155,6 +186,41 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           throw ParserException.createForMalformedContainer(
               "Invalid element type " + type, /* cause= */ null);
       }
+    }
+  }
+
+  /**
+   * Handles a binary or unknown element whose size does not fit in an int.
+   *
+   * <p>No real Matroska element of these types is that large, so the reader has lost its place
+   * (damaged data in the file or the stream) and the header it just read is noise. Casting the
+   * size to an int wraps it negative, and skipping a negative length throws an unchecked
+   * exception inside {@link ExtractorInput} that ends playback. Instead, the elements opened
+   * below the Segment are closed and the reader searches for the next level 1 element (normally
+   * the next Cluster), so playback carries on from there.
+   */
+  @RequiresNonNull("processor")
+  private void startResync(ExtractorInput input) throws ParserException {
+    Log.w(
+        TAG,
+        "Element 0x"
+            + Integer.toHexString(elementId)
+            + " declares "
+            + elementContentSize
+            + " bytes at position "
+            + input.getPosition()
+            + "; resyncing to the next level 1 element");
+    elementState = ELEMENT_STATE_RESYNC;
+    elementContentSize = 0;
+    elementId = 0;
+    // A level 1 element found by the search is a child of the Segment, so whatever was open below
+    // the Segment has ended. Closing those elements commits a block that was already read in full
+    // and resets the block state; leaving them open would apply the old block's state to the
+    // first block found after the search.
+    MasterElement head;
+    while ((head = masterElementsStack.peek()) != null && head.elementId != ID_SEGMENT) {
+      masterElementsStack.pop();
+      processor.endMasterElement(head.elementId);
     }
   }
 
