@@ -3440,7 +3440,7 @@
     <string name="playback_net_nuvio_performance_mode_sub">Enable native off-heap allocator and scrubbing optimizations.</string>
     <string name="playback_net_nuvio_performance_mode_not_supported">This feature is not supported by your device.</string>
     <string name="playback_buffer_custom">Custom Playback Buffers</string>
-    <string name="playback_buffer_custom_sub">Override Media3\'s default buffering with the values below. When off, the player uses Media3\'s stock buffer durations and target size.</string>
+    <string name="playback_buffer_custom_sub">Override Media3\'s default buffering with the values below. When off, the player uses Media3\'s stock buffer durations, with the target size raised to this device\'s memory budget when it has enough RAM.</string>
     <string name="playback_buffer_header">Buffer</string>
     <string name="playback_buffer_warning">These settings affect buffering behavior. Incorrect values may cause playback issues.</string>
     <string name="playback_buffer_min">Min Buffer Duration</string>
