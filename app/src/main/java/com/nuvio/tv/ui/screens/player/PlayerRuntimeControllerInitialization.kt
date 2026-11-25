@@ -1781,12 +1781,17 @@ internal fun PlayerRuntimeController.initializePlayer(
                         }
 
                         // Automatic parallel connections are an optimisation the user never chose, so a
-                        // source error (2xxx) on them replays the stream with fewer connections (4, 2,
+                        // network error (2xxx) on them replays the stream with fewer connections (4, 2,
                         // then one) before any other recovery treats the link itself as the problem.
+                        // Unexpected loader failures also arrive as 2000 but are not network errors.
                         val autoConnections = autoParallelConnectionsForCurrentPlayback
                         if (autoConnections > 1 &&
                             error.errorCode in PlaybackException.ERROR_CODE_IO_UNSPECIFIED until 3000 &&
-                            AutoParallelPolicy.shouldStepDownFor(error.findInvalidResponseCodeException()?.responseCode)
+                            AutoParallelPolicy.shouldStepDownFor(
+                                httpStatus = error.findInvalidResponseCodeException()?.responseCode,
+                                unexpectedLoaderFailure =
+                                    error.findCause<androidx.media3.exoplayer.upstream.Loader.UnexpectedLoaderException>() != null
+                            )
                         ) {
                             val nextConnections = AutoParallelPolicy.stepDown(autoConnections)
                             autoParallelConnectionCaps[currentStreamUrl] = nextConnections

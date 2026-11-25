@@ -93,4 +93,11 @@ class AutoParallelPolicyTest {
         assertTrue(AutoParallelPolicy.shouldStepDownFor(509))
         assertTrue(AutoParallelPolicy.shouldStepDownFor(null))
     }
+
+    @Test
+    fun `an unexpected loader failure does not step down`() {
+        assertFalse(AutoParallelPolicy.shouldStepDownFor(null, unexpectedLoaderFailure = true))
+        assertFalse(AutoParallelPolicy.shouldStepDownFor(503, unexpectedLoaderFailure = true))
+        assertTrue(AutoParallelPolicy.shouldStepDownFor(503, unexpectedLoaderFailure = false))
+    }
 }
