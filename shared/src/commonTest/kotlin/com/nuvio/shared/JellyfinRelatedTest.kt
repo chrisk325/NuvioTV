@@ -127,6 +127,36 @@ class JellyfinRelatedTest {
     }
 
     @Test
+    fun lastPlayedEpisodesGiveTheFurthestEpisodePerShow() = runTest {
+        val http = HttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            when {
+                path == "/Users/u1/Items" && request.url.parameters["Filters"] == "IsPlayed" -> {
+                    assertEquals("Episode", request.url.parameters["IncludeItemTypes"])
+                    respond(
+                        """{"Items":[
+                            {"Id":"e3","Type":"Episode","SeriesId":"s1","SeriesName":"Show One","ParentIndexNumber":1,"IndexNumber":3,"UserData":{"LastPlayedDate":"2026-11-20T10:00:00Z"}},
+                            {"Id":"e5","Type":"Episode","SeriesId":"s1","SeriesName":"Show One","ParentIndexNumber":1,"IndexNumber":5,"UserData":{"LastPlayedDate":"2026-11-10T10:00:00Z"}},
+                            {"Id":"x1","Type":"Episode","SeriesId":"s1","SeriesName":"Show One","ParentIndexNumber":0,"IndexNumber":9,"UserData":{}},
+                            {"Id":"a7","Type":"Episode","SeriesId":"s2","SeriesName":"Anime","IndexNumber":7,"UserData":{}},
+                            {"Id":"b2","Type":"Episode","SeriesId":"s3","SeriesName":"Show Three","ParentIndexNumber":2,"IndexNumber":2,"UserData":{}}]}""",
+                        HttpStatusCode.OK, json
+                    )
+                }
+                path.endsWith("/Items/s1") -> respond("""{"Id":"s1","Type":"Series","ProviderIds":{"Imdb":"tt100"}}""", HttpStatusCode.OK, json)
+                path.endsWith("/Items/s3") -> respond("""{"Id":"s3","Type":"Series","ProviderIds":{}}""", HttpStatusCode.OK, json)
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        })
+        val seeds = MediaServerService(http, serverStore).lastPlayedEpisodes()
+        // Specials and season-less episodes are left out; per show the furthest episode.
+        assertEquals(listOf("tt100:1:5", "mediaserver:srv:b2"), seeds.map { it.videoId })
+        assertEquals(listOf("tt100", "mediaserver:srv:s3"), seeds.map { it.contentId })
+        assertEquals(com.nuvio.shared.util.parseReleaseEpochMs("2026-11-20T10:00:00Z"), seeds[0].updatedAtMs)
+        assertEquals(1L, seeds[1].updatedAtMs)
+    }
+
+    @Test
     fun standInsWithoutPlaceholderTypeAreResolvedThroughTheStreamListOne() = runTest {
         val asked = mutableListOf<String?>()
         val http = HttpClient(MockEngine { request ->

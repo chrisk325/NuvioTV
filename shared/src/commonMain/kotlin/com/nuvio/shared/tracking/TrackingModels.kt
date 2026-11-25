@@ -69,7 +69,12 @@ private val listJson = Json { ignoreUnknownKeys = true }
  */
 data class TrackerWatched(
     val keys: List<String> = emptyList(),
-    val completedSeries: Set<String> = emptySet()
+    val completedSeries: Set<String> = emptySet(),
+    /**
+     * For the Upcoming row: per show, the furthest regular episode watched (season, episode, and
+     * when the show was last watched in updatedAtMs). No position (durationMs 0).
+     */
+    val lastWatchedEpisodes: List<com.nuvio.shared.model.WatchProgress> = emptyList()
 )
 
 class WatchedRepository(private val store: KeyValueStore) {

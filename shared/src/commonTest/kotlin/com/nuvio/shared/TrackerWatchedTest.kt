@@ -28,7 +28,7 @@ class TrackerWatchedTest {
                     assertEquals("full", request.url.parameters["extended"])
                     respond(
                         """[
-                          {"show":{"aired_episodes":3,"ids":{"imdb":"tt1","tmdb":11}},
+                          {"last_watched_at":"2026-11-20T21:00:00.000Z","show":{"aired_episodes":3,"ids":{"imdb":"tt1","tmdb":11}},
                            "seasons":[{"number":0,"episodes":[{"number":1}]},
                                       {"number":1,"episodes":[{"number":1},{"number":2}]},
                                       {"number":2,"episodes":[{"number":1}]}]},
@@ -46,6 +46,10 @@ class TrackerWatchedTest {
         assertTrue("movie:tt0111161" in state.keys)
         assertTrue("tt1:1:2" in state.keys)
         assertEquals(setOf("series:tt1", "series:tmdb:11"), state.completedSeries)
+        // For the Upcoming row: the furthest regular episode of each show (specials left out).
+        assertEquals(listOf("tt1:2:1", "tt2:1:1"), state.lastWatchedEpisodes.map { it.videoId })
+        assertEquals(listOf(2, 1), state.lastWatchedEpisodes.map { it.season })
+        assertEquals(com.nuvio.shared.util.parseReleaseEpochMs("2026-11-20T21:00:00.000Z"), state.lastWatchedEpisodes[0].updatedAtMs)
     }
 
     @Test

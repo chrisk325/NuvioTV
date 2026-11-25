@@ -95,6 +95,11 @@ private const val NUVIO_COLLECTIONS_KEY = "collections.imported.v1"
 private const val SERVER_LOOKUP_MS = 8_000L
 /** Shows looked up per sync for up next air dates the trackers don't give. */
 private const val MAX_AIR_DATE_LOOKUPS = 120
+/** Up next source holding unaired next episodes of shows that are caught up (the Upcoming row). */
+private const val UPCOMING_SOURCE = "upcoming"
+/** Shows watched within this many days are checked for an upcoming episode (Android's default cap). */
+private const val UPCOMING_SEED_WINDOW_MS = 60L * 86_400_000L
+private const val MAX_UPCOMING_LOOKUPS = 60
 private const val AIR_DATE_PARALLEL = 6
 private const val AIR_DATE_RETRIES = 2
 private const val AIR_DATE_RETRY_DELAY_MS = 30_000L
@@ -818,7 +823,8 @@ class NuvioCore(
     private val progressJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val progressListSerializer =
         kotlinx.serialization.builtins.ListSerializer(WatchProgress.serializer())
-    private val upNextSources = listOf("simkl", "trakt", "mediaserver", "local")
+    // "upcoming" last: on a tie the trackers' own entry for a show wins.
+    private val upNextSources = listOf("simkl", "trakt", "mediaserver", "local", UPCOMING_SOURCE)
     /**
      * Air dates of up next episodes whose tracker gives none (Jellyfin / AIOMetadata, Simkl):
      * upNextKey → epoch ms, looked up once in the show's episode list and kept on the device.
@@ -934,6 +940,119 @@ class NuvioCore(
         upNext.value = loadUpNext()
     }
 
+    // --- Upcoming: unaired next episodes of caught-up shows ------------------------------------
+    // Trackers' up next only lists aired episodes, so once every aired episode of a show is
+    // watched it drops out. As on Android, the episode after the furthest one watched is then
+    // looked up in the show's episode list; if it hasn't aired yet it goes to the Upcoming row.
+
+    /** Per source ("trakt", "mediaserver"): the furthest episode watched of each show. */
+    private var lastWatchedBySource: Map<String, List<WatchProgress>> = emptyMap()
+    /** Simkl's next episode of shows with every aired episode watched. */
+    private var simklCaughtUp: List<WatchProgress> = emptyList()
+    private val upcomingLock = kotlinx.coroutines.sync.Mutex()
+    private var upcomingRerun = false
+
+    private class UpcomingSeed(val progress: WatchProgress, val inclusive: Boolean)
+
+    /** Looks up the Upcoming row's episodes again (one run at a time; a request meanwhile reruns it). */
+    internal suspend fun refreshUpcoming() {
+        if (!upcomingLock.tryLock()) {
+            upcomingRerun = true
+            return
+        }
+        try {
+            do {
+                upcomingRerun = false
+                lookUpUpcoming()
+            } while (upcomingRerun)
+        } finally {
+            upcomingLock.unlock()
+        }
+    }
+
+    private suspend fun lookUpUpcoming() {
+        val now = currentTimeMillis()
+        val oldest = now - UPCOMING_SEED_WINDOW_MS
+        val progress = watchProgress.entries.value
+        // Shows with an aired next episode or something in progress aren't Upcoming material.
+        val covered = upNextSources.filter { it != UPCOMING_SOURCE }.flatMap(::storedUpNext).map { it.contentId }.toSet() +
+            progress.filter { it.isResumable }.map { it.contentId }
+        // Episodes finished here (and progress synced from the Nuvio account).
+        val local = progress.filter { it.isCompleted && it.season != null && it.episode != null && isSeriesLikeType(it.contentType) }
+        val seeds = (lastWatchedBySource.values.flatten() + local).map { UpcomingSeed(it, inclusive = false) } +
+            simklCaughtUp.map { UpcomingSeed(it, inclusive = true) }
+        val chosen = seeds
+            .filter { seed ->
+                val p = seed.progress
+                p.contentId.isNotBlank() && p.contentId !in covered && p.season != null && p.season != 0 &&
+                    p.episode != null && (p.updatedAtMs >= oldest || p.updatedAtMs <= 1L)
+            }
+            .groupBy { it.progress.contentId }
+            .mapNotNull { (_, list) ->
+                // The furthest point reached; a named next episode counts one past its number.
+                list.maxWithOrNull(
+                    compareBy<UpcomingSeed>(
+                        { it.progress.season ?: 0 },
+                        { (it.progress.episode ?: 0) + if (it.inclusive) 0 else 1 },
+                        { it.progress.updatedAtMs }
+                    )
+                )
+            }
+            .sortedByDescending { it.progress.updatedAtMs }
+            .take(MAX_UPCOMING_LOOKUPS)
+        val previous = storedUpNext(UPCOMING_SOURCE).associateBy { it.contentId }
+        val result = mutableListOf<WatchProgress>()
+        for (batch in chosen.chunked(AIR_DATE_PARALLEL)) {
+            val metas = kotlinx.coroutines.coroutineScope {
+                batch.map { seed ->
+                    async {
+                        seed to try {
+                            meta(seed.progress.contentType, seed.progress.contentId, null)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }.awaitAll()
+            }
+            for ((seed, meta) in metas) {
+                if (meta == null) {
+                    // Lookup failed: keep what was found before, while it's still ahead.
+                    previous[seed.progress.contentId]?.takeIf { (it.releasedAtMs ?: 0L) > now }?.let { result += it }
+                    continue
+                }
+                upcomingEntry(meta, seed.progress, seed.inclusive, now)?.let { result += it }
+            }
+        }
+        setUpNext(UPCOMING_SOURCE, result)
+    }
+
+    /** The Upcoming row's card for a show, from its episode list and where it was left. */
+    private fun upcomingEntry(meta: Meta, seed: WatchProgress, inclusive: Boolean, nowMs: Long): WatchProgress? {
+        val season = seed.season ?: return null
+        val episode = seed.episode ?: return null
+        val (video, released) = upcomingEpisodeAfter(meta.videos, season, episode, seed.videoId, inclusive, nowMs)
+            ?: return null
+        return WatchProgress(
+            contentId = seed.contentId,
+            contentType = seed.contentType,
+            videoId = video.id,
+            name = meta.name.ifBlank { seed.name },
+            poster = seed.poster ?: meta.poster,
+            background = meta.backdropUrl ?: seed.background,
+            logo = meta.logo,
+            season = video.season,
+            episode = video.episode,
+            episodeTitle = video.title,
+            positionMs = 0,
+            durationMs = 0,
+            updatedAtMs = seed.updatedAtMs,
+            releasedAtMs = released,
+            thumbnail = video.thumbnail
+        )
+    }
+
     /**
      * Up next without a tracker (Android shows it too): when an episode is finished here, the
      * following one (first not yet watched) waits in Continue Watching as "Next: S1 E5".
@@ -945,6 +1064,15 @@ class NuvioCore(
         if (index < 0) return
         val next = episodes.drop(index + 1).firstOrNull { !watched.isWatched(watchedKey(meta, it)) } ?: run {
             setUpNext("local", storedUpNext("local").filterNot { it.contentId == meta.id })
+            // Caught up: the next episode to air goes to the Upcoming row right away.
+            val now = currentTimeMillis()
+            val seed = WatchProgress(
+                contentId = meta.id, contentType = meta.apiType, videoId = video.id, name = meta.name,
+                poster = meta.poster, background = meta.backdropUrl, season = video.season, episode = video.episode,
+                positionMs = 0, durationMs = 0, updatedAtMs = now
+            )
+            val others = storedUpNext(UPCOMING_SOURCE).filterNot { it.contentId == meta.id }
+            setUpNext(UPCOMING_SOURCE, listOfNotNull(upcomingEntry(meta, seed, inclusive = false, nowMs = now)) + others)
             return
         }
         val entry = WatchProgress(
@@ -1268,6 +1396,7 @@ class NuvioCore(
             val state = trakt.watchedState()
             watched.addAll(state.keys)
             setTrackerCompleted("trakt", state.completedSeries)
+            lastWatchedBySource = lastWatchedBySource + ("trakt" to state.lastWatchedEpisodes)
             trakt.playbackProgress().forEach(::mergeRemoteProgress)
             setUpNext("trakt", trakt.upNext())
             traktWatchlistCache = trakt.watchlist()
@@ -1280,10 +1409,15 @@ class NuvioCore(
             // Watching list (movies come through playback too).
             simkl.playbackProgress().forEach(::mergeRemoteProgress)
             setUpNext("simkl", simkl.upNext())
-        } else if (storedUpNext("simkl").isNotEmpty()) {
-            setUpNext("simkl", emptyList())
+            simklCaughtUp = simkl.caughtUpNext
+        } else {
+            simklCaughtUp = emptyList()
+            if (storedUpNext("simkl").isNotEmpty()) setUpNext("simkl", emptyList())
         }
-        if (!trakt.isConnected && storedUpNext("trakt").isNotEmpty()) setUpNext("trakt", emptyList())
+        if (!trakt.isConnected) {
+            lastWatchedBySource = lastWatchedBySource - "trakt"
+            if (storedUpNext("trakt").isNotEmpty()) setUpNext("trakt", emptyList())
+        }
         if (mdbListTracker.isConnected) sync("MDBList") {
             watched.addAll(mdbListTracker.watchedKeys())
             mdbListTracker.playbackProgress().forEach(::mergeRemoteProgress)
@@ -1305,11 +1439,15 @@ class NuvioCore(
             syncServerResume()
             // Next Up: the next episode of each show being watched on the server.
             setUpNext("mediaserver", mediaServers.nextUp())
-        } else if (storedUpNext("mediaserver").isNotEmpty()) {
-            setUpNext("mediaserver", emptyList())
+            lastWatchedBySource = lastWatchedBySource + ("mediaserver" to mediaServers.lastPlayedEpisodes())
+        } else {
+            lastWatchedBySource = lastWatchedBySource - "mediaserver"
+            if (storedUpNext("mediaserver").isNotEmpty()) setUpNext("mediaserver", emptyList())
         }
-        // Air dates for up next episodes the trackers didn't date (in the background).
+        // In the background: the Upcoming row's episodes, then air dates for up next episodes the
+        // trackers didn't date.
         scope.launch {
+            runCatching { refreshUpcoming() }.onFailure { if (it is CancellationException) throw it }
             runCatching { refreshAirDates() }.onFailure { if (it is CancellationException) throw it }
         }
         return error

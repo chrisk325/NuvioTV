@@ -183,19 +183,35 @@ class TraktService(
         (get("sync/watched/movies") as? JsonArray)?.forEach { entry ->
             entry.asObject()?.obj("movie")?.obj("ids")?.nonBlank("imdb")?.let { keys += "movie:$it" }
         }
+        val lastWatched = mutableListOf<WatchProgress>()
         (get("sync/watched/shows?extended=full") as? JsonArray)?.forEach { entry ->
             val o = entry.asObject() ?: return@forEach
             val show = o.obj("show") ?: return@forEach
             val ids = show.obj("ids")
             val imdb = ids?.nonBlank("imdb")
             var watchedRegular = 0
+            var furthest: Pair<Int, Int>? = null
             o.objects("seasons").forEach { season ->
                 val s = season.int("number") ?: return@forEach
                 season.objects("episodes").forEach { ep ->
                     val e = ep.int("number") ?: return@forEach
                     if (imdb != null) keys += "$imdb:$s:$e"
-                    if (s > 0) watchedRegular++
+                    if (s > 0) {
+                        watchedRegular++
+                        val current = furthest
+                        if (current == null || s > current.first || (s == current.first && e > current.second)) furthest = s to e
+                    }
                 }
+            }
+            val reached = furthest
+            if (imdb != null && reached != null) {
+                lastWatched += WatchProgress(
+                    contentId = imdb, contentType = "series", videoId = "$imdb:${reached.first}:${reached.second}",
+                    name = show.str("title") ?: imdb, poster = poster(imdb), background = background(imdb),
+                    season = reached.first, episode = reached.second,
+                    positionMs = 0, durationMs = 0,
+                    updatedAtMs = parseReleaseEpochMs(o.str("last_watched_at")) ?: 0L
+                )
             }
             val aired = show.int("aired_episodes") ?: 0
             if (aired > 0 && watchedRegular >= aired) {
@@ -203,7 +219,7 @@ class TraktService(
                 ids?.int("tmdb")?.let { completed += "series:tmdb:$it" }
             }
         }
-        return TrackerWatched(keys, completed)
+        return TrackerWatched(keys, completed, lastWatched)
     }
 
     /** Watched keys in WatchedRepository format: "movie:tt…" and "tt…:s:e". */

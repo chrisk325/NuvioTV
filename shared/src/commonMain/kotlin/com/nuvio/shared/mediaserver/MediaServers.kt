@@ -1113,6 +1113,46 @@ class MediaServerService(private val http: HttpClient, private val store: KeyVal
     }
 
     /**
+     * For the Upcoming row: per show, the furthest regular episode played on the servers, among
+     * the most recently played episodes. updatedAtMs is when it was played (1 when the server
+     * doesn't say). No position (durationMs 0).
+     */
+    suspend fun lastPlayedEpisodes(): List<WatchProgress> = servers.flatMap { server ->
+        val items = runCatching {
+            get(server, "/Users/${server.userId}/Items?Recursive=true&IncludeItemTypes=Episode&Filters=IsPlayed" +
+                "&SortBy=DatePlayed&SortOrder=Descending&Limit=300&Fields=ProviderIds" +
+                "&EnableUserData=true&EnableImages=false")
+                ?.objects("Items").orEmpty()
+        }.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
+        items.mapNotNull { item ->
+            val seriesId = item.nonBlank("SeriesId") ?: return@mapNotNull null
+            val season = item.int("ParentIndexNumber")?.takeIf { it > 0 } ?: return@mapNotNull null
+            val number = item.int("IndexNumber") ?: return@mapNotNull null
+            Triple(seriesId, item, season to number)
+        }.groupBy { it.first }.mapNotNull { (seriesId, played) ->
+            val (_, item, position) = played.maxWithOrNull(compareBy({ it.third.first }, { it.third.second })) ?: return@mapNotNull null
+            val lastPlayed = played.mapNotNull { parseReleaseEpochMs(it.second.obj("UserData")?.str("LastPlayedDate")) }.maxOrNull()
+            val imdb = runCatching { seriesImdbId(server, seriesId) }
+                .onFailure { if (it is CancellationException) throw it }.getOrNull()
+            val contentId = imdb ?: nativeId(server, seriesId)
+            val itemId = item.nonBlank("Id") ?: return@mapNotNull null
+            WatchProgress(
+                contentId = contentId,
+                contentType = "series",
+                videoId = imdb?.let { "$it:${position.first}:${position.second}" } ?: nativeId(server, itemId),
+                name = item.str("SeriesName") ?: contentId,
+                poster = "${server.address}/Items/$seriesId/Images/Primary?maxHeight=600&api_key=${server.token}",
+                background = "${server.address}/Items/$seriesId/Images/Backdrop?maxWidth=1920&api_key=${server.token}",
+                season = position.first,
+                episode = position.second,
+                positionMs = 0,
+                durationMs = 0,
+                updatedAtMs = lastPlayed ?: 1L
+            )
+        }
+    }
+
+    /**
      * Watched keys for everything played on the servers, in the app's format: "movie:<id>" for
      * movies, "<series imdb>:<season>:<episode>" (or the native episode id) for episodes.
      */

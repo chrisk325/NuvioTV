@@ -349,6 +349,7 @@ class SimklService(
     @Throws(Exception::class)
     suspend fun upNext(): List<WatchProgress> {
         val result = mutableListOf<WatchProgress>()
+        val caughtUp = mutableListOf<WatchProgress>()
         for (type in listOf("shows", "anime")) {
             val root = getJson("/sync/all-items/$type/watching", "&extended=full").asObject() ?: continue
             root.objects(type).forEach { entry ->
@@ -357,10 +358,11 @@ class SimklService(
                 val total = entry.int("total_episodes_count") ?: 0
                 val notAired = entry.int("not_aired_episodes_count") ?: 0
                 val watchedCount = entry.int("watched_episodes_count") ?: 0
-                if (total > 0 && watchedCount >= total - notAired) return@forEach
                 val (season, episode) = parseEpisodeMarker(marker) ?: return@forEach
                 val target = episodeTarget(media.obj("ids"), type == "anime", season, episode, episode) ?: return@forEach
-                result += WatchProgress(
+                // Every aired episode watched: the marker is the next one to air (Upcoming row).
+                val isCaughtUp = total > 0 && watchedCount >= total - notAired
+                (if (isCaughtUp) caughtUp else result) += WatchProgress(
                     contentId = target.contentId, contentType = "series", videoId = target.videoId,
                     name = media.str("title") ?: target.contentId, poster = posterUrl(media, target.contentId),
                     background = backgroundUrl(target.contentId), season = target.season, episode = target.episode,
@@ -369,8 +371,16 @@ class SimklService(
                 )
             }
         }
+        caughtUpNext = caughtUp
         return result
     }
+
+    /**
+     * From the last [upNext]: for shows with every aired episode watched, the next episode Simkl
+     * lists (not aired yet), for the Upcoming row.
+     */
+    internal var caughtUpNext: List<WatchProgress> = emptyList()
+        private set
 
     private data class EpisodeTarget(val contentId: String, val videoId: String, val season: Int?, val episode: Int)
 
