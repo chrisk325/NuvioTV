@@ -43,7 +43,7 @@ internal object LibassRenderThreads {
         val threads = resolve(requested, Runtime.getRuntime().availableProcessors())
         val previous = handler.renderCallback
         handler.renderCallback = { render ->
-            setThreads(render, threads)
+            render?.let { setThreads(it, threads) }
             previous?.invoke(render)
         }
         handler.render?.let { setThreads(it, threads) }
