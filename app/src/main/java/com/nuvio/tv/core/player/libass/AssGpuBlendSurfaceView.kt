@@ -65,7 +65,10 @@ class AssGpuBlendSurfaceView(
         holder.addCallback(this)
     }
 
-    /** Draws what shows at the video frame `presentationTimeUs`, which the screen shows at `releaseTimeNs`. */
+    /**
+     * Draws what shows at `presentationTimeUs` (the video frame's time with the AssHandler's delays
+     * applied), for the frame the screen shows at `releaseTimeNs`.
+     */
     fun requestRender(presentationTimeUs: Long, releaseTimeNs: Long) {
         pendingRequest.set(longArrayOf(presentationTimeUs, releaseTimeNs))
         workerHandler?.post(renderRunnable)
@@ -154,9 +157,10 @@ class AssGpuBlendSurfaceView(
         lastPresentationTimeUs = presentationTimeUs
         val assRender = assHandler.render ?: return
         if (assRender.released) return
-        val timeUs = presentationTimeUs - assHandler.subtitleDelayUs + assHandler.audioDelayUs
+        // AssHandler hands videoFrameCallback the subtitle time already, delays and calibration
+        // applied, as the atlas overlay takes it; applying them again would double the delay.
         renderCount++
-        val rendered = renderLocked(assRender, timeUs / 1000)
+        val rendered = renderLocked(assRender, presentationTimeUs / 1000)
         if (rendered < 0 || (rendered == 0 && !force)) return
         // Drawn and swapped outside libass's lock, so the demuxer's lines don't wait on the GPU.
         if (AssGpuBlendNative.post(nativeHandle, releaseTimeNs)) changedRenderCount++
