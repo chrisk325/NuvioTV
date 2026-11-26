@@ -53,6 +53,8 @@ final class ImageLoader: @unchecked Sendable {
     static let wideCardSize: CGFloat = 960
 
     private let memory = NSCache<NSString, UIImage>()
+    /// Downloaded artwork on disk (and in memory as raw files): posters, backdrops, logos, GIFs.
+    private let diskCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 300 * 1024 * 1024)
     private let session: URLSession
     private let lock = NSLock()
     private var inFlight: [String: Task<Data?, Never>] = [:]
@@ -61,7 +63,7 @@ final class ImageLoader: @unchecked Sendable {
     private init() {
         memory.totalCostLimit = 300 * 1024 * 1024
         let config = URLSessionConfiguration.default
-        config.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 300 * 1024 * 1024)
+        config.urlCache = diskCache
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.timeoutIntervalForRequest = 30
         config.httpMaximumConnectionsPerHost = 6
@@ -73,6 +75,19 @@ final class ImageLoader: @unchecked Sendable {
     }
 
     private func key(_ url: String, _ maxPixel: CGFloat) -> NSString { NSString(string: "\(Int(maxPixel))|\(url)") }
+
+    /// Bytes of downloaded artwork kept on disk.
+    var diskUsage: Int { diskCache.currentDiskUsage }
+
+    /// Settings > About "Clear image cache": drops every downloaded image file and every decoded
+    /// image held in memory. Artwork on screen stays until it's shown again, then downloads anew.
+    func clearCache() {
+        memory.removeAllObjects()
+        diskCache.removeAllCachedResponses()
+    }
+
+    /// The raw file (for animated GIFs, decoded by the caller), through the same cache.
+    func fileData(_ raw: String) async -> Data? { await data(raw) }
 
     func cached(_ url: String, maxPixel: CGFloat = ImageLoader.fullSize) -> UIImage? {
         memory.object(forKey: key(url, maxPixel))

@@ -65,7 +65,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .accounts: return "Nuvio, Trakt, Simkl, MDBList, AniList"
         case .debrid: return "Torbox, Premiumize, Real-Debrid"
         case .servers: return "Jellyfin and Emby"
-        case .about: return "Version and credits"
+        case .about: return "Version, image cache, credits"
         }
     }
 }
@@ -476,11 +476,27 @@ private struct MetadataSettingsPane: View {
 }
 
 private struct AboutSettingsPane: View {
+    /// Disk space the image cache uses; nil until read.
+    @State private var cacheBytes: Int?
+    @State private var confirmClear = false
+    @State private var justCleared = false
+
     var body: some View {
         List {
             Section("Nuvio for Apple TV") {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 LabeledContent("Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
+            }
+            Section {
+                Button {
+                    confirmClear = true
+                } label: {
+                    LabeledContent("Clear image cache", value: cacheLabel)
+                }
+            } header: {
+                Text("Storage")
+            } footer: {
+                Text("Posters, backdrops, logos and animated covers saved on this Apple TV. Clearing frees the space; images download again as they're shown.")
             }
             Section("Built with") {
                 LabeledContent("Player", value: "mpv via MPVKit")
@@ -490,6 +506,30 @@ private struct AboutSettingsPane: View {
             }
         }
         .padding(.horizontal, 30)
+        .onAppear { cacheBytes = ImageLoader.shared.diskUsage }
+        .alert("Clear image cache?", isPresented: $confirmClear) {
+            Button("Clear", role: .destructive) { clearCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Saved posters and artwork are removed. They download again when shown.")
+        }
+    }
+
+    private var cacheLabel: String {
+        if justCleared { return "Cleared" }
+        guard let cacheBytes else { return "" }
+        return ByteCountFormatter.string(fromByteCount: Int64(cacheBytes), countStyle: .file)
+    }
+
+    private func clearCache() {
+        ImageLoader.shared.clearCache()
+        justCleared = true
+        // The size shown again a moment later (the cache updates its count after removing files).
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            justCleared = false
+            cacheBytes = ImageLoader.shared.diskUsage
+        }
     }
 }
 

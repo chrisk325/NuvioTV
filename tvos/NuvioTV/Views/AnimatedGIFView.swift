@@ -55,11 +55,8 @@ enum GIFDecoder {
     private static let maxFrames = 120
 
     static func load(url: String, maxPixel: CGFloat) async -> UIImage? {
-        guard let link = URL(string: url),
-              let (data, response) = try? await URLSession.shared.data(from: link),
-              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
-        else { return nil }
-        guard !Task.isCancelled else { return nil }
+        // Through the image loader: kept in the image cache (Settings > About clears it).
+        guard let data = await ImageLoader.shared.fileData(url), !Task.isCancelled else { return nil }
         return await Task.detached(priority: .userInitiated) { decode(data, maxPixel: maxPixel) }.value
     }
 
