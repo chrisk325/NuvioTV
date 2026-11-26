@@ -58,6 +58,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   /** Matroska Segment, the only master element kept on the stack across a resync. */
   private static final int ID_SEGMENT = 0x18538067;
+  /** Matroska Block and SimpleBlock, whose content starts with the track number as a varint. */
+  private static final int ID_BLOCK = 0xA1;
+  private static final int ID_SIMPLE_BLOCK = 0xA3;
 
   private static final int MAX_ID_BYTES = 4;
   private static final int MAX_LENGTH_BYTES = 8;
@@ -74,6 +77,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private @ElementState int elementState;
   private int elementId;
   private long elementContentSize;
+  // True once the content of the current binary element has been handed to the processor. A read
+  // error inside the processor hands the same element over again to resume it; by then its first
+  // byte has been read, so it must not be checked again.
+  private boolean binaryContentStarted;
 
   public DefaultEbmlReader() {
     scratch = new byte[8];
@@ -145,6 +152,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         }
         elementContentSize = size;
         elementState = ELEMENT_STATE_READ_CONTENT;
+        binaryContentStarted = false;
       }
 
       @EbmlProcessor.ElementType int type = processor.getElementType(elementId);
@@ -186,6 +194,17 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             startResync(input, oversizeReason());
             break;
           }
+          if (!binaryContentStarted && hasInvalidTrackNumber(input)) {
+            Log.w(
+                TAG,
+                "Block at position "
+                    + input.getPosition()
+                    + " has an invalid track number; skipping it");
+            input.skipFully((int) elementContentSize);
+            elementState = ELEMENT_STATE_READ_ID;
+            return true;
+          }
+          binaryContentStarted = true;
           processor.binaryElement(elementId, (int) elementContentSize, input);
           elementState = ELEMENT_STATE_READ_ID;
           return true;
@@ -204,6 +223,24 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
               "Invalid element type " + type, /* cause= */ null);
       }
     }
+  }
+
+  /**
+   * Returns whether the current element is a Block or SimpleBlock whose first byte is zero.
+   *
+   * <p>A block starts with its track number as a varint, and no varint starts with a zero byte, so
+   * the block is damaged. MatroskaExtractor would fail on it with "No valid varint length mask
+   * found", which ends playback. The element's own size was read fine, so only this block is lost
+   * when the reader skips it. The byte is peeked, so a read error here leaves the input where the
+   * block starts.
+   */
+  private boolean hasInvalidTrackNumber(ExtractorInput input) throws IOException {
+    if ((elementId != ID_BLOCK && elementId != ID_SIMPLE_BLOCK) || elementContentSize == 0) {
+      return false;
+    }
+    input.peekFully(scratch, 0, 1);
+    input.resetPeekPosition();
+    return scratch[0] == 0;
   }
 
   /**

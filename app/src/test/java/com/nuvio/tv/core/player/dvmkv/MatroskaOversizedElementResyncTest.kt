@@ -16,6 +16,9 @@ import java.io.IOException
  * A zero byte where an element size starts threw "No valid varint length mask found", which also
  * ended playback; a zero byte where an element id starts resynced but left the Cluster open.
  * The reader now closes what was open under the Segment and resyncs to the next Cluster.
+ *
+ * A Block or SimpleBlock whose first byte (its track number) is zero made MatroskaExtractor throw
+ * "No valid varint length mask found". The reader now skips that block.
  */
 class MatroskaOversizedElementResyncTest {
 
@@ -119,6 +122,63 @@ class MatroskaOversizedElementResyncTest {
         )
     }
 
+    @Test
+    fun `a simple block with a zero track number is skipped`() {
+        val events = parse(
+            segment(
+                cluster(
+                    TIMECODE, 0x81, 0x05,
+                    SIMPLE_BLOCK, 0x84, 0x00, 0x00, 0x00, 0x00,
+                    SIMPLE_BLOCK, 0x84, 0x81, 0x00, 0x00, 0x00
+                )
+            )
+        )
+        assertEquals(
+            listOf("start 18538067", "start 1f43b675", "int e7=5", "bin a3 4", "end 1f43b675"),
+            events
+        )
+    }
+
+    @Test
+    fun `a block with a zero track number is skipped inside its block group`() {
+        val events = parse(
+            segment(
+                cluster(
+                    TIMECODE, 0x81, 0x05,
+                    BLOCK_GROUP, 0x86, BLOCK, 0x84, 0x00, 0x00, 0x00, 0x00,
+                    SIMPLE_BLOCK, 0x84, 0x81, 0x00, 0x00, 0x00
+                )
+            )
+        )
+        assertEquals(
+            listOf(
+                "start 18538067", "start 1f43b675", "int e7=5", "start a0", "end a0", "bin a3 4",
+                "end 1f43b675"
+            ),
+            events
+        )
+    }
+
+    @Test
+    fun `a block resumed after a read error is not checked again`() {
+        val data = segment(
+            cluster(
+                TIMECODE, 0x81, 0x05,
+                SIMPLE_BLOCK, 0x84, 0x81, 0x00, 0x00, 0x00,
+                SIMPLE_BLOCK, 0x82, 0x82, 0x00
+            )
+        )
+        // Fail just after the track number, where the rest of the block starts with a zero byte.
+        val events = parse(data, failAt = 23)
+        assertEquals(
+            listOf(
+                "start 18538067", "start 1f43b675", "int e7=5", "bin a3 4", "retry", "bin a3 2",
+                "end 1f43b675"
+            ),
+            events
+        )
+    }
+
     private fun parse(data: ByteArray, failAt: Int = -1): List<String> {
         val reader = DefaultEbmlReader()
         val processor = RecordingProcessor()
@@ -163,9 +223,19 @@ class MatroskaOversizedElementResyncTest {
         repeat(40) { put((it * 37 + 11) and 0x7F) }
         put(0x1F, 0x43, 0xB6, 0x75, 0x86)
         put(TIMECODE, 0x81, 0x09)
-        put(SIMPLE_BLOCK, 0x81, 0x00)
+        put(SIMPLE_BLOCK, 0x81, 0x81)
         return out.toByteArray()
     }
+
+    /** A Segment of unknown size holding [content]. */
+    private fun segment(content: IntArray): ByteArray =
+        (intArrayOf(0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF) + content)
+            .map(Int::toByte)
+            .toByteArray()
+
+    /** A Cluster holding [content], which must be shorter than 127 bytes. */
+    private fun cluster(vararg content: Int): IntArray =
+        intArrayOf(0x1F, 0x43, 0xB6, 0x75, 0x80 or content.size) + content
 
     /** Serves a few bytes per read; throws once when reaching [failAt] (negative: never). */
     private class ChunkedReader(
@@ -217,9 +287,18 @@ class MatroskaOversizedElementResyncTest {
 
         override fun stringElement(id: Int, value: String) = Unit
 
+        /** Bytes of the current binary element left to skip after a read error, or -1. */
+        private var pending = -1
+
+        /** Like MatroskaExtractor: reads the track number first and resumes after a read error. */
         override fun binaryElement(id: Int, contentsSize: Int, input: ExtractorInput) {
-            events += "bin ${Integer.toHexString(id)} $contentsSize"
-            input.skipFully(contentsSize)
+            if (pending < 0) {
+                events += "bin ${Integer.toHexString(id)} $contentsSize"
+                if (contentsSize > 0) input.readFully(ByteArray(1), 0, 1)
+                pending = maxOf(contentsSize - 1, 0)
+            }
+            input.skipFully(pending)
+            pending = -1
         }
     }
 
