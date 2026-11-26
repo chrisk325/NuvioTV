@@ -16,11 +16,41 @@ which is why this AAR has `AssCpuBlendSurfaceView`, `replaceTrack` and `AssHandl
 `feature/cpu-blend-overlay`, which merges without conflicts. NDK r29 (29.0.14206865), minSdk 21,
 `c++_shared`, RelWithDebInfo, then stripped. So it has:
 
-- **Laskco's libass fork** ([mpvNova-libass](https://github.com/Laskco/mpvNova-libass) 0.17.5-laskco-b620927,
+- **Laskco's libass fork** ([mpvNova-libass](https://github.com/Laskco/mpvNova-libass) 0.17.5-laskco-0e8b5ee,
   in place of edde746's 0.18.4), in its performance mode (`LIBASS_EXPERIMENTAL_EDGES=1`). Upstream
   measured heavy typesetting at about half the time per frame on an armeabi-v7a TV.
 - the `sans-serif` fontconfig fallback (Roboto, then Noto Sans, then Droid Sans; 34b11d6).
 - the `nativeCpuBlend*` natives that `AssCpuBlendSurfaceView` needs, which upstream's v0.0.14 AAR lacks.
+
+### libass 0e8b5ee (from b620927)
+
+The fork's four commits after b620927 (fd53bbe, 95f8e7b, ead772d, 0e8b5ee) add exact-mode shaping
+and font caches, a cache of pre-simplified outlines for performance mode, a moving vector-clip guard,
+and faster vector clips and small blurs. nuvio-libass has no `libass-0.17.5-laskco-0e8b5ee` release
+yet, so the package was built locally with its `scripts/libass/build-android.sh` (submodule at
+0e8b5ee, same pinned wraps, NDK r29) and `libasskt.so` from the same merge as before, with
+`LIBASS_VERSION "0.17.5-laskco-0e8b5ee"` and
+`LIBASS_SHA256 "dd19a2eaf23965495f92c1b5da5b843fa4a9e7c3fde6feb18946a6853ef23943"`. Rebuilding
+b620927 the same way reproduces the previous `libasskt.so` byte for byte apart from its build ID.
+The JNI exports are unchanged, so `classes.jar` and the patches below are untouched.
+
+Measured with the fork's `profile/fle-bench.c` on generated heavy typesetting (karaoke FX with
+layered blurs and frame-by-frame particles; signs with vector, moving and animated clips and large
+blurred shapes; both mixed), single-threaded, in CPU instructions (valgrind), with the new vector-clip
+scan's NEON path ported to SSE2 so the x86 host does the work ARM does:
+
+| Track | Performance mode | Exact mode |
+| --- | ---: | ---: |
+| karaoke | -19.2% | -13.0% |
+| signs | -9.4% | -11.5% |
+| mix | -14.5% | -12.4% |
+
+Exact mode renders every frame bit for bit as b620927 did, on the host and in the arm64 package
+under qemu. Performance mode moves some edge antialiasing by a step (0.5% of pixels on the signs
+track, not visible at 4x zoom). Peak memory is within -1% to +9%. The upstream regression, fuzz and
+checkasm tests, and the three tracks with 4 threads in modes 0, 1 and 2, pass under ASan and UBSan.
+On x86 and x86_64 (no NEON) the vector-clip scan runs bytewise, so tracks heavy in vector clips can
+cost those ABIs more than before.
 
 The fork has no `ass_set_threads`. It runs its own event threads, at most 4 and never more than the
 cores, and only on expensive frames, so the app no longer sets libass's thread count. The worker
