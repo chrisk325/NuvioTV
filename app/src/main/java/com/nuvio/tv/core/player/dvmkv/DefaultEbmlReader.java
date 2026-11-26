@@ -19,6 +19,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.ParserException;
 import androidx.media3.common.util.Log;
@@ -58,9 +59,17 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   /** Matroska Segment, the only master element kept on the stack across a resync. */
   private static final int ID_SEGMENT = 0x18538067;
-  /** Matroska Block and SimpleBlock, whose content starts with the track number as a varint. */
+  /** Matroska Block and SimpleBlock, whose content starts with a header MatroskaExtractor parses. */
   private static final int ID_BLOCK = 0xA1;
   private static final int ID_SIMPLE_BLOCK = 0xA3;
+
+  private static final int LACING_NONE = 0;
+  private static final int LACING_XIPH = 1;
+  private static final int LACING_FIXED_SIZE = 2;
+  private static final int LACING_EBML = 3;
+
+  /** Returned by {@link #peekBlockByte} when the block header runs past the end of the block. */
+  private static final int PAST_BLOCK_END = -1;
 
   private static final int MAX_ID_BYTES = 4;
   private static final int MAX_LENGTH_BYTES = 8;
@@ -81,6 +90,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   // error inside the processor hands the same element over again to resume it; by then its first
   // byte has been read, so it must not be checked again.
   private boolean binaryContentStarted;
+  // Bytes of the current block peeked by findBlockDamage.
+  private int blockBytesPeeked;
 
   public DefaultEbmlReader() {
     scratch = new byte[8];
@@ -194,12 +205,15 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             startResync(input, oversizeReason());
             break;
           }
-          if (!binaryContentStarted && hasInvalidTrackNumber(input)) {
+          @Nullable String blockDamage = binaryContentStarted ? null : findBlockDamage(input);
+          if (blockDamage != null) {
             Log.w(
                 TAG,
                 "Block at position "
                     + input.getPosition()
-                    + " has an invalid track number; skipping it");
+                    + " has "
+                    + blockDamage
+                    + "; skipping it");
             input.skipFully((int) elementContentSize);
             elementState = ELEMENT_STATE_READ_ID;
             return true;
@@ -226,21 +240,118 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   /**
-   * Returns whether the current element is a Block or SimpleBlock whose first byte is zero.
+   * Checks the header of the current element if it is a Block or SimpleBlock, and returns what is
+   * damaged in it, or null when it is intact (or the element is not a block).
    *
-   * <p>A block starts with its track number as a varint, and no varint starts with a zero byte, so
-   * the block is damaged. MatroskaExtractor would fail on it with "No valid varint length mask
-   * found", which ends playback. The element's own size was read fine, so only this block is lost
-   * when the reader skips it. The byte is peeked, so a read error here leaves the input where the
-   * block starts.
+   * <p>A block starts with its track number as a varint, a timecode, flags and, for a laced block,
+   * the sizes of its frames. Damaged data there makes MatroskaExtractor fail ("No valid varint
+   * length mask found", "EBML lacing sample size out of range") or produce frame sizes below zero
+   * or beyond the block, which ends playback. The element's own size was read fine, so only this
+   * block is lost when the reader skips it. The header is checked as MatroskaExtractor parses it.
+   * It is only peeked, so a read error here leaves the input where the block starts.
    */
-  private boolean hasInvalidTrackNumber(ExtractorInput input) throws IOException {
+  @Nullable
+  private String findBlockDamage(ExtractorInput input) throws IOException {
     if ((elementId != ID_BLOCK && elementId != ID_SIMPLE_BLOCK) || elementContentSize == 0) {
-      return false;
+      return null;
+    }
+    blockBytesPeeked = 0;
+    try {
+      return peekBlockDamage(input, (int) elementContentSize);
+    } finally {
+      input.resetPeekPosition();
+    }
+  }
+
+  @Nullable
+  private String peekBlockDamage(ExtractorInput input, int blockSize) throws IOException {
+    int firstByte = peekBlockByte(input, blockSize);
+    if (firstByte == 0) {
+      return "an invalid track number";
+    }
+    int trackNumberLength = VarintReader.parseUnsignedVarintLength(firstByte);
+    // The rest of the track number, the timecode (2 bytes) and the flags (1 byte).
+    int flags = 0;
+    for (int i = 1; i < trackNumberLength + 3; i++) {
+      flags = peekBlockByte(input, blockSize);
+      if (flags == PAST_BLOCK_END) {
+        return "a header longer than the block";
+      }
+    }
+    int lacing = (flags & 0x06) >> 1;
+    if (lacing == LACING_NONE) {
+      return null;
+    }
+    int frameCountByte = peekBlockByte(input, blockSize);
+    if (frameCountByte == PAST_BLOCK_END) {
+      return "a header longer than the block";
+    }
+    int frameCount = frameCountByte + 1;
+    if (lacing == LACING_FIXED_SIZE) {
+      return null;
+    }
+    // Sizes of all frames but the last, which takes what is left of the block.
+    long totalFramesSize = 0;
+    long frameSize = 0;
+    for (int frame = 0; frame < frameCount - 1; frame++) {
+      if (lacing == LACING_XIPH) {
+        frameSize = 0;
+        int sizeByte;
+        do {
+          sizeByte = peekBlockByte(input, blockSize);
+          if (sizeByte == PAST_BLOCK_END) {
+            return "a header longer than the block";
+          }
+          frameSize += sizeByte;
+        } while (sizeByte == 0xFF);
+      } else {
+        // LACING_EBML: the first size is a varint, later ones are signed varint offsets.
+        int sizeFirstByte = peekBlockByte(input, blockSize);
+        if (sizeFirstByte == PAST_BLOCK_END) {
+          return "a header longer than the block";
+        }
+        if (sizeFirstByte == 0) {
+          return "an invalid lacing size";
+        }
+        int sizeLength = VarintReader.parseUnsignedVarintLength(sizeFirstByte);
+        long value = sizeFirstByte & ~(0x80 >> (sizeLength - 1));
+        for (int i = 1; i < sizeLength; i++) {
+          int sizeByte = peekBlockByte(input, blockSize);
+          if (sizeByte == PAST_BLOCK_END) {
+            return "a header longer than the block";
+          }
+          value = (value << 8) | sizeByte;
+        }
+        if (frame > 0) {
+          value -= (1L << (6 + (sizeLength - 1) * 7)) - 1;
+        }
+        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+          return "a lacing size out of range";
+        }
+        frameSize = frame == 0 ? value : frameSize + value;
+      }
+      if (frameSize < 0) {
+        return "a negative lacing size";
+      }
+      totalFramesSize += frameSize;
+      if (totalFramesSize > blockSize - blockBytesPeeked) {
+        return "lacing sizes larger than the block";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Peeks the next byte of the current block, or returns {@link #PAST_BLOCK_END} when the block
+   * has no more bytes.
+   */
+  private int peekBlockByte(ExtractorInput input, int blockSize) throws IOException {
+    if (blockBytesPeeked >= blockSize) {
+      return PAST_BLOCK_END;
     }
     input.peekFully(scratch, 0, 1);
-    input.resetPeekPosition();
-    return scratch[0] == 0;
+    blockBytesPeeked++;
+    return scratch[0] & 0xFF;
   }
 
   /**
