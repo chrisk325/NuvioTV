@@ -54,9 +54,9 @@ final class ImageLoader: @unchecked Sendable {
 
     private let memory = NSCache<NSString, UIImage>()
     /// Downloaded artwork on disk (and in memory as raw files): posters, backdrops, logos, GIFs.
-    /// 4 GB on disk: it lives in Caches, which tvOS empties by itself when storage runs low. (A
+    /// 2 GB on disk: it lives in Caches, which tvOS empties by itself when storage runs low. (A
     /// URLCache also skips files over ~5 % of its size, so this keeps large GIFs and backdrops too.)
-    private let diskCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 4 * 1024 * 1024 * 1024)
+    private let diskCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 2 * 1024 * 1024 * 1024)
     private let session: URLSession
     private let lock = NSLock()
     private var inFlight: [String: Task<Data?, Never>] = [:]
