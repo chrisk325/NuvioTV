@@ -511,6 +511,7 @@ class StreamScreenViewModel @Inject constructor(
                                 contentLanguage = cached.contentLanguage ?: contentLanguage,
                                 audioDelayMs = cached.audioDelayMs,
                                 audioDelayLanguage = cached.audioDelayLanguage,
+                                clearKeys = cached.clearKeys,
                                 addonName = cached.addonName,
                                 addonLogo = cached.addonLogo,
                                 streamDescription = cached.streamDescription,
@@ -1685,7 +1686,8 @@ class StreamScreenViewModel @Inject constructor(
             sources = stream.sources,
             contentLanguage = contentLanguage,
             audioDelayMs = stream.behaviorHints?.audioDelayMs,
-            audioDelayLanguage = stream.behaviorHints?.audioDelayLanguage
+            audioDelayLanguage = stream.behaviorHints?.audioDelayLanguage,
+            clearKeys = stream.behaviorHints?.clearKeys
         )
         StreamSidecarSubtitles.set(playbackUrlFor(playbackInfo), stream.subtitles)
 
@@ -1707,6 +1709,7 @@ class StreamScreenViewModel @Inject constructor(
                     year = year,
                     audioDelayMs = playbackInfo.audioDelayMs,
                     audioDelayLanguage = playbackInfo.audioDelayLanguage,
+                    clearKeys = playbackInfo.clearKeys,
                     addonName = playbackInfo.addonName,
                     addonLogo = playbackInfo.addonLogo,
                     streamDescription = playbackInfo.streamDescription
@@ -2244,10 +2247,15 @@ data class StreamPlaybackInfo(
     val contentLanguage: String? = null,
     val audioDelayMs: Int? = null,
     val audioDelayLanguage: String? = null,
+    /** ClearKey DRM pairs: only the internal ExoPlayer can play the stream. */
+    val clearKeys: String? = null,
     val isServerStream: Boolean = false,
     /** The link was taken from the reuse-last-link cache, not picked fresh from add-ons. */
     val fromLinkCache: Boolean = false
-)
+) {
+    /** A media server link or ClearKey keys cannot be handed to an external player. */
+    val forcesInternalPlayer: Boolean get() = isServerStream || clearKeys != null
+}
 
 /** A debrid result that could not be played: what to show, and whether the results are stale. */
 private data class DebridResolveFailure(val message: String, val refreshStreams: Boolean)
