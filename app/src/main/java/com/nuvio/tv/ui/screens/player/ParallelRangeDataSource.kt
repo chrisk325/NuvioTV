@@ -66,6 +66,10 @@ internal class ParallelRangeDataSource(
         private const val HEDGE_WINDOWS_CDN = 1
         private const val HEDGE_WINDOWS_USENET = 2
 
+        /** Default (0) plus two steps of "less favorable": nice 2. */
+        private const val WORKER_THREAD_PRIORITY =
+            android.os.Process.THREAD_PRIORITY_DEFAULT + 2 * android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE
+
         @VisibleForTesting
         internal var allocateChunk: (Int) -> Allocation? = { DefaultAllocatorNative.createAllocation(it) }
         @VisibleForTesting
@@ -77,8 +81,14 @@ internal class ParallelRangeDataSource(
 
         private val sharedExecutor: ExecutorService by lazy {
             val threadFactory = ThreadFactory { runnable ->
-                Thread(runnable, "parallel-ds-worker").apply {
-                    priority = Thread.NORM_PRIORITY
+                Thread({
+                    // Slightly below default so chunk fetching (TLS + copies, up to dozens of
+                    // workers at high bitrates) yields to the UI and render threads under load.
+                    // Not THREAD_PRIORITY_BACKGROUND: that cgroup can throttle a 70 Mbps fetch
+                    // into rebuffering.
+                    runCatching { android.os.Process.setThreadPriority(WORKER_THREAD_PRIORITY) }
+                    runnable.run()
+                }, "parallel-ds-worker").apply {
                     isDaemon = true
                 }
             }
