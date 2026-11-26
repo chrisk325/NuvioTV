@@ -318,8 +318,8 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
                 currentState.subtitleStyle.showOnlyPreferredLanguages != settings.subtitleStyle.showOnlyPreferredLanguages
             val wasRememberingAudioDelayPerDevice = rememberAudioDelayPerDeviceEnabled
             rememberAudioDelayPerDeviceEnabled = settings.rememberAudioDelayPerDevice
-            // A ClearKey stream plays on ExoPlayer whatever the setting: see initializePlayer.
-            val resolvedInternalPlayerEngine = if (currentClearKeys != null) {
+            // A ClearKey HLS stream plays on ExoPlayer whatever the setting: see initializePlayer.
+            val resolvedInternalPlayerEngine = if (clearKeysNeedExoPlayer) {
                 InternalPlayerEngine.EXOPLAYER
             } else {
                 runtimeInternalPlayerEngineOverride ?: resolvedAutoPlayerEngine ?: settings.internalPlayerEngine
@@ -1023,7 +1023,7 @@ internal fun PlayerRuntimeController.handleVc1PlaybackFailure(errorMessage: Stri
     _uiState.update {
         it.copy(
             error = displayMessage,
-            showSwitchToMpvErrorAction = currentClearKeys == null,
+            showSwitchToMpvErrorAction = !clearKeysNeedExoPlayer,
             isPlaying = false,
             showControls = false,
             isBuffering = false,
