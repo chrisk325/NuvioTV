@@ -114,6 +114,14 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
       if (elementState == ELEMENT_STATE_READ_ID) {
         long result = varintReader.readUnsignedVarint(input, true, false, MAX_ID_BYTES);
+        if (result == C.RESULT_MAX_LENGTH_EXCEEDED
+            && varintReader.getLastLength() == C.LENGTH_UNSET) {
+          // The first byte was zero. No varint starts with a zero byte, so the reader has lost its
+          // place. startResync closes the Cluster and BlockGroup the damage left open; the search
+          // alone would leave them open and carry the old block's state into the next block.
+          startResync(input, "Invalid element id");
+          continue;
+        }
         if (result == C.RESULT_MAX_LENGTH_EXCEEDED) {
           result = maybeResyncToNextLevel1Element(input);
         }
@@ -126,7 +134,16 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       }
 
       if (elementState == ELEMENT_STATE_READ_CONTENT_SIZE) {
-        elementContentSize = varintReader.readUnsignedVarint(input, false, true, MAX_LENGTH_BYTES);
+        long size;
+        try {
+          size = varintReader.readUnsignedVarint(input, false, true, MAX_LENGTH_BYTES);
+        } catch (ParserException e) {
+          // The first byte of the size was zero, which no varint starts with. VarintReader throws
+          // after consuming that byte and resetting itself, so it is ready for the next varint.
+          startResync(input, "Element 0x" + Integer.toHexString(elementId) + " has an invalid size");
+          continue;
+        }
+        elementContentSize = size;
         elementState = ELEMENT_STATE_READ_CONTENT;
       }
 
@@ -166,7 +183,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           return true;
         case EbmlProcessor.ELEMENT_TYPE_BINARY:
           if (elementContentSize > Integer.MAX_VALUE) {
-            startResync(input);
+            startResync(input, oversizeReason());
             break;
           }
           processor.binaryElement(elementId, (int) elementContentSize, input);
@@ -174,7 +191,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           return true;
         case EbmlProcessor.ELEMENT_TYPE_UNKNOWN:
           if (elementContentSize > Integer.MAX_VALUE) {
-            startResync(input);
+            startResync(input, oversizeReason());
             break;
           }
           input.skipFully((int) elementContentSize);
@@ -190,24 +207,32 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   /**
-   * Handles a binary or unknown element whose size does not fit in an int.
+   * Describes a binary or unknown element whose size does not fit in an int. No real Matroska
+   * element of these types is that large, so the header just read is noise. Casting the size to an
+   * int wraps it negative, and skipping a negative length throws an unchecked exception inside
+   * {@link ExtractorInput} that ends playback.
+   */
+  private String oversizeReason() {
+    return "Element 0x" + Integer.toHexString(elementId) + " declares " + elementContentSize
+        + " bytes";
+  }
+
+  /**
+   * Gives up on the current element after damaged data (in the file or the stream) and starts the
+   * search for the next level 1 element.
    *
-   * <p>No real Matroska element of these types is that large, so the reader has lost its place
-   * (damaged data in the file or the stream) and the header it just read is noise. Casting the
-   * size to an int wraps it negative, and skipping a negative length throws an unchecked
-   * exception inside {@link ExtractorInput} that ends playback. Instead, the elements opened
-   * below the Segment are closed and the reader searches for the next level 1 element (normally
-   * the next Cluster), so playback carries on from there.
+   * <p>Used when an element's size does not fit in an int (see {@link #oversizeReason()}) and when
+   * a zero byte sits where an element id or size starts. Either way the reader has lost its place,
+   * so instead of ending playback the elements opened below the Segment are closed and the reader
+   * searches for the next level 1 element (normally the next Cluster), so playback carries on from
+   * there.
    */
   @RequiresNonNull("processor")
-  private void startResync(ExtractorInput input) throws ParserException {
+  private void startResync(ExtractorInput input, String reason) throws ParserException {
     Log.w(
         TAG,
-        "Element 0x"
-            + Integer.toHexString(elementId)
-            + " declares "
-            + elementContentSize
-            + " bytes at position "
+        reason
+            + " at position "
             + input.getPosition()
             + "; resyncing to the next level 1 element");
     elementState = ELEMENT_STATE_RESYNC;
