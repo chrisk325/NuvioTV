@@ -4,8 +4,10 @@ project(dovi_bridge LANGUAGES C CXX)
 # libass's Overlay (GPU Blend) render mode, ported from NuvioMobile's libmpv libass overlay.
 # ass/ holds libass's public headers, 0.17.4's layout as nuvio-libass's libasskt.so carries it;
 # the library itself is loaded from libasskt.so at runtime.
+# It also holds the native memory nuvio-libass's Overlay atlas uses (subtitles/atlas_memory.c).
 add_library(nuvio_ass_gpu SHARED
-    subtitles/gpu_blend.c subtitles/masks.c subtitles/blend.c subtitles/gl.c subtitles/gl_masks.c)
+    subtitles/gpu_blend.c subtitles/masks.c subtitles/blend.c subtitles/gl.c subtitles/gl_masks.c
+    subtitles/atlas_memory.c)
 target_compile_options(nuvio_ass_gpu PRIVATE -O3 -Wall -fvisibility=hidden)
 target_link_libraries(nuvio_ass_gpu PRIVATE android dl log EGL GLESv2)
 target_link_options(nuvio_ass_gpu PRIVATE "-Wl,-z,max-page-size=16384")

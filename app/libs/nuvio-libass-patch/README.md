@@ -1,8 +1,9 @@
 # nuvio-libass patches
 
 `nuvio-libass-release.aar` is a prebuilt library. These are classes rebuilt from its decompiled
-bytecode with fixes, and `AssTrack` from nuvio-libass v0.0.15 (`src-kt`), which `build.sh` compiles
-and swaps into the AAR's `classes.jar`, plus a one-byte priority patch to two more classes (below). `build.sh` leaves everything else in the AAR,
+bytecode with fixes, `AssTrack` from nuvio-libass v0.0.15 and the Overlay pipeline with its atlas in
+native memory (`src-kt`), which `build.sh` compiles and swaps into the AAR's `classes.jar`, plus a
+one-byte priority patch to two more classes (below). `build.sh` leaves everything else in the AAR,
 including every `libasskt.so`, byte for byte as it is.
 
 ## Base AAR
@@ -112,6 +113,39 @@ v0.0.15 starts the Overlay and Video Effect workers at nice 2 where this AAR sta
 nice 5 (Video Effect stays at the default: see "Worker priority"). v0.0.15's AAR has no CPU Blend,
 so it doesn't replace this one.
 
+## Overlay atlas in native memory (`AssSubtitleAtlasPipeline.kt`, `AtlasMemory`)
+
+The Overlay pipeline's atlas buffers were `ByteBuffer.allocateDirect`, which ART keeps on the Java
+heap: three slots (two on low-RAM devices) of one 16 MB page each as soon as subtitles render, each
+growing to four pages on dense typesetting, so up to 192 MB, never given back while subtitles were
+on, plus 3 MB of vertices a slot. Media3's buffer comes from the same heap and is sized from it (85%
+of a large heap with ExoPlayer Native Memory off), so on heavy typesetting the two did not fit,
+garbage collection ran without end and the stream stopped buffering ahead. Turning subtitles off
+removed the overlay and freed the atlas, which is why buffering then came back at once.
+
+`src-kt/.../AssSubtitleAtlasPipeline.kt` is the AAR's own (nuvio-libass 3bada55), changed in three
+places:
+
+- `acquireSlots` takes each slot's atlas, at its full four pages, and its vertex buffer from
+  `AtlasMemory`: anonymous mappings made by the app's `libnuvio_ass_gpu`
+  (`app/src/main/cpp/subtitles/atlas_memory.c`), outside the Java heap, zero-filled and backed by
+  memory only where libass writes. A slot never reallocates; libass packs into the pages it needs.
+  Without the native library the slot gets one Java heap page that grows, as before.
+- After each render, `AtlasPayload.noteRender` counts renders that fit in one page; after 240 in a
+  row (4 to 10 s of frames) it hands the memory of the slot's other pages back (`MADV_DONTNEED`).
+  That runs on the libass thread right after a render into the slot, whose frame then uses one page,
+  so nothing shown is in those pages; they read as zeros until written.
+- `AssAtlasPipeline.releaseAndWait` joins both threads and then gives the buffers back to
+  `AtlasMemory`'s pool, all pages handed back, for the next playback. Mappings are never unmapped, so
+  a late read of a given-back buffer sees zeros instead of faulting, and their address space stays
+  bounded by the slots in use at once. A thread still running after its release timed out keeps its
+  buffers; they are then never reused.
+
+`build.sh` swaps in `AssAtlasPipeline`, `AtlasLibassThread` and `AtlasPayload` and adds
+`AssAtlasPipeline$Companion` and `AtlasMemory`. Compiled from the unchanged file, every class of it
+matches the AAR's but `AtlasLibassThread`, whose `bipush -4` the priority patch makes 5; the changed
+classes differ from it only in the code above.
+
 ## `AssCpuBlendSurfaceView` (Overlay (CPU Blend))
 
 Same public API and the same `AssRender.nativeCpuBlend*` natives. The patched class fixes four things:
@@ -159,6 +193,9 @@ libass.
 app/libs/nuvio-libass-patch/build.sh
 ```
 
-If a new nuvio-libass AAR comes in, check its `AssCpuBlendSurfaceView` before running this script:
-the patch replaces that class whole. The priority patch fails rather than guess if a worker's
+It needs a JDK 17+, Gradle's Kotlin compiler and an Android SDK platform's `android.jar` (see the
+script's header for how it finds them). Running it again changes nothing.
+
+If a new nuvio-libass AAR comes in, check its `AssCpuBlendSurfaceView`, `AssTrack` and
+`AssSubtitleAtlasPipeline.kt` before running this script: the patch replaces those classes whole. The priority patch fails rather than guess if a worker's
 `new HandlerThread(name, priority)` can't be found once.
