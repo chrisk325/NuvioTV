@@ -181,6 +181,11 @@ class AppSettings(private val store: KeyValueStore) {
         get() = bool("home.hero", true)
         set(value) = put("home.hero", value)
 
+    /** Home > Hero trailers: the hero title's trailer plays silently over its artwork. */
+    var heroTrailers: Boolean
+        get() = bool("home.heroTrailers", true)
+        set(value) = put("home.heroTrailers", value)
+
     /** CatalogSlot.key values feeding the hero; empty = every row (Android fallback). */
     var heroCatalogKeys: List<String>
         get() = list("home.heroCatalogs")

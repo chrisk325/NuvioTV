@@ -9,6 +9,10 @@ struct HeroCarousel: View {
     var height: CGFloat = 620
     @State private var index = 0
     @State private var isFocused = false
+    /// The current title's trailer is playing (the carousel waits for it to end).
+    @State private var trailerShowing = false
+    /// The hero is on screen (the trailer stops when it's scrolled away).
+    @State private var onScreen = true
 
     var body: some View {
         if items.isEmpty {
@@ -23,9 +27,16 @@ struct HeroCarousel: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: height)
                         .overlay {
-                            RemoteImage(url: item.backdropUrl ?? item.poster)
-                                .id(item.id)
-                                .transition(.opacity)
+                            ZStack {
+                                RemoteImage(url: item.backdropUrl ?? item.poster)
+                                    .id(item.id)
+                                    .transition(.opacity)
+                                // Settings > Home > Hero trailers: plays over the artwork once ready;
+                                // when it ends the carousel moves on.
+                                HeroTrailer(item: onScreen ? item : nil, delay: 2,
+                                            onFinished: { step(1) },
+                                            onShowingChange: { trailerShowing = $0 })
+                            }
                         }
                         .overlay {
                             ZStack {
@@ -61,12 +72,13 @@ struct HeroCarousel: View {
             }
             .padding(.horizontal, 60)
             .focusSection()
+            .background(OnScreenReporter { onScreen = $0 })
             .animation(.easeInOut(duration: 0.4), value: index)
-            .task(id: items.map(\.id).joined()) {
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 8_000_000_000)
-                    if !Task.isCancelled { step(1) }
-                }
+            // Next title every 8 s, counted from when each one appears; never while its trailer plays.
+            .task(id: "\(items.map(\.id).joined())|\(index)|\(trailerShowing)") {
+                guard !trailerShowing else { return }
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                if !Task.isCancelled && !trailerShowing { step(1) }
             }
         }
     }
@@ -385,6 +397,8 @@ struct ModernHomeView: View {
         ZStack(alignment: .topLeading) {
             // Full-screen artwork of the focused title.
             FullScreenBackdrop(url: hero?.backdropUrl, animated: false) {
+                // Settings > Home > Hero trailers: the focused title's trailer over its artwork.
+                HeroTrailer(item: hero, delay: 1.5)
                 LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.2), .clear],
                                startPoint: .leading, endPoint: .trailing)
                 LinearGradient(colors: [.clear, .black.opacity(0.65), .black],

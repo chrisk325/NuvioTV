@@ -394,6 +394,17 @@ private struct HomeSettingsPane: View {
                 Text("Modern: artwork follows focus above poster rows. Classic: hero carousel and poster rows. Grid: every catalog as a poster grid. Landscape posters turns every poster in the app into a 16:9 card with the add-on's landscape art (its landscape poster, else its background, else its poster).")
             }
 
+            Section {
+                Toggle("Hero trailers", isOn: s.bind({ $0.heroTrailers }, { $0.heroTrailers = $1; app.objectWillChange.send() }))
+                    .disabled(!app.core.hasTrailerApi)
+            } header: {
+                Text("Hero")
+            } footer: {
+                Text(app.core.hasTrailerApi
+                     ? "The hero title's trailer plays silently over its artwork (the same trailer as on its details page). In Classic and Grid the carousel waits for it to end. Off: still artwork only."
+                     : "Trailers need the trailer service, which isn't set up in this build.")
+            }
+
             Section("Rows") {
                 Toggle("Continue Watching row", isOn: s.bind({ $0.showContinueWatching }, { $0.showContinueWatching = $1 }))
                 Toggle("Hide unreleased episodes in Up next",

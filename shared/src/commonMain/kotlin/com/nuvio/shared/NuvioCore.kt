@@ -95,6 +95,10 @@ private const val NUVIO_COLLECTIONS_KEY = "collections.imported.v1"
 private const val SERVER_LOOKUP_MS = 8_000L
 /** Shows looked up per sync for up next air dates the trackers don't give. */
 private const val MAX_AIR_DATE_LOOKUPS = 120
+/** Resolved trailer links (video hosts' links expire after some hours). */
+private const val TRAILER_URL_TTL_MS = 2L * 3_600_000L
+/** A title found without a trailer isn't looked up again for the hero this long. */
+private const val TRAILER_MISS_TTL_MS = 30L * 60_000L
 /** Up next source holding unaired next episodes of shows that are caught up (the Upcoming row). */
 private const val UPCOMING_SOURCE = "upcoming"
 /** Shows watched within this many days are checked for an upcoming episode (Android's default cap). */
@@ -1774,7 +1778,46 @@ class NuvioCore(
      * the add-on's YouTube ids, then TMDB's. Null when none resolves.
      */
     @Throws(Exception::class)
-    suspend fun trailerUrl(meta: Meta, tmdbKeys: List<String>): String? {
+    suspend fun trailerUrl(meta: Meta, tmdbKeys: List<String>): String? = kotlinx.coroutines.withContext(mainDispatcher) {
+        // Found before (Details or the Home hero): reused while the link is still fresh.
+        trailerCache[meta.id]?.takeIf { it.url != null && currentTimeMillis() - it.at < TRAILER_URL_TTL_MS }
+            ?.let { return@withContext it.url }
+        val url = resolveTrailer(meta, tmdbKeys)
+        trailerCache[meta.id] = CachedTrailer(url, currentTimeMillis())
+        url
+    }
+
+    /**
+     * The Home hero's trailer for a catalog title: the same link the Details page plays (one
+     * lookup per title, shared both ways). The title's details are loaded for its trailer ids;
+     * a title without a trailer isn't asked again for a while.
+     */
+    @Throws(Exception::class)
+    suspend fun heroTrailerUrl(preview: MetaPreview): String? = kotlinx.coroutines.withContext(mainDispatcher) {
+        if (config.trailerApiUrl.isBlank()) return@withContext null
+        val now = currentTimeMillis()
+        (trailerCache[preview.id])?.let { cached ->
+            val age = now - cached.at
+            if (cached.url != null && age < TRAILER_URL_TTL_MS) return@withContext cached.url
+            if (cached.url == null && age < TRAILER_MISS_TTL_MS) return@withContext null
+        }
+        val meta = try {
+            meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val url = meta?.let { trailerUrl(it, emptyList()) }
+        trailerCache[preview.id] = CachedTrailer(url, currentTimeMillis())
+        url
+    }
+
+    private class CachedTrailer(val url: String?, val at: Long)
+    /** Content id → resolved trailer link (null: none found), for Details and the Home hero. */
+    private val trailerCache = HashMap<String, CachedTrailer>()
+
+    private suspend fun resolveTrailer(meta: Meta, tmdbKeys: List<String>): String? {
         val api = config.trailerApiUrl.trim().trimEnd('/')
         if (api.isEmpty()) return null
         for (key in (meta.trailerYtIds + tmdbKeys).distinct().take(4)) {

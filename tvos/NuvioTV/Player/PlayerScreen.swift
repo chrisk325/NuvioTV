@@ -8,13 +8,17 @@ struct PlayerContainer: View {
 
     var body: some View {
         let engine = app.settings.playerEngine
-        if let external = ExternalPlayer(engine: engine), !request.isTrailer {
-            ExternalPlayerScreen(player: external, request: request)
-        } else if engine == AppSettings.companion.ENGINE_AVPLAYER {
-            AVPlayerScreen(request: request)
-        } else {
-            PlayerScreen(request: request)
+        Group {
+            if let external = ExternalPlayer(engine: engine), !request.isTrailer {
+                ExternalPlayerScreen(player: external, request: request)
+            } else if engine == AppSettings.companion.ENGINE_AVPLAYER {
+                AVPlayerScreen(request: request)
+            } else {
+                PlayerScreen(request: request)
+            }
         }
+        // A Home hero trailer stops before anything plays.
+        .onAppear { NotificationCenter.default.post(name: .nuvioPlaybackWillStart, object: nil) }
     }
 }
 
