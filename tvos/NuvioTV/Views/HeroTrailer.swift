@@ -47,16 +47,20 @@ struct HeroTrailer: View {
 
 @MainActor
 final class HeroTrailerModel: ObservableObject {
-    let player = AVPlayer()
+    /// A fresh player for every trailer: an AVPlayer that has failed once can't play anything
+    /// again, which left the hero without trailers after the first one went wrong.
+    @Published private(set) var player = HeroTrailerModel.makePlayer()
     @Published private(set) var isShowing = false
     let finished = PassthroughSubject<Void, Never>()
     private var endObserver: NSObjectProtocol?
 
-    init() {
+    private static func makePlayer() -> AVPlayer {
+        let player = AVPlayer()
         player.isMuted = true
         player.allowsExternalPlayback = false
         player.preventsDisplaySleepDuringVideoPlayback = false
         player.actionAtItemEnd = .pause
+        return player
     }
 
     func run(item: MetaPreview?, core: NuvioCore, delay: Double) async {
@@ -66,29 +70,59 @@ final class HeroTrailerModel: ObservableObject {
         guard !Task.isCancelled else { return }
         guard let link = (try? await core.heroTrailerUrl(preview: item)) ?? nil,
               !Task.isCancelled, let url = URL(string: link) else { return }
+        let player = Self.makePlayer()
         let playerItem = AVPlayerItem(url: url)
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.isShowing = false
+                self.stop()
                 self.finished.send()
             }
         }
         player.replaceCurrentItem(with: playerItem)
+        self.player = player
         player.play()
+
         // Shown once it really plays (checked for up to 15 s); otherwise the artwork stays.
+        var started = false
         for _ in 0..<150 {
-            if Task.isCancelled || player.currentItem !== playerItem { return }
-            if playerItem.status == .failed { break }
+            if Task.isCancelled || self.player !== player { return }
+            if playerItem.status == .failed || player.status == .failed { break }
             if player.timeControlStatus == .playing && playerItem.currentTime().seconds > 0.3 {
-                isShowing = true
-                return
+                started = true
+                break
             }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        if player.currentItem === playerItem { stop() }
+        guard started else {
+            // The link didn't play (expired or refused): looked up afresh next time.
+            if self.player === player {
+                core.forgetTrailerUrl(url: link)
+                stop()
+            }
+            return
+        }
+        isShowing = true
+
+        // While it shows: a link that fails, or a stream that stops delivering for 4 s, fades
+        // back to the artwork (a failed link is looked up afresh next time).
+        var stalledChecks = 0
+        while isShowing && self.player === player {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled || self.player !== player || !isShowing { return }
+            if playerItem.status == .failed || player.status == .failed {
+                core.forgetTrailerUrl(url: link)
+                stop()
+                return
+            }
+            stalledChecks = player.timeControlStatus == .playing ? 0 : stalledChecks + 1
+            if stalledChecks >= 8 {
+                stop()
+                return
+            }
+        }
     }
 
     func stop() {

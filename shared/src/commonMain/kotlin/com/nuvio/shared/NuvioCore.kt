@@ -1813,6 +1813,11 @@ class NuvioCore(
         url
     }
 
+    /** A trailer link that wouldn't play (expired or refused): it is looked up afresh next time. */
+    fun forgetTrailerUrl(url: String) {
+        trailerCache.entries.removeAll { it.value.url == url }
+    }
+
     private class CachedTrailer(val url: String?, val at: Long)
     /** Content id → resolved trailer link (null: none found), for Details and the Home hero. */
     private val trailerCache = HashMap<String, CachedTrailer>()
