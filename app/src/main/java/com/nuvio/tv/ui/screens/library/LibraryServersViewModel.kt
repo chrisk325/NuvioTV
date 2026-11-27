@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.library
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nuvio.tv.data.local.LibraryPreferences
 import com.nuvio.tv.data.mediaserver.ServerCatalog
 import com.nuvio.tv.data.mediaserver.ServerFailure
 import com.nuvio.tv.data.mediaserver.ServerFavorites
@@ -20,8 +21,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -37,8 +40,11 @@ class LibraryServersViewModel @Inject constructor(
     private val serverCatalog: ServerCatalog,
     private val favorites: ServerFavorites,
     private val store: LibraryServerShelfStore,
+    libraryPreferences: LibraryPreferences,
     repository: ServerRepository
 ) : ViewModel() {
+    val shelvesAsGrid: StateFlow<Boolean> = libraryPreferences.serverShelvesAsGrid
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val servers: StateFlow<ServersUiState> = repository.uiState
     val favoritesState: StateFlow<ServerFavoritesState> = favorites.state
     private val _shelves = MutableStateFlow<List<LibraryServerShelf>?>(null)

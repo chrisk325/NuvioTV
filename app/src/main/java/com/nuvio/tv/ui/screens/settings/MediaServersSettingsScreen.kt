@@ -44,6 +44,7 @@ internal fun MediaServersSettingsContent(
     viewModel: MediaServersViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val serverShelvesAsGrid by viewModel.serverShelvesAsGrid.collectAsStateWithLifecycle()
     var signIn by remember { mutableStateOf<ServerSignInRequest?>(null) }
     val connections = uiState.connections
     val focusModifier = initialFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier
@@ -88,6 +89,17 @@ internal fun MediaServersSettingsContent(
                             leadingIcon = Icons.Default.Dns,
                             modifier = if (connection == connections.first()) focusModifier else Modifier
                         )
+                    }
+                    if (connections.isNotEmpty()) {
+                        item(key = "servers_library_label") { ServerSectionLabel(stringResource(R.string.servers_section_library)) }
+                        item(key = "servers_library_grid") {
+                            SettingsToggleRow(
+                                title = stringResource(R.string.servers_library_grid),
+                                subtitle = stringResource(R.string.servers_library_grid_subtitle),
+                                checked = serverShelvesAsGrid,
+                                onToggle = { viewModel.setServerShelvesAsGrid(!serverShelvesAsGrid) }
+                            )
+                        }
                     }
                     item(key = "servers_add_label") { ServerSectionLabel(stringResource(R.string.servers_section_add)) }
                     items(viewModel.providers, key = { "provider_${it.id}" }) { provider ->

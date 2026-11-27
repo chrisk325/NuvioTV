@@ -3,6 +3,9 @@
     <string name="settings_media_servers_subtitle">Connect Jellyfin, Emby, Plex or Silo to browse and play your own library.</string>
     <string name="servers_section_connected">Servers</string>
     <string name="servers_section_add">Add server</string>
+    <string name="servers_section_library">Library</string>
+    <string name="servers_library_grid">Show shelves as grids</string>
+    <string name="servers_library_grid_subtitle">In Library, Servers, show each library as a grid of posters that scrolls down, instead of a row that scrolls sideways.</string>
     <string name="servers_empty">No servers connected yet.</string>
     <string name="servers_add_description">Sign in with your server address and %1$s user.</string>
     <string name="servers_sign_in_title">Sign in to %1$s</string>

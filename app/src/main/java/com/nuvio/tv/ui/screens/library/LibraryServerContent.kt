@@ -1,5 +1,31 @@
 package com.nuvio.tv.ui.screens.library
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.tv.material3.Border
+import androidx.tv.material3.Card
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.Icon
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Text
+import com.nuvio.tv.domain.model.PosterShape
+import com.nuvio.tv.ui.components.GridContentCard
+import com.nuvio.tv.ui.components.LocalLandscapePosterMode
+import com.nuvio.tv.ui.theme.NuvioTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +50,7 @@ import com.nuvio.tv.ui.components.PosterCardStyle
 
 internal fun LazyGridScope.libraryServerContent(
     shelves: List<LibraryServerShelf>?,
+    asGrid: Boolean,
     posterCardStyle: PosterCardStyle,
     rowInset: Dp,
     focusTarget: Pair<String, Int>?,
@@ -62,7 +89,19 @@ internal fun LazyGridScope.libraryServerContent(
         else -> shelves.forEach { shelf ->
             val row = shelf.row
             val failure = shelf.failure
-            if (row != null && row.items.isNotEmpty()) {
+            if (row != null && row.items.isNotEmpty() && asGrid) {
+                serverShelfGrid(
+                    shelfKey = shelf.key,
+                    row = row,
+                    posterCardStyle = posterCardStyle,
+                    focusTarget = focusTarget,
+                    onItemFocused = onItemFocused,
+                    isWatched = isWatched,
+                    onItemClick = onItemClick,
+                    onSeeAll = onSeeAll,
+                    onItemLongPress = onItemLongPress
+                )
+            } else if (row != null && row.items.isNotEmpty()) {
                 item(key = "server_shelf_${shelf.key}", span = { GridItemSpan(maxLineSpan) }) {
                     CatalogRowSection(
                         catalogRow = row,
@@ -90,6 +129,98 @@ internal fun LazyGridScope.libraryServerContent(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * One shelf as a grid: its title across the page, then its posters filling the grid's columns, wrapping onto as many
+ * lines as they need, and a See all card at the end when the library holds more.
+ */
+private fun LazyGridScope.serverShelfGrid(
+    shelfKey: String,
+    row: CatalogRow,
+    posterCardStyle: PosterCardStyle,
+    focusTarget: Pair<String, Int>?,
+    onItemFocused: (String, Int) -> Unit,
+    isWatched: (MetaPreview) -> Boolean,
+    onItemClick: (String, String, String) -> Unit,
+    onSeeAll: (CatalogRow) -> Unit,
+    onItemLongPress: (MetaPreview, String) -> Unit
+) {
+    item(key = "server_grid_title_$shelfKey", span = { GridItemSpan(maxLineSpan) }) {
+        Text(
+            text = row.catalogName,
+            style = MaterialTheme.typography.headlineMedium,
+            color = NuvioTheme.colors.TextPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = NuvioTheme.spacing.md)
+        )
+    }
+    itemsIndexed(row.items, key = { index, item -> "server_grid_${shelfKey}_${index}_${item.id}" }) { index, item ->
+        val focusRequester = remember { FocusRequester() }
+        val restoreFocus = focusTarget?.first == shelfKey && focusTarget.second == index
+        LaunchedEffect(restoreFocus) {
+            if (restoreFocus) runCatching { focusRequester.requestFocus() }
+        }
+        GridContentCard(
+            item = item,
+            posterCardStyle = posterCardStyle,
+            isWatched = isWatched(item),
+            focusRequester = focusRequester,
+            showLabel = true,
+            onFocused = { onItemFocused(shelfKey, index) },
+            onClick = { onItemClick(item.id, item.apiType, row.addonBaseUrl) },
+            onLongPress = { onItemLongPress(item, row.addonBaseUrl) }
+        )
+    }
+    if (row.hasMore) {
+        item(key = "server_grid_see_all_$shelfKey") {
+            ServerGridSeeAllCard(posterCardStyle = posterCardStyle, onClick = { onSeeAll(row) })
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ServerGridSeeAllCard(posterCardStyle: PosterCardStyle, onClick: () -> Unit) {
+    val landscape = LocalLandscapePosterMode.current
+    val width = if (landscape) posterCardStyle.height else posterCardStyle.width
+    val height = if (landscape) posterCardStyle.height / PosterShape.LANDSCAPE.aspectRatio() else posterCardStyle.height
+    val shape = RoundedCornerShape(posterCardStyle.cornerRadius)
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .width(width)
+            .height(height),
+        shape = CardDefaults.shape(shape = shape),
+        colors = CardDefaults.colors(
+            containerColor = NuvioTheme.colors.BackgroundCard,
+            focusedContainerColor = NuvioTheme.colors.BackgroundCard
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(border = NuvioTheme.focusRing.border(posterCardStyle.focusedBorderWidth), shape = shape)
+        ),
+        scale = CardDefaults.scale(focusedScale = posterCardStyle.focusedScale)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                modifier = Modifier.size(NuvioTheme.spacing.xxl),
+                tint = NuvioTheme.colors.TextSecondary
+            )
+            Spacer(modifier = Modifier.height(NuvioTheme.spacing.sm))
+            Text(
+                text = stringResource(R.string.action_see_all),
+                style = MaterialTheme.typography.titleSmall,
+                color = NuvioTheme.colors.TextSecondary
+            )
         }
     }
 }
