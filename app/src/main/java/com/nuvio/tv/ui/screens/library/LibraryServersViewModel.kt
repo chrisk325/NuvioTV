@@ -14,6 +14,7 @@ import com.nuvio.tv.domain.model.CatalogRow
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class LibraryServerShelf(
     val key: String,
@@ -34,6 +36,7 @@ data class LibraryServerShelf(
 class LibraryServersViewModel @Inject constructor(
     private val serverCatalog: ServerCatalog,
     private val favorites: ServerFavorites,
+    private val store: LibraryServerShelfStore,
     repository: ServerRepository
 ) : ViewModel() {
     val servers: StateFlow<ServersUiState> = repository.uiState
@@ -45,6 +48,7 @@ class LibraryServersViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var loadedRevision: Int? = null
     private var loadedWrites: Int? = null
+    private var shownSetupKey: String? = null
     var focusedShelfKey: String? = null
         private set
     val focusedIndexes = mutableMapOf<String, Int>()
@@ -54,7 +58,11 @@ class LibraryServersViewModel @Inject constructor(
         focusedIndexes[shelfKey] = index
     }
 
-    /** Loads the shelves again when the servers changed or a favourite was written since the last load. */
+    /**
+     * Loads the shelves again when the servers changed or a favourite was written since the last load. With nothing on
+     * screen yet, as after the app starts, the shelves last kept for the same server setup show at once while they
+     * load again.
+     */
     fun load() {
         val revision = servers.value.revision
         val writes = favorites.state.value.writes
@@ -64,7 +72,21 @@ class LibraryServersViewModel @Inject constructor(
         favorites.ensureFresh()
         loadJob?.cancel()
         _refreshing.value = false
-        loadJob = viewModelScope.launch { _shelves.value = loadShelves() }
+        val setupKey = store.setupKey(servers.value.enabledConnections)
+        val showKept = _shelves.value == null || shownSetupKey != setupKey
+        loadJob = viewModelScope.launch {
+            if (showKept) {
+                val kept = withContext(Dispatchers.IO) { store.read(setupKey) }
+                // Shelves from another server setup would show the wrong libraries; the spinner is better.
+                _shelves.value = kept ?: _shelves.value?.takeIf { shownSetupKey == setupKey }
+                if (kept != null) _refreshing.value = true
+            }
+            try {
+                show(setupKey, loadShelves())
+            } finally {
+                _refreshing.value = false
+            }
+        }
     }
 
     /**
@@ -80,11 +102,17 @@ class LibraryServersViewModel @Inject constructor(
                 favorites.ensureFresh(force = true)?.join()
                 loadedRevision = servers.value.revision
                 loadedWrites = favorites.state.value.writes
-                _shelves.value = loadShelves()
+                show(store.setupKey(servers.value.enabledConnections), loadShelves())
             } finally {
                 _refreshing.value = false
             }
         }
+    }
+
+    private suspend fun show(setupKey: String, shelves: List<LibraryServerShelf>) {
+        _shelves.value = shelves
+        shownSetupKey = setupKey
+        withContext(Dispatchers.IO) { store.write(setupKey, shelves) }
     }
 
     private suspend fun loadShelves(): List<LibraryServerShelf> = coroutineScope {
