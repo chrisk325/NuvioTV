@@ -117,6 +117,8 @@ struct MPVSetupOptions {
     var subtitleDelay = 0.0        // seconds
     var audioDelay = 0.0           // seconds
     var dialogueBoost = 0          // 0 off … 3 high
+    /// Picture only (no audio or subtitle tracks): the Home hero's silent trailers.
+    var silent = false
 }
 
 protocol MPVControllerDelegate: AnyObject {
@@ -235,6 +237,10 @@ final class MPVController {
         set(option: "sub-delay", String(format: "%.3f", options.subtitleDelay))
         set(option: "audio-delay", String(format: "%.3f", options.audioDelay))
         set(option: "audio-channels", "auto-safe")
+        if options.silent {
+            set(option: "aid", "no")
+            set(option: "sid", "no")
+        }
         if let filter = DialogueEnhancer.filter(level: options.dialogueBoost) { set(option: "af", filter) }
 
         guard mpv_initialize(mpv) >= 0 else {
