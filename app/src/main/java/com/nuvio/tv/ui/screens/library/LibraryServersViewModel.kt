@@ -40,6 +40,8 @@ class LibraryServersViewModel @Inject constructor(
     val favoritesState: StateFlow<ServerFavoritesState> = favorites.state
     private val _shelves = MutableStateFlow<List<LibraryServerShelf>?>(null)
     val shelves: StateFlow<List<LibraryServerShelf>?> = _shelves.asStateFlow()
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
     private var loadJob: Job? = null
     private var loadedRevision: Int? = null
     private var loadedWrites: Int? = null
@@ -61,11 +63,32 @@ class LibraryServersViewModel @Inject constructor(
         loadedWrites = writes
         favorites.ensureFresh()
         loadJob?.cancel()
+        _refreshing.value = false
+        loadJob = viewModelScope.launch { _shelves.value = loadShelves() }
+    }
+
+    /**
+     * Reloads the favourites and every shelf from the servers on request, keeping the shelves already on screen until
+     * the new ones arrive.
+     */
+    fun refresh() {
+        if (_refreshing.value) return
+        _refreshing.value = true
+        loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            _shelves.value = coroutineScope {
-                serverCatalog.libraryShelves().map { ref -> async { shelf(ref) } }.awaitAll()
+            try {
+                favorites.ensureFresh(force = true)?.join()
+                loadedRevision = servers.value.revision
+                loadedWrites = favorites.state.value.writes
+                _shelves.value = loadShelves()
+            } finally {
+                _refreshing.value = false
             }
         }
+    }
+
+    private suspend fun loadShelves(): List<LibraryServerShelf> = coroutineScope {
+        serverCatalog.libraryShelves().map { ref -> async { shelf(ref) } }.awaitAll()
     }
 
     private suspend fun shelf(ref: ServerLibraryRef): LibraryServerShelf {

@@ -69,6 +69,7 @@
     <string name="library_servers_empty_message">Choose which libraries to show in Settings, under Content &amp; Discovery, then Media servers.</string>
     <string name="library_servers_no_favorites_title">No favorites yet</string>
     <string name="library_servers_no_favorites_message">Hold OK on a title and choose Favorite to keep it here. Your server\'s catalogs are on Home.</string>
+    <string name="library_servers_refresh">Refresh servers</string>
     <string name="library_server_load_failed">Couldn\'t load %1$s</string>
     <string name="plex_add_description">Sign in with a code at plex.tv/link.</string>
     <string name="plex_sign_in_subtitle">Link this TV to your Plex account. Your Plex password is never entered here.</string>
