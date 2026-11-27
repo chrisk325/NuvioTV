@@ -208,12 +208,24 @@ internal class VodCacheWriteSink(
         const val MAX_CLOSE_WAIT_MS = 500L
         const val POOL_CAPACITY = 64
 
+        /**
+         * Default (0) plus two steps of "less favorable": nice 2, as the parallel download workers.
+         *
+         * The stream's loader waits for this thread whenever it falls [MAX_QUEUED_BYTES] behind, so
+         * the stream loads no faster than it writes. In THREAD_PRIORITY_BACKGROUND, the background
+         * group, it can get almost no CPU while heavy .ass subtitles keep every core busy at libass's
+         * priority (nice 5): with the cache on, the forward buffer stopped growing on heavy .ass
+         * tracks until subtitles were turned off. Nice 2 is still below the loader and the UI, and
+         * above libass.
+         */
+        private const val WRITER_THREAD_PRIORITY =
+            android.os.Process.THREAD_PRIORITY_DEFAULT + 2 * android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE
+
         // One worker for every sink: a thread per span cost thousands of threads over a playback.
         private val writer = Executors.newSingleThreadExecutor { runnable ->
             Thread({
-                // Java thread priority barely moves an Android thread; the background group is what
-                // keeps disk writes from competing with the codec and the UI.
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                // Java thread priority barely moves an Android thread; set its nice value instead.
+                android.os.Process.setThreadPriority(WRITER_THREAD_PRIORITY)
                 runnable.run()
             }, "VodCacheWrite")
         }
