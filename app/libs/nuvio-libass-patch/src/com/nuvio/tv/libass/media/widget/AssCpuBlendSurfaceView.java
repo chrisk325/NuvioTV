@@ -26,8 +26,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *   compositor scales to the view; full-size buffers put scaled subtitles in a corner.
  * - libass's frame is pinned to those buffers and its storage to the video, as the atlas overlay
  *   pins its frame: AssHandler can keep the video surface's size, placing subtitles off the video.
- * - The worker runs at the default priority, not the display's: libass's render threads start from it
- *   and take its priority, and at the display's they took the CPU the stream's loader needs.
+ * - The worker runs at nice 5, below the stream's loader, not at the display's priority: libass's
+ *   render threads start from it and take its priority, and at the display's, or even the loader's
+ *   own, the stream stopped buffering ahead on heavy typesetting.
  * - Renders are paced: after one longer than FREE_MS the next waits as long again, so on heavy
  *   typesetting libass works half the time at most instead of at every frame without a break.
  */
@@ -110,9 +111,9 @@ public final class AssCpuBlendSurfaceView extends SurfaceView implements Surface
         nativeHandle = AssRender.Companion.nativeCpuBlendCreate();
         setWindow(holder, surfaceWidth, surfaceHeight);
         assHandler.setOverlaySurfaceSize(surfaceWidth, surfaceHeight);
-        // The loader's priority, not the display's, which libass's render threads take too: under load
-        // subtitles come out late rather than the stream running dry.
-        HandlerThread thread = new HandlerThread(TAG, 0 /* THREAD_PRIORITY_DEFAULT */);
+        // Below the loader's priority, which libass's render threads take too: under load subtitles
+        // come out late rather than the stream running dry. The app's LibassWorker.PRIORITY.
+        HandlerThread thread = new HandlerThread(TAG, 5);
         thread.start();
         workerThread = thread;
         workerHandler = new Handler(thread.getLooper());

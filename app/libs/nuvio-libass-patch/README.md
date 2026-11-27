@@ -108,16 +108,28 @@ Same public API and the same `AssRender.nativeCpuBlend*` natives. The patched cl
   view now pins libass's frame to its buffers and its storage to the video, as the atlas overlay
   pins its frame. It re-pins only when `AssRender.stateGeneration` moves.
 
-The worker also starts at the default thread priority, not `THREAD_PRIORITY_DISPLAY`: see below.
+The worker also starts at nice 5, below the stream's loader, not `THREAD_PRIORITY_DISPLAY`: see below.
 
 ## Worker priority (`AtlasLibassThread`, `AssVideoEffectAsyncProgram`)
 
-libass's render threads start from the worker that renders and take that worker's priority. At `THREAD_PRIORITY_DISPLAY` they took the CPU the stream's loader
-needs, and heavy .ass tracks made playback buffer. `patch_aar.py` changes the `bipush -4` that
-`AssLibassThread` (Overlay) and `AssRenderGL` (Video Effect) are created with to `bipush 0`, the same
-length, so nothing else in those classes moves. `AssSurfaceGlThread` keeps the display priority: it
-only draws, and never runs libass. The app's own GPU Blend worker starts at the same priority
-(`LibassWorker`).
+libass's render threads start from the worker that renders and take that worker's priority. At
+`THREAD_PRIORITY_DISPLAY` they took the CPU the stream's loader needs, and heavy .ass tracks made
+playback buffer. At the loader's own priority (the default, 0) the buffer still stopped growing on
+heavy openings, in Overlay as in the paced CPU and GPU Blend: libass renders on the worker and up to
+three threads it starts (four in all, never more than the cores), which outnumber the loader.
+
+So the workers that only render subtitles start at nice 5, below the loader and above
+`THREAD_PRIORITY_BACKGROUND` (10), from which Android also moves a thread to the background
+scheduling group. With the cores free libass still gets all of them; under load subtitles come out
+late rather than the stream running dry. `patch_aar.py` gives the `bipush` before `AssLibassThread`'s
+(Overlay) `new HandlerThread` the operand 5, an instruction of the same length, so nothing else in
+the class moves; `AssCpuBlendSurfaceView` (CPU Blend) starts its worker at 5, and the app's own GPU
+Blend worker starts at `LibassWorker.PRIORITY`, the same 5.
+
+`AssRenderGL` (Video Effect) gets `bipush 0`, the default: the video's frame processing thread waits
+for the libass lock while `AssRenderGL` renders (`AssRender.hasTrack`), so below the default it would
+hold up the video. `AssSurfaceGlThread` keeps the display priority: it only draws, and never runs
+libass.
 
 ## Rebuilding
 
