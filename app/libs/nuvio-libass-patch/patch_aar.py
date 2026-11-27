@@ -3,9 +3,9 @@
 Usage: python3 -I patch_aar.py <classes dir> <aar>. Leaves every other entry as it is, and drops the
 classes the patches replace with nothing; running it again changes nothing more.
 
-It also starts the libass workers in WORKER_PRIORITY at the default priority: their bytecode's
-`bipush -4` (THREAD_PRIORITY_DISPLAY) before `new HandlerThread(name, priority)` becomes `bipush 0`,
-the same length, so nothing else in the class moves.
+It also sets the priority the libass workers in WORKER_PRIORITY start at: the `bipush` before their
+`new HandlerThread(name, priority)` (-4, THREAD_PRIORITY_DISPLAY, as the AAR is built) gets the
+operand WORKER_PRIORITY gives, an instruction of the same length, so nothing else in the class moves.
 """
 import io
 import os
@@ -15,12 +15,21 @@ import zipfile
 
 REMOVED = {"com/nuvio/tv/libass/media/widget/AssCpuBlendSurfaceView$Companion.class"}
 
-# Class -> the name its libass worker HandlerThread is given.
+# bipush operands: THREAD_PRIORITY_DISPLAY (-4), THREAD_PRIORITY_DEFAULT (0), and nice 5, below the
+# stream's loader (the default) and above THREAD_PRIORITY_BACKGROUND (10), from which Android also
+# moves a thread to the background scheduling group. The app's LibassWorker.PRIORITY is the same 5.
+DISPLAY, DEFAULT, BELOW_LOADER = 0xFC, 0x00, 0x05
+PRIORITIES = (DISPLAY, DEFAULT, BELOW_LOADER)
+
+# Class -> the name its libass worker HandlerThread is given, and the priority it starts at.
+# libass's own render threads are started from the worker and take its priority. The Overlay worker
+# starts below the loader, so heavy typesetting can't take the CPU the stream needs to keep
+# buffering. The Video Effect worker stays at the default: the video's frame processing thread waits
+# for the libass lock it holds while it renders, so a lower priority would hold up the video.
 WORKER_PRIORITY = {
-    "com/nuvio/tv/libass/media/widget/AtlasLibassThread.class": "AssLibassThread",
-    "com/nuvio/tv/libass/media/effect/AssVideoEffectAsyncProgram.class": "AssRenderGL",
+    "com/nuvio/tv/libass/media/widget/AtlasLibassThread.class": ("AssLibassThread", BELOW_LOADER),
+    "com/nuvio/tv/libass/media/effect/AssVideoEffectAsyncProgram.class": ("AssRenderGL", DEFAULT),
 }
-DISPLAY, DEFAULT = 0xFC, 0x00  # bipush operands: -4 and 0
 
 
 def constant_pool(data):
@@ -52,8 +61,8 @@ def constant_pool(data):
     return pool, at
 
 
-def worker_priority(name, data, thread_name):
-    """`data` with its `new HandlerThread(thread_name, -4)` given priority 0 instead."""
+def worker_priority(name, data, thread_name, priority):
+    """`data` with its `new HandlerThread(thread_name, p)` given `priority` instead of `p`."""
     pool, end = constant_pool(data)
     utf8 = lambda i: pool[i][1]
     strings = [i for i, (tag, v) in pool.items() if tag == 8 and utf8(v) == thread_name]
@@ -72,21 +81,18 @@ def worker_priority(name, data, thread_name):
     loads = [bytes([0x13]) + struct.pack(">H", string)]
     if string < 256:
         loads.append(bytes([0x12, string]))
-    found = {}
-    for priority in (DISPLAY, DEFAULT):
+    found = []
+    for current in PRIORITIES:
         for load in loads:
-            pattern = load + bytes([0x10, priority, 0xB7]) + struct.pack(">H", init)
+            pattern = load + bytes([0x10, current, 0xB7]) + struct.pack(">H", init)
             at = data.find(pattern, end)
             while at >= 0:
-                found.setdefault(priority, []).append(at + len(load) + 1)
+                found.append(at + len(load) + 1)
                 at = data.find(pattern, at + 1)
-    display, default = found.get(DISPLAY, []), found.get(DEFAULT, [])
-    if len(display) + len(default) != 1:
-        sys.exit(f"{name}: expected one {thread_name!r} HandlerThread, found {len(display) + len(default)}")
-    if default:
-        return data
+    if len(found) != 1:
+        sys.exit(f"{name}: expected one {thread_name!r} HandlerThread, found {len(found)}")
     patched = bytearray(data)
-    patched[display[0]] = DEFAULT
+    patched[found[0]] = priority
     return bytes(patched)
 
 
@@ -108,7 +114,7 @@ with zipfile.ZipFile(jar, "w") as out:
         names.add(info.filename)
         data = patched.get(info.filename, jar_in.read(info))
         if info.filename in WORKER_PRIORITY:
-            data = worker_priority(info.filename, data, WORKER_PRIORITY[info.filename])
+            data = worker_priority(info.filename, data, *WORKER_PRIORITY[info.filename])
         out.writestr(info, data, compress_type=info.compress_type)
     missing = (set(patched) | set(WORKER_PRIORITY)) - names
     if missing:
