@@ -1,8 +1,8 @@
 # nuvio-libass patches
 
 `nuvio-libass-release.aar` is a prebuilt library. These are classes rebuilt from its decompiled
-bytecode with fixes, which `build.sh` compiles and swaps into the AAR's `classes.jar`, plus a
-one-byte priority patch to two more classes (below). `build.sh` leaves everything else in the AAR,
+bytecode with fixes, and `AssTrack` from nuvio-libass v0.0.15 (`src-kt`), which `build.sh` compiles
+and swaps into the AAR's `classes.jar`, plus a one-byte priority patch to two more classes (below). `build.sh` leaves everything else in the AAR,
 including every `libasskt.so`, byte for byte as it is.
 
 ## Base AAR
@@ -89,6 +89,28 @@ The fork has no `ass_set_threads`. It runs its own event threads, at most 4 and 
 cores, and only on expensive frames, so the app no longer sets libass's thread count. The worker
 priority patch below still applies: the fork's threads are pthreads started from the rendering
 worker, and they take its priority.
+
+## `AssTrack` (nuvio-libass v0.0.15)
+
+`src-kt/com/nuvio/tv/libass/AssTrack.kt` is nuvio-libass's own at 07a38cd ("feed queued dialogue to
+libass whenever the lock is free"), the fix in NuvioTV upstream's v0.0.15 bump (NuvioMedia/NuvioTV
+#4871). The extractor queues every ASS track's dialogue for libass, and only the rendered track's
+queue was drained, before each render. Every other ASS track kept its lines on the Java heap for
+the whole playback (a seek back queued them again): upstream measured the heap at 120 MB growing to
+386 MB in seven minutes on a file with 19 ASS tracks, and garbage collection took the CPU the loader
+needs, so the stream stopped buffering ahead until subtitles were turned off. `enqueueChunk` now
+feeds the queue to libass when `tryLock` gets the libass lock; it never waits for a render.
+
+The AAR's `AssTrack` is unchanged from 3bada55 up to that commit, so the fix is the only change.
+`build.sh` compiles the file with Gradle's Kotlin compiler (2.0.21 here) for JVM 17, as the AAR is,
+with module name `nuvio-libass_release` so its internal members keep the AAR's names, and swaps in
+`AssTrack.class` only: its members are the AAR's, and its code differs only in `enqueueChunk` and
+in local variable slots. `AssTrack$Companion` and `AssTrack$PendingChunk` stay as they are.
+
+The rest of v0.0.15 is already here: libass 2598476 is 6a7c6c9 with only its README changed, and
+v0.0.15 starts the Overlay and Video Effect workers at nice 2 where this AAR starts libass's at
+nice 5 (Video Effect stays at the default: see "Worker priority"). v0.0.15's AAR has no CPU Blend,
+so it doesn't replace this one.
 
 ## `AssCpuBlendSurfaceView` (Overlay (CPU Blend))
 

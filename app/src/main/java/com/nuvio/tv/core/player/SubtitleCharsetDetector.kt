@@ -214,7 +214,7 @@ object SubtitleCharsetDetector {
         return false
     }
 
-    private fun isFastValidUtf8(bytes: ByteArray, offset: Int, length: Int): Boolean {
+    internal fun isFastValidUtf8(bytes: ByteArray, offset: Int, length: Int): Boolean {
         var i = offset
         val end = offset + length
         while (i < end) {
