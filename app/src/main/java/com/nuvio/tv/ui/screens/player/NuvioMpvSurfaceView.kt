@@ -15,6 +15,7 @@ import kotlin.math.pow
 import kotlin.math.roundToLong
 
 internal const val MPV_TRACK_LIST_PROPERTY = "track-list"
+internal const val MPV_CHAPTER_LIST_PROPERTY = "chapter-list"
 internal const val MPV_SID_PROPERTY = "sid"
 internal const val MPV_SUB_TEXT_PROPERTY = "sub-text"
 private const val MPV_TEXT_OUTLINE_SIZE_PER_WIDTH = 0.5
@@ -814,11 +815,22 @@ class NuvioMpvSurfaceView @JvmOverloads constructor(
     }
 
     override fun observeProperties() {
-        // Progress is polled by PlayerRuntimeController. Track-list changes are pushed so
-        // the poll can skip re-reading an unchanged track list.
+        // Progress is polled by PlayerRuntimeController. Track-list and chapter-list changes are
+        // pushed so the poll can skip re-reading unchanged lists.
         mpv.observeProperty(MPV_TRACK_LIST_PROPERTY, MPV.mpvFormat.MPV_FORMAT_NONE)
+        mpv.observeProperty(MPV_CHAPTER_LIST_PROPERTY, MPV.mpvFormat.MPV_FORMAT_NONE)
         mpv.observeProperty(MPV_SID_PROPERTY, MPV.mpvFormat.MPV_FORMAT_STRING)
         mpv.observeProperty(MPV_SUB_TEXT_PROPERTY, MPV.mpvFormat.MPV_FORMAT_STRING)
+    }
+
+    /**
+     * ClearKey pairs (`kid:key,kid:key`, hex) for FFmpeg's CENC decryption: the DASH demuxer reads
+     * `cenc_decryption_keys`, MP4 `decryption_keys`. Global like the headers, so it is set again
+     * before every file. HLS is left to ExoPlayer: FFmpeg's HLS demuxer rejects SAMPLE-AES-CTR keys.
+     */
+    fun applyClearKeys(clearKeys: String?) {
+        ensureInitialized()
+        mpv.setPropertyString("demuxer-lavf-o", clearKeys?.let(::clearKeyLavfOptions).orEmpty())
     }
 
     private fun applyHeaders(headers: Map<String, String>) {
@@ -1009,4 +1021,11 @@ internal fun mpvPlaybackPositionSec(
     if (audioPtsSec == null || seeking) return timePosSec
     val glitchMinSec = MPV_VIDEO_PTS_GLITCH_MIN_SEC + abs(audioDelaySec)
     return if (audioPtsSec - timePosSec > glitchMinSec) audioPtsSec else timePosSec
+}
+
+/** [NuvioMpvSurfaceView.applyClearKeys]'s `demuxer-lavf-o` value for `kid:key,kid:key` pairs. */
+internal fun clearKeyLavfOptions(clearKeys: String): String {
+    val keys = clearKeys.split(',').joinToString(":") { it.replace(':', '=') }
+    // %n% quoting keeps FFmpeg's own `=`/`:` separators inside one mpv key-value entry.
+    return "cenc_decryption_keys=%${keys.length}%$keys,decryption_keys=%${keys.length}%$keys"
 }

@@ -94,6 +94,7 @@ internal suspend fun PlayerRuntimeController.fetchAddonSubtitlesNow(
                         bingeGroup = currentStreamBingeGroup,
                         contentLanguage = contentLanguage,
                         year = year,
+                        clearKeys = currentClearKeys,
                         addonName = currentAddonName,
                         addonLogo = currentAddonLogo,
                         streamDescription = currentStreamDescription
@@ -315,10 +316,15 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
             val currentState = _uiState.value
             val showOnlyPreferredLanguagesChanged =
                 currentState.subtitleStyle.showOnlyPreferredLanguages != settings.subtitleStyle.showOnlyPreferredLanguages
+            val chaptersJustEnabled = !currentState.chaptersEnabled && settings.exoChaptersEnabled
             val wasRememberingAudioDelayPerDevice = rememberAudioDelayPerDeviceEnabled
             rememberAudioDelayPerDeviceEnabled = settings.rememberAudioDelayPerDevice
-            val resolvedInternalPlayerEngine =
+            // A ClearKey HLS stream plays on ExoPlayer whatever the setting: see initializePlayer.
+            val resolvedInternalPlayerEngine = if (clearKeysNeedExoPlayer) {
+                InternalPlayerEngine.EXOPLAYER
+            } else {
                 runtimeInternalPlayerEngineOverride ?: resolvedAutoPlayerEngine ?: settings.internalPlayerEngine
+            }
             val resolvedAudioAmplificationDb = when {
                 !hasInitializedAudioAmplificationForSession -> {
                     hasInitializedAudioAmplificationForSession = true
@@ -368,7 +374,11 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
                     chaptersEnabled = settings.exoChaptersEnabled,
                     showChapterTitle = settings.chapterTitleEnabled,
                     // Turning chapters off hides them at once; skip intro keeps its own copy.
-                    chapters = if (settings.exoChaptersEnabled) state.chapters else emptyList(),
+                    chapters = when {
+                        !settings.exoChaptersEnabled -> emptyList()
+                        state.chapters.isNotEmpty() -> state.chapters
+                        else -> skipDetectionChapters
+                    },
                     showChaptersPanel = state.showChaptersPanel && settings.exoChaptersEnabled,
                     internalPlayerEngine = resolvedInternalPlayerEngine,
                     frameRateMatchingMode = settings.frameRateMatchingMode,
@@ -383,6 +393,13 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
                 )
             }
 
+            if (chaptersJustEnabled && _uiState.value.chapters.isEmpty()) {
+                if (isUsingMpvEngine()) {
+                    markMpvChaptersStale()
+                } else if (hasRenderedFirstFrame) {
+                    loadExoChapters()
+                }
+            }
             if (settings.subtitleStyle.usesStyledRenderer != currentState.subtitleStyle.usesStyledRenderer) {
                 refreshStyledSubtitles()
             }
@@ -1018,7 +1035,7 @@ internal fun PlayerRuntimeController.handleVc1PlaybackFailure(errorMessage: Stri
     _uiState.update {
         it.copy(
             error = displayMessage,
-            showSwitchToMpvErrorAction = true,
+            showSwitchToMpvErrorAction = !clearKeysNeedExoPlayer,
             isPlaying = false,
             showControls = false,
             isBuffering = false,

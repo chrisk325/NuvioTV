@@ -183,7 +183,8 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         mediaMetadata: androidx.media3.common.MediaMetadata? = null,
         cacheKey: String? = null,
         bluray: BlurayPlaylistResolver.RemoteLayout? = null,
-        allowBluray: Boolean = true
+        allowBluray: Boolean = true,
+        clearKeys: String? = null
     ): MediaSource {
         val sanitizedHeaders = sanitizeHeaders(headers)
         // Live TV (channels and their catch-up): the list preview's own plain path, with none of the
@@ -266,6 +267,10 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         }
 
         val mediaItem = mediaItemBuilder.build()
+        val drmSessionManager = clearKeys?.let { keys ->
+            Log.i(LOG_TAG, "DRM: ClearKey with ${keys.count { it == ',' } + 1} key(s)")
+            ClearKeyDrmSessionManager(keys)
+        }
 
         Log.i(
             "PlayerMediaSource",
@@ -391,6 +396,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             customSubtitleParserFactory?.let { parserFactory ->
                 setSubtitleParserFactory(parserFactory)
             }
+            drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } }
         }
         val forceDefaultFactory = customExtractorsFactory != null || customSubtitleParserFactory != null
 
@@ -406,9 +412,11 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             isHls && !forceDefaultFactory -> HlsMediaSource.Factory(httpDataSourceFactory)
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                .apply { drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } } }
                 .createMediaSource(mediaItem)
             isDash && !forceDefaultFactory -> DashMediaSource.Factory(httpDataSourceFactory)
                 .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                .apply { drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } } }
                 .createMediaSource(mediaItem)
             else -> defaultFactory.createMediaSource(mediaItem)
         }

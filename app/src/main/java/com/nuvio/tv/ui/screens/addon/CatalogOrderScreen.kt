@@ -197,18 +197,22 @@ private fun CatalogOrderCard(
                     color = if (item.isDisabled) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary
                 )
                 Spacer(modifier = Modifier.height(NuvioTheme.spacing.xs))
-                Text(
-                    text = item.addonName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = NuvioTheme.colors.TextSecondary
-                )
-                if (item.isDisabled) {
-                    Spacer(modifier = Modifier.height(NuvioTheme.spacing.xs))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = stringResource(R.string.catalog_order_disabled_on_home),
+                        text = item.addonName,
                         style = MaterialTheme.typography.bodySmall,
-                        color = NuvioTheme.colors.Error
+                        color = NuvioTheme.colors.TextSecondary
                     )
+                    if (item.isDisabled) {
+                        Text(
+                            text = stringResource(R.string.catalog_order_disabled_on_home),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NuvioTheme.colors.Error
+                        )
+                    }
                 }
             }
 

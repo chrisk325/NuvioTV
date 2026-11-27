@@ -644,6 +644,7 @@ private fun PlayerRuntimeController.applySelectedStreamState(
     val playbackRequest = PlayerMediaSourceFactory.normalizePlaybackRequest(url, headers)
     currentStreamUrl = playbackRequest.url
     currentHeaders = playbackRequest.headers
+    currentClearKeys = stream.behaviorHints?.clearKeys
     currentFilename = stream.behaviorHints?.filename ?: streamFilenameFromUrl(playbackRequest.url)
     currentStreamResponseHeaders = stream.behaviorHints?.proxyHeaders?.response.orEmpty()
     currentStreamMimeType = PlayerMediaSourceFactory.inferMimeType(
@@ -793,6 +794,7 @@ private fun PlayerRuntimeController.persistSelectedStreamForReuse(
             year = year,
             audioDelayMs = stream.behaviorHints?.audioDelayMs,
             audioDelayLanguage = stream.behaviorHints?.audioDelayLanguage,
+            clearKeys = stream.behaviorHints?.clearKeys,
             addonName = stream.addonName,
             addonLogo = stream.addonLogo,
             streamDescription = stream.description
@@ -825,6 +827,7 @@ private fun PlayerRuntimeController.persistTorrentStreamForReuse(stream: Stream)
             year = year,
             audioDelayMs = stream.behaviorHints?.audioDelayMs,
             audioDelayLanguage = stream.behaviorHints?.audioDelayLanguage,
+            clearKeys = stream.behaviorHints?.clearKeys,
             addonName = stream.addonName,
             addonLogo = stream.addonLogo,
             streamDescription = stream.description
@@ -1077,7 +1080,8 @@ internal fun PlayerRuntimeController.switchToSourceStream(
                         audioDelayUsProvider = audioDelayUs::get,
                         cacheKey = currentStreamCacheKey,
                         bluray = currentStreamBluray,
-                        allowBluray = isBlurayPlaybackAllowed()
+                        allowBluray = isBlurayPlaybackAllowed(),
+                        clearKeys = currentClearKeys
                     )
                 )
                 player.playWhenReady = true
@@ -1762,6 +1766,7 @@ internal fun PlayerRuntimeController.switchToEpisodeStream(
     currentTraktEpisodeMapping = null
     currentTraktEpisodeMappingKey = null
     lastSavedPosition = 0L
+    resetPlaybackTimeline()
 
     _uiState.update {
         it.clearFrameRateDetection().copy(

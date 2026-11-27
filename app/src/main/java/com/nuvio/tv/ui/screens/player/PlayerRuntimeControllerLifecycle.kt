@@ -61,6 +61,9 @@ internal fun PlayerRuntimeController.releasePlayer(
 
     releaseMediaSession()
     progressJob?.cancel()
+    exoChapterLoadJob?.cancel()
+    exoChapterLoadJob = null
+    mpvChaptersStreamUrl = null
     mpvTrackRefreshJob?.cancel()
     mpvTrackRefreshJob = null
     mpvTrackRefreshInProgress = false

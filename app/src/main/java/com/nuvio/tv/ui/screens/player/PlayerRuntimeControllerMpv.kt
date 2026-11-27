@@ -26,6 +26,7 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
         view.applyHi10pGnextSoftwareFallback(shouldUseMpvHi10pGnextSoftwareFallback())
         view.applyHardwareDecodeMode(mpvHardwareDecodeModeSetting)
         registerMpvEventRelay(view)
+        view.applyClearKeys(currentClearKeys)
         view.setMedia(currentStreamUrl, currentHeaders)
         view.setPlaybackSpeed(_uiState.value.playbackSpeed)
         view.applyAudioAmplificationDb(_uiState.value.audioAmplificationDb)
@@ -133,6 +134,7 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
             .takeIf { it > 0L }
             ?: (_uiState.value.pendingSeekPosition?.coerceAtLeast(0L) ?: 0L)
         playbackAnalyticsDiagnostics.setStartupStartPosition(initialResumePosition)
+        view.applyClearKeys(currentClearKeys)
         view.setMedia(url, headers, initialResumePosition)
         playbackAnalyticsDiagnostics.recordRawEventLine(
             "PLAYER_INIT: engine=MPV host=${url.safeMpvTraceHost()} " +
@@ -326,6 +328,11 @@ internal fun PlayerRuntimeController.markMpvTracksStale() {
     mpvTrackRefreshGate.markStale()
 }
 
+/** Makes the next progress tick re-read mpv chapters. Safe to call from any thread. */
+internal fun PlayerRuntimeController.markMpvChaptersStale() {
+    mpvChapterRefreshGate.markStale()
+}
+
 /**
  * Progress-tick entry point. Reading the track list costs about a dozen synchronous mpv property
  * reads per track on the main thread, so the tick only re-reads it after mpv reports a
@@ -348,6 +355,13 @@ internal fun PlayerRuntimeController.updateMpvTracksOnTick() {
         subtitleTracks = state.subtitleTracks
     )
     tryAutoSelectPreferredSubtitleFromAvailableTracks()
+}
+
+internal fun PlayerRuntimeController.updateMpvChaptersOnTick() {
+    if (!isUsingMpvEngine()) return
+    val view = mpvView ?: return
+    if (!mpvChapterRefreshGate.isStale) return
+    refreshMpvChapters(view)
 }
 
 /** mpv only reports the video transfer once it has decoded video params, so this is re-read each tick. */
