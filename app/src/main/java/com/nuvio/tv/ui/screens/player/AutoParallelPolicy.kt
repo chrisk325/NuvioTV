@@ -15,11 +15,20 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * that already gives a single connection a raised receive window (the parallel sockets keep the
  * kernel's own, so a few of them could fetch less), Live TV, torrents, HLS/DASH, streams that carry
  * addon headers (the parallel path has no HTTP/2-on-403 retry), cleartext and local servers, and
- * files whose size is unknown or below [MIN_FILE_BYTES].
+ * files whose size is unknown, or below [MIN_FILE_BYTES] with an average bitrate under
+ * [MIN_FILE_BITRATE_BPS] (or not yet known).
  */
 internal object AutoParallelPolicy {
     /** Roughly 25 Mbps over two hours: below this one connection already keeps up. */
     const val MIN_FILE_BYTES: Long = 20L * 1024L * 1024L * 1024L
+
+    /**
+     * The average bitrate that needs parallel connections whatever the file's size: [MIN_FILE_BYTES]
+     * stands for a bitrate by assuming two hours, and a short dense file falls under it. A 6.5 GB
+     * episode at 39 Mbps drained the buffer on one connection that carried about 30 Mbps. The size
+     * alone does not give the bitrate; the player learns the duration once the stream is prepared.
+     */
+    const val MIN_FILE_BITRATE_BPS: Int = 20_000_000
 
     /** The most connections the app allows anywhere; each one multiplies the window. */
     const val CONNECTIONS = 4
@@ -55,12 +64,14 @@ internal object AutoParallelPolicy {
         url: String,
         sanitizedHeaders: Map<String, String>,
         fileSizeBytes: Long?,
+        fileBitrateBps: Int? = null,
     ): Boolean {
         if (customNetworkEnabled) return false
         if (lowRamTier || singleConnectionWindowRaised) return false
         if (liveTv || torrent || adaptive) return false
         if (sanitizedHeaders.isNotEmpty()) return false
-        if (fileSizeBytes == null || fileSizeBytes < MIN_FILE_BYTES) return false
+        if (fileSizeBytes == null) return false
+        if (fileSizeBytes < MIN_FILE_BYTES && (fileBitrateBps ?: 0) < MIN_FILE_BITRATE_BPS) return false
         return isRemoteHttps(url)
     }
 

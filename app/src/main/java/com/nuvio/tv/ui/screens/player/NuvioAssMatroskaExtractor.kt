@@ -17,7 +17,6 @@ import com.nuvio.tv.core.player.dvmkv.MatroskaExtractor
 import com.nuvio.tv.core.player.dvmkv.MatroskaExtractor.DolbyVisionSampleTransformer
 import com.nuvio.tv.libass.media.AssHandler
 import java.io.ByteArrayOutputStream
-import java.util.regex.Pattern
 import java.util.zip.DataFormatException
 import java.util.zip.Inflater
 
@@ -197,8 +196,7 @@ private class NuvioAssTrackOutput(
             val endIndex = findTokenIndex(sample.data, 1, sampleLimit)
             val lineIndex = findTokenIndex(sample.data, 2, sampleLimit)
             if (endIndex > 0 && lineIndex > endIndex) {
-                val rawDuration = sample.data.decodeToString(endIndex, lineIndex - 1)
-                val durationUs = parseTimecodeUs(rawDuration)
+                val durationUs = parseSsaTimecodeUs(sample.data, endIndex, lineIndex - 1)
                 if (durationUs.isValidTs) {
                     val dialogue = sample.data.dialoguePayload(
                         offset = lineIndex,
@@ -217,18 +215,6 @@ private class NuvioAssTrackOutput(
             }
         }
         delegate.sampleMetadata(timeUs, flags, size, offset, cryptoData)
-    }
-
-    private fun parseTimecodeUs(timeString: String): Long {
-        val matcher = SSA_TIMECODE_PATTERN.matcher(timeString.trim { it <= ' ' })
-        if (!matcher.matches()) return C.TIME_UNSET
-
-        var timestampUs =
-            Util.castNonNull(matcher.group(1)).toLong() * 60 * 60 * C.MICROS_PER_SECOND
-        timestampUs += Util.castNonNull(matcher.group(2)).toLong() * 60 * C.MICROS_PER_SECOND
-        timestampUs += Util.castNonNull(matcher.group(3)).toLong() * C.MICROS_PER_SECOND
-        timestampUs += Util.castNonNull(matcher.group(4)).toLong() * 10_000
-        return timestampUs
     }
 
     private fun findTokenIndex(array: ByteArray, tokenNumber: Int, limit: Int = array.size): Int {
@@ -290,11 +276,71 @@ private class NuvioAssTrackOutput(
         get() = this != C.TIME_UNSET
 
     private companion object {
-        val SSA_TIMECODE_PATTERN: Pattern =
-            Pattern.compile("""(?:(\d+):)?(\d+):(\d+)[:.](\d+)""")
-
         const val COMMA: Byte = 44
         const val INFLATE_BUFFER_SIZE = 4096
         val EMPTY_BYTE_ARRAY = ByteArray(0)
     }
 }
+
+/**
+ * The duration Media3's Matroska extractor writes into an SSA sample ("H:MM:SS.CC"), read in place.
+ *
+ * This runs on the stream's loading thread once per subtitle line, and a heavy .ass track has
+ * thousands of them; the regex it replaces allocated a string and a matcher every time, CPU that
+ * the loader then did not spend draining the network. It reads what
+ * `(?:(\d+):)?(\d+):(\d+)[:.](\d+)` matched on the trimmed text, in the ASCII digits Media3
+ * writes: three or four runs of digits joined by ':', the last joiner ':' or '.', with the last
+ * field in hundredths. Missing hours count as zero (the regex version threw on them), and a field
+ * of more than nine digits is not a timecode.
+ *
+ * @return microseconds, or [C.TIME_UNSET] when bytes [from, to) are not such a timecode.
+ */
+internal fun parseSsaTimecodeUs(data: ByteArray, from: Int, to: Int): Long {
+    var start = from.coerceAtLeast(0)
+    var end = to.coerceAtMost(data.size)
+    while (start < end && (data[start].toInt() and 0xFF) <= 0x20) start++
+    while (end > start && (data[end - 1].toInt() and 0xFF) <= 0x20) end--
+
+    val fields = LongArray(4)
+    var fieldCount = 0
+    var sawDot = false
+    var index = start
+    while (index < end) {
+        if (fieldCount == fields.size) return C.TIME_UNSET
+        var value = 0L
+        var digits = 0
+        while (index < end) {
+            val digit = data[index] - ZERO
+            if (digit < 0 || digit > 9) break
+            if (++digits > MAX_TIMECODE_FIELD_DIGITS) return C.TIME_UNSET
+            value = value * 10 + digit
+            index++
+        }
+        if (digits == 0) return C.TIME_UNSET
+        fields[fieldCount++] = value
+        if (index == end) break
+        // Only the separator before the last field may be '.', so no separator may follow one.
+        if (sawDot) return C.TIME_UNSET
+        when (data[index]) {
+            COLON -> Unit
+            DOT -> sawDot = true
+            else -> return C.TIME_UNSET
+        }
+        index++
+        // A separator must be followed by a field.
+        if (index == end) return C.TIME_UNSET
+    }
+    if (fieldCount < 3) return C.TIME_UNSET
+    val offset = fields.size - fieldCount
+    val hours = if (offset == 0) fields[0] else 0L
+    return hours * 60 * 60 * C.MICROS_PER_SECOND +
+        fields[1 - offset] * 60 * C.MICROS_PER_SECOND +
+        fields[2 - offset] * C.MICROS_PER_SECOND +
+        fields[3 - offset] * 10_000
+}
+
+// Nine digits keep hours * 3.6e9 microseconds well inside a Long.
+private const val MAX_TIMECODE_FIELD_DIGITS = 9
+private const val COLON: Byte = 58
+private const val DOT: Byte = 46
+private const val ZERO: Byte = 48

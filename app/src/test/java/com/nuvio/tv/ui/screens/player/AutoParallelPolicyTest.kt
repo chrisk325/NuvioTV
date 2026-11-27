@@ -20,9 +20,10 @@ class AutoParallelPolicyTest {
         url: String = debridUrl,
         sanitizedHeaders: Map<String, String> = emptyMap(),
         fileSizeBytes: Long? = remux,
+        fileBitrateBps: Int? = null,
     ) = AutoParallelPolicy.shouldUse(
         customNetworkEnabled, lowRamTier, singleConnectionWindowRaised, liveTv, torrent, adaptive,
-        url, sanitizedHeaders, fileSizeBytes
+        url, sanitizedHeaders, fileSizeBytes, fileBitrateBps
     )
 
     @Test
@@ -39,6 +40,23 @@ class AutoParallelPolicyTest {
     fun `smaller or unknown files stay on one connection`() {
         assertFalse(decide(fileSizeBytes = AutoParallelPolicy.MIN_FILE_BYTES - 1))
         assertFalse(decide(fileSizeBytes = null))
+    }
+
+    @Test
+    fun `a smaller file dense enough for one connection to fall behind uses parallel connections`() {
+        val episode = 6_500L * 1024L * 1024L
+        assertTrue(decide(fileSizeBytes = episode, fileBitrateBps = 39_200_000))
+        assertTrue(decide(fileSizeBytes = episode, fileBitrateBps = AutoParallelPolicy.MIN_FILE_BITRATE_BPS))
+        assertFalse(decide(fileSizeBytes = episode, fileBitrateBps = AutoParallelPolicy.MIN_FILE_BITRATE_BPS - 1))
+        assertFalse(decide(fileSizeBytes = episode, fileBitrateBps = null))
+    }
+
+    @Test
+    fun `a dense file still needs a known size and every other condition`() {
+        assertFalse(decide(fileSizeBytes = null, fileBitrateBps = 40_000_000))
+        assertFalse(decide(customNetworkEnabled = true, fileSizeBytes = 1L shl 30, fileBitrateBps = 40_000_000))
+        assertFalse(decide(lowRamTier = true, fileSizeBytes = 1L shl 30, fileBitrateBps = 40_000_000))
+        assertFalse(decide(url = "http://example.com/a.mkv", fileSizeBytes = 1L shl 30, fileBitrateBps = 40_000_000))
     }
 
     @Test
