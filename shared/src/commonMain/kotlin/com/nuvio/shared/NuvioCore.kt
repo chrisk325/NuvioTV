@@ -1802,7 +1802,6 @@ class NuvioCore(
      */
     @Throws(Exception::class)
     suspend fun heroTrailerUrl(preview: MetaPreview): String? = kotlinx.coroutines.withContext(mainDispatcher) {
-        if (config.trailerApiUrl.isBlank()) return@withContext null
         val now = currentTimeMillis()
         (trailerCache[preview.id])?.let { cached ->
             val age = now - cached.at
@@ -1846,10 +1845,23 @@ class NuvioCore(
     /** Content id → resolved trailer link (null: none found), for Details and the Home hero. */
     private val trailerCache = HashMap<String, CachedTrailer>()
 
+    /** Extracts playable YouTube links in the app, as the Android app does. */
+    private val youtube = com.nuvio.shared.trailer.YouTubeExtractor(httpClient)
+
+    /**
+     * Like Android's TrailerService: each trailer id (add-on, then TMDB) is first resolved in the
+     * app straight from YouTube (HLS playlist or MP4 with picture and sound); only when that
+     * fails is the trailer service (TRAILER_API_URL, when set) asked, as Android's fallback.
+     */
     private suspend fun resolveTrailer(meta: Meta, tmdbKeys: List<String>, maxKeys: Int): String? {
         val api = config.trailerApiUrl.trim().trimEnd('/')
-        if (api.isEmpty()) return null
-        for (key in (meta.trailerYtIds + tmdbKeys).distinct().take(maxKeys)) {
+        val keys = (meta.trailerYtIds + tmdbKeys)
+            .mapNotNull { com.nuvio.shared.trailer.YouTubeExtractor.videoId(it) ?: it.trim().takeIf { k -> k.isNotEmpty() } }
+            .distinct()
+            .take(maxKeys)
+        for (key in keys) {
+            youtube.singleUrl(key)?.let { return it }
+            if (api.isEmpty()) continue
             val url = "$api/trailer?youtube_url=${com.nuvio.shared.util.encodeUrlComponent("https://www.youtube.com/watch?v=$key")}" +
                 "&title=${com.nuvio.shared.util.encodeUrlComponent(meta.name)}" +
                 (meta.releaseInfo?.take(4)?.let { "&year=$it" } ?: "")
@@ -1865,7 +1877,8 @@ class NuvioCore(
         return null
     }
 
-    val hasTrailerApi: Boolean get() = config.trailerApiUrl.isNotBlank()
+    /** Trailers are always available: they're extracted from YouTube in the app (the trailer service is only a fallback). */
+    val hasTrailerApi: Boolean get() = true
 
     // --- Release calendar -------------------------------------------------------------------
 
