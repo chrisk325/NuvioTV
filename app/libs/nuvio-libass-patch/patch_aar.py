@@ -15,6 +15,13 @@ import zipfile
 
 REMOVED = {"com/nuvio/tv/libass/media/widget/AssCpuBlendSurfaceView$Companion.class"}
 
+# Classes the patches add, which the AAR does not have: the Overlay atlas's native memory and the
+# companion the patched AssAtlasPipeline gains. Anything else not in classes.jar is a mistake.
+ADDED = {
+    "com/nuvio/tv/libass/media/widget/AtlasMemory.class",
+    "com/nuvio/tv/libass/media/widget/AssAtlasPipeline$Companion.class",
+}
+
 # bipush operands: THREAD_PRIORITY_DISPLAY (-4), THREAD_PRIORITY_DEFAULT (0), and nice 5, below the
 # stream's loader (the default) and above THREAD_PRIORITY_BACKGROUND (10), from which Android also
 # moves a thread to the background scheduling group. The app's LibassWorker.PRIORITY is the same 5.
@@ -116,9 +123,13 @@ with zipfile.ZipFile(jar, "w") as out:
         if info.filename in WORKER_PRIORITY:
             data = worker_priority(info.filename, data, *WORKER_PRIORITY[info.filename])
         out.writestr(info, data, compress_type=info.compress_type)
-    missing = (set(patched) | set(WORKER_PRIORITY)) - names
+    missing = (set(patched) | set(WORKER_PRIORITY)) - names - ADDED
     if missing:
         sys.exit(f"not in classes.jar: {sorted(missing)}")
+    # A second run finds them already in the jar and replaces them in place above.
+    stamp = jar_in.infolist()[0].date_time
+    for name in sorted(set(patched) - names):
+        out.writestr(zipfile.ZipInfo(name, date_time=stamp), patched[name], compress_type=zipfile.ZIP_DEFLATED)
 result = io.BytesIO()
 with zipfile.ZipFile(result, "w") as out:
     for info in src.infolist():

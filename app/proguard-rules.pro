@@ -157,6 +157,12 @@
 -keepclasseswithmembernames class com.nuvio.tv.core.player.libass.AssGpuBlendNative {
     native <methods>;
 }
+# nuvio-libass Overlay's atlas memory (patched in, app/libs/nuvio-libass-patch): its natives live in
+# libnuvio_ass_gpu (subtitles/atlas_memory.c), which JNI binds by class and method name. Renamed, they
+# would not bind and the atlas would fall back to the Java heap.
+-keepclasseswithmembernames class com.nuvio.tv.libass.media.widget.AtlasMemory {
+    native <methods>;
+}
 -keepclassmembers class com.nuvio.tv.libass.AssRender {
     private java.util.concurrent.locks.ReentrantLock lock;
     private long nativeRender;
