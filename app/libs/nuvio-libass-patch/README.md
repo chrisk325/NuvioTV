@@ -16,11 +16,44 @@ which is why this AAR has `AssCpuBlendSurfaceView`, `replaceTrack` and `AssHandl
 `feature/cpu-blend-overlay`, which merges without conflicts. NDK r29 (29.0.14206865), minSdk 21,
 `c++_shared`, RelWithDebInfo, then stripped. So it has:
 
-- **Laskco's libass fork** ([mpvNova-libass](https://github.com/Laskco/mpvNova-libass) 0.17.5-laskco-0e8b5ee,
+- **Laskco's libass fork** ([mpvNova-libass](https://github.com/Laskco/mpvNova-libass) 0.17.5-laskco-6a7c6c9,
   in place of edde746's 0.18.4), in its performance mode (`LIBASS_EXPERIMENTAL_EDGES=1`). Upstream
   measured heavy typesetting at about half the time per frame on an armeabi-v7a TV.
 - the `sans-serif` fontconfig fallback (Roboto, then Noto Sans, then Droid Sans; 34b11d6).
 - the `nativeCpuBlend*` natives that `AssCpuBlendSurfaceView` needs, which upstream's v0.0.14 AAR lacks.
+
+### libass 6a7c6c9 (from 0e8b5ee)
+
+Two fork commits, built the same way (`scripts/libass/build-android.sh`, submodule at
+6a7c6c98d713cdd07a8b5efdfc08c67b1c7d2841, NDK r29), with `LIBASS_VERSION "0.17.5-laskco-6a7c6c9"` and
+`LIBASS_SHA256 "8fcb560d5893a1ba6d1c4cde942554e0593c286cec3f718ac6c05082099104dd"`. nuvio-libass has
+no release for it yet. The commit after it, 2598476, only changes the fork's README.
+
+- **6a7c6c9** trims the bitmap, composite and outline caches by age, not only by size: an entry no
+  frame has used for 120 frames (about 5 s at 24 fps) goes once its cache is above a warm floor
+  (16 MB of bitmaps, 8 MB of composites, 2048 outlines, divided among the render threads).
+- **5583460**, its parent, caches transparent stretches of events and the shadowless base of blurred
+  shadowed composites, so a shadow that moves reuses it; tightens vector-clipped composites; and, in
+  performance mode, skips images at 1/255 alpha (the last frame of a fade).
+
+Measured as for 0e8b5ee below, plus a 2-minute episode-style track (karaoke that fades in from
+transparent, static signs with shadows and fades that recur, dialogue, a frame-by-frame burst):
+
+| Track | Resident memory (performance mode, 4 threads) | CPU instructions, performance / exact |
+| --- | --- | ---: |
+| episode | peak 76 -> 47 MB, at the end 76 -> 44 MB | -8.6% / -8.1% |
+| mix | peak 245 -> 216 MB, after the heavy part 197 -> 173 MB | +2.5% / +5.3% |
+| karaoke | | +4.5% / +4.3% |
+| signs | | +1.2% / +1.0% |
+
+The extra work on the generated FX tracks, where every frame is new, is mostly 5583460 copying
+composites from their shadowless base, which pays off only when the base is reused; 6a7c6c9's own
+cost is re-rendering what it evicted, 0.4% to 1.1%. Exact mode renders every frame bit for bit as
+0e8b5ee did, on the host and in the arm64 and armeabi-v7a packages under qemu. In performance mode
+the frames that change are the last frames of fades and the first frame of some transforms; on
+the karaoke and episode tracks no pixel moves by more than 9/255. The upstream regression, fuzz
+and checkasm tests, and the four tracks with 4 threads in modes 0, 1 and 2, pass under ASan and
+UBSan. JNI exports, linked libraries and page alignment are unchanged.
 
 ### libass 0e8b5ee (from b620927)
 
