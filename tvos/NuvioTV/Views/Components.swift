@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import CoreImage
 import ImageIO
+import CryptoKit
 import NuvioShared
 
 /// Artwork loaded through [ImageLoader]. Unlike AsyncImage it keeps a memory cache, so cards
@@ -40,6 +41,99 @@ struct RemoteImage: View {
     }
 }
 
+/// Downloaded image files in the app's own folder in Caches (one file per address, named by its
+/// SHA-256). Reads touch the file's date, so trimming past [limit] removes the least recently
+/// used first. Writes, trimming and clearing run one at a time on a background queue.
+final class DiskImageCache: @unchecked Sendable {
+    private let directory: URL
+    private let limit: Int
+    private let queue = DispatchQueue(label: "nuvio.imagecache", qos: .utility)
+    private var writesSinceTrim = 0
+
+    init(limit: Int) {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        directory = caches.appendingPathComponent("Artwork", isDirectory: true)
+        self.limit = limit
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        queue.async { self.trim() }
+    }
+
+    private func file(_ key: String) -> URL {
+        let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(digest)
+    }
+
+    func read(_ key: String) -> Data? {
+        let url = file(key)
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return data
+    }
+
+    func write(_ data: Data, for key: String) {
+        queue.async {
+            let fm = FileManager.default
+            try? fm.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            try? data.write(to: self.file(key), options: .atomic)
+            self.writesSinceTrim += 1
+            if self.writesSinceTrim >= 100 {
+                self.writesSinceTrim = 0
+                self.trim()
+            }
+        }
+    }
+
+    /// Bytes of all saved files.
+    func totalSize() async -> Int {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.entries().reduce(0) { $0 + $1.size }) }
+        }
+    }
+
+    /// Deletes every saved file (the folder is made again, empty).
+    func removeAll() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                let fm = FileManager.default
+                try? fm.removeItem(at: self.directory)
+                try? fm.createDirectory(at: self.directory, withIntermediateDirectories: true)
+                self.writesSinceTrim = 0
+                continuation.resume()
+            }
+        }
+    }
+
+    private struct Entry {
+        let url: URL
+        let size: Int
+        let date: Date
+    }
+
+    private func entries() -> [Entry] {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return urls.compactMap { url in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { return nil }
+            return Entry(url: url, size: values.fileSize ?? 0, date: values.contentModificationDate ?? .distantPast)
+        }
+    }
+
+    /// Over the limit: removes the least recently used files down to 80 % of it.
+    private func trim() {
+        let all = entries()
+        var total = all.reduce(0) { $0 + $1.size }
+        guard total > limit else { return }
+        let target = limit / 10 * 8
+        for entry in all.sorted(by: { $0.date < $1.date }) {
+            if total <= target { break }
+            try? FileManager.default.removeItem(at: entry.url)
+            total -= entry.size
+        }
+    }
+}
+
 /// Shared poster/backdrop loader: in-memory + on-disk cache, a browser-like User-Agent (some
 /// add-on image hosts reject the default one) and tolerant URL parsing. Decodes with ImageIO
 /// straight to the needed size on a background thread, and shares in-flight downloads.
@@ -53,10 +147,9 @@ final class ImageLoader: @unchecked Sendable {
     static let wideCardSize: CGFloat = 960
 
     private let memory = NSCache<NSString, UIImage>()
-    /// Downloaded artwork on disk (and in memory as raw files): posters, backdrops, logos, GIFs.
-    /// 2 GB on disk: it lives in Caches, which tvOS empties by itself when storage runs low. (A
-    /// URLCache also skips files over ~5 % of its size, so this keeps large GIFs and backdrops too.)
-    private let diskCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 2 * 1024 * 1024 * 1024)
+    /// Downloaded artwork on disk (posters, backdrops, logos, GIFs): the app's own folder in
+    /// Caches, up to 2 GB (tvOS also empties Caches by itself when storage runs low).
+    private let disk = DiskImageCache(limit: 2 * 1024 * 1024 * 1024)
     private let session: URLSession
     private let lock = NSLock()
     private var inFlight: [String: Task<Data?, Never>] = [:]
@@ -65,8 +158,10 @@ final class ImageLoader: @unchecked Sendable {
     private init() {
         memory.totalCostLimit = 300 * 1024 * 1024
         let config = URLSessionConfiguration.default
-        config.urlCache = diskCache
-        config.requestCachePolicy = .returnCacheDataElseLoad
+        // Files are kept by [disk], not by URLCache (whose "remove all" doesn't reliably free the
+        // space, so clearing it seemed to do nothing).
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 30
         config.httpMaximumConnectionsPerHost = 6
         config.httpAdditionalHeaders = [
@@ -74,18 +169,25 @@ final class ImageLoader: @unchecked Sendable {
             "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5",
         ]
         session = URLSession(configuration: config)
+        // Earlier versions kept artwork in the system URL cache: emptied once, so it isn't left behind.
+        let migratedKey = "imageCache.ownFolder.v1"
+        if !UserDefaults.standard.bool(forKey: migratedKey) {
+            URLCache.shared.removeAllCachedResponses()
+            UserDefaults.standard.set(true, forKey: migratedKey)
+        }
     }
 
     private func key(_ url: String, _ maxPixel: CGFloat) -> NSString { NSString(string: "\(Int(maxPixel))|\(url)") }
 
-    /// Bytes of downloaded artwork kept on disk.
-    var diskUsage: Int { diskCache.currentDiskUsage }
+    /// Bytes of downloaded artwork kept on disk (the files actually there).
+    func diskUsage() async -> Int { await disk.totalSize() }
 
-    /// Settings > About "Clear image cache": drops every downloaded image file and every decoded
-    /// image held in memory. Artwork on screen stays until it's shown again, then downloads anew.
-    func clearCache() {
+    /// Settings > About "Clear image cache": deletes every downloaded image file and drops every
+    /// decoded image held in memory. Artwork on screen stays until it's shown again, then
+    /// downloads anew.
+    func clearCache() async {
         memory.removeAllObjects()
-        diskCache.removeAllCachedResponses()
+        await disk.removeAll()
     }
 
     /// The raw file (for animated GIFs, decoded by the caller), through the same cache.
@@ -126,13 +228,16 @@ final class ImageLoader: @unchecked Sendable {
     private func data(_ raw: String) async -> Data? {
         guard let url = Self.parse(raw) else { return nil }
         let session = self.session
+        let disk = self.disk
         let task: Task<Data?, Never> = lock.withLock {
             if let existing = inFlight[raw] { return existing }
             let created = Task.detached(priority: .userInitiated) { () -> Data? in
+                if let saved = disk.read(raw) { return saved }
                 for attempt in 0..<2 {
                     do {
                         let (data, response) = try await session.data(from: url)
                         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+                        if !data.isEmpty { disk.write(data, for: raw) }
                         return data
                     } catch {
                         if attempt == 1 { return nil }

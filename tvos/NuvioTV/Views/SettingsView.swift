@@ -479,7 +479,7 @@ private struct AboutSettingsPane: View {
     /// Disk space the image cache uses; nil until read.
     @State private var cacheBytes: Int?
     @State private var confirmClear = false
-    @State private var justCleared = false
+    @State private var isClearing = false
 
     var body: some View {
         List {
@@ -506,7 +506,7 @@ private struct AboutSettingsPane: View {
             }
         }
         .padding(.horizontal, 30)
-        .onAppear { cacheBytes = ImageLoader.shared.diskUsage }
+        .task { cacheBytes = await ImageLoader.shared.diskUsage() }
         .alert("Clear image cache?", isPresented: $confirmClear) {
             Button("Clear", role: .destructive) { clearCache() }
             Button("Cancel", role: .cancel) {}
@@ -516,19 +516,20 @@ private struct AboutSettingsPane: View {
     }
 
     private var cacheLabel: String {
-        if justCleared { return "Cleared" }
+        if isClearing { return "Clearing…" }
         guard let cacheBytes else { return "" }
+        if cacheBytes == 0 { return "Empty" }
         return ByteCountFormatter.string(fromByteCount: Int64(cacheBytes), countStyle: .file)
     }
 
     private func clearCache() {
-        ImageLoader.shared.clearCache()
-        justCleared = true
-        // The size shown again a moment later (the cache updates its count after removing files).
+        guard !isClearing else { return }
+        isClearing = true
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            justCleared = false
-            cacheBytes = ImageLoader.shared.diskUsage
+            await ImageLoader.shared.clearCache()
+            // The size of the files actually left (none, once cleared).
+            cacheBytes = await ImageLoader.shared.diskUsage()
+            isClearing = false
         }
     }
 }
