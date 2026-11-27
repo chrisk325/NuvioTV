@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Debug
 import android.os.PowerManager
 import android.os.Process
+import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants
 import androidx.annotation.OptIn
@@ -34,6 +35,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.Text
 import com.nuvio.tv.core.network.StreamSpeedTester
+import com.nuvio.tv.core.player.LoadDecisionProbe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -67,7 +69,10 @@ internal data class PlayerSnapshot(
     val durationMs: Long,
     val droppedFrames: Int,
     val fileSizeBytes: Long?,
-    val nativeMemoryBytes: Long? = null
+    val nativeMemoryBytes: Long? = null,
+    val isLoading: Boolean = false,
+    val isPlaying: Boolean = false,
+    val bufferedPositionMs: Long = -1L
 )
 
 @OptIn(UnstableApi::class)
@@ -112,7 +117,10 @@ internal fun PlayerDebugStatsOverlay(
                     durationMs = runCatching { it.duration }.getOrNull() ?: -1L,
                     droppedFrames = runCatching { it.videoDecoderCounters?.droppedBufferCount }.getOrNull() ?: 0,
                     fileSizeBytes = viewModel.getCurrentFileSizeBytes() ?: probedFileSize,
-                    nativeMemoryBytes = viewModel.getPlayerNativeMemoryBytes()
+                    nativeMemoryBytes = viewModel.getPlayerNativeMemoryBytes(),
+                    isLoading = it.isLoading,
+                    isPlaying = it.isPlaying,
+                    bufferedPositionMs = it.bufferedPosition
                 )
             }
             stats = withContext(Dispatchers.IO) { sampler.sample(snapshot) }
@@ -196,6 +204,8 @@ private class DebugStatsSampler(context: Context) {
 
         add(memoryStat(snapshot))
         add(bufferStat(snapshot))
+        add(loadingStat(snapshot))
+        add(loaderStat())
         add(bitrateStat(snapshot))
         add(networkStat())
         add(parallelStat())
@@ -333,6 +343,123 @@ private class DebugStatsSampler(context: Context) {
         )
     }
 
+    // Whether the player is loading and how fast the buffer fills. Intake is how far the buffered
+    // position moved per second of wall time: 1.0x keeps pace with 1x playback, under it the buffer
+    // shrinks. The load control's last decision says what stopped loading, if anything.
+    private var lastBufferedPositionMs = -1L
+    private var lastBufferedAtMs = 0L
+
+    @OptIn(UnstableApi::class)
+    private fun loadingStat(snapshot: PlayerSnapshot?): DebugStat {
+        if (snapshot == null || snapshot.bufferedPositionMs < 0L) return DebugStat("loading", UNAVAILABLE)
+        val now = System.currentTimeMillis()
+        val previous = lastBufferedPositionMs
+        val previousAt = lastBufferedAtMs
+        lastBufferedPositionMs = snapshot.bufferedPositionMs
+        lastBufferedAtMs = now
+        val moved = snapshot.bufferedPositionMs - previous
+        // A seek moves the buffered position anywhere; such a step is not intake.
+        val intake = if (previous >= 0L && now > previousAt && moved >= 0L && moved <= (now - previousAt) * 30L) {
+            moved.toDouble() / (now - previousAt)
+        } else {
+            null
+        }
+
+        val probe = LoadDecisionProbe
+        val decision = if (probe.decidedAtMs <= 0L) {
+            "decision n/a"
+        } else {
+            val agoS = (SystemClock.elapsedRealtime() - probe.decidedAtMs) / 1000.0
+            val verdict = when {
+                probe.loading -> "go"
+                probe.held -> "held: player UI open"
+                probe.maxBufferUs > 0L && probe.bufferedUs >= probe.maxBufferUs -> "stop: max buffer reached"
+                probe.targetBytes > 0L && probe.allocatedBytes >= probe.targetBytes -> "stop: byte target reached"
+                else -> "stop"
+            }
+            val bytes = if (probe.allocatedBytes >= 0L && probe.targetBytes > 0L) {
+                "   ${probe.allocatedBytes / MB}/${probe.targetBytes / MB} MB"
+            } else {
+                ""
+            }
+            String.format(Locale.US, "decision %s %.1fs ago%s", verdict, agoS, bytes)
+        }
+        val intakeText = intake?.let { String.format(Locale.US, "%.1fx", it) } ?: "..."
+        val aheadS = snapshot.aheadMs / 1000.0
+        val severity = when {
+            snapshot.isPlaying && !snapshot.isLoading && aheadS < 10.0 -> DebugStatSeverity.DANGER
+            snapshot.isPlaying && intake != null && intake < 0.9 -> DebugStatSeverity.WARNING
+            else -> DebugStatSeverity.NORMAL
+        }
+        return DebugStat(
+            label = "loading",
+            value = "${if (snapshot.isLoading) "yes" else "NO"}   intake $intakeText   $decision",
+            severity = severity
+        )
+    }
+
+    // What the stream's loader thread is doing, from a few looks at its stack over ~0.4 s: the share
+    // of looks in each activity. "paused by player" is the load waiting for the player to ask for
+    // more; the rest are steps of turning network bytes into buffer.
+    private fun loaderStat(): DebugStat {
+        val loaders = runCatching {
+            Thread.getAllStackTraces().keys.filter { it.name.startsWith(LOADER_THREAD_PREFIX) }
+        }.getOrDefault(emptyList())
+        if (loaders.isEmpty()) return DebugStat("loader", "no load running")
+        val counts = HashMap<Thread, MutableMap<String, Int>>()
+        repeat(LOADER_LOOKS) { look ->
+            for (thread in loaders) {
+                val label = classifyLoader(thread)
+                val perThread = counts.getOrPut(thread) { LinkedHashMap() }
+                perThread[label] = (perThread[label] ?: 0) + 1
+            }
+            if (look < LOADER_LOOKS - 1) Thread.sleep(LOADER_LOOK_GAP_MS)
+        }
+        // Loader threads that were idle every time are other, finished loads (a sidecar subtitle).
+        val busy = counts.filterValues { it.keys != setOf(IDLE) }
+        if (busy.isEmpty()) return DebugStat("loader", "idle")
+        val totals = LinkedHashMap<String, Int>()
+        busy.values.forEach { perThread -> perThread.forEach { (label, n) -> totals[label] = (totals[label] ?: 0) + n } }
+        val looks = totals.values.sum().coerceAtLeast(1)
+        val summary = totals.entries.sortedByDescending { it.value }.take(3)
+            .joinToString("   ") { "${it.key} ${it.value * 100 / looks}%" }
+        val prefix = if (busy.size > 1) "${busy.size} loads: " else ""
+        return DebugStat("loader", prefix + summary)
+    }
+
+    private fun classifyLoader(thread: Thread): String {
+        val frames = runCatching { thread.stackTrace }.getOrDefault(emptyArray())
+        for (frame in frames) {
+            val c = frame.className
+            val m = frame.methodName
+            when {
+                c.endsWith(".ConditionVariable") && m == "block" -> return "paused by player"
+                c.startsWith("java.util.concurrent.ThreadPoolExecutor") && m == "getTask" -> return IDLE
+                c.contains("ParallelRangeDataSource") &&
+                    (m.startsWith("awaitChunk") || m.startsWith("awaitServeFromInFlight") ||
+                        m.startsWith("acquireChunkBuffer")) -> return "waiting for parallel chunk"
+                c.startsWith("com.nuvio.tv.libass") -> return "feeding libass"
+                c.contains("NuvioAssTrackOutput") || c.contains("NuvioAssMatroskaExtractor") ||
+                    c.contains("SubtitleCharsetDetector") -> return "ASS lines"
+                c.contains("VodCacheWriteSink") || c.startsWith("androidx.media3.datasource.cache") -> return "disk cache"
+                c.startsWith("java.net") || c.startsWith("okio") || c.startsWith("okhttp3") ||
+                    c.contains("conscrypt", ignoreCase = true) || c.contains("SSL") ||
+                    c.startsWith("sun.nio") || c.startsWith("java.nio.channels") -> return "reading network"
+                c.contains("SampleDataQueue") || c.contains("SampleQueue") || c.contains("Allocator") ||
+                    c.endsWith(".Allocation") -> return "writing buffer"
+                c.contains("Matroska") || c.contains("EbmlReader") || c.contains("VarintReader") ||
+                    c.startsWith("androidx.media3.extractor") || c.startsWith("com.nuvio.tv.core.player.dvmkv") ->
+                    return "unpacking MKV"
+            }
+        }
+        val top = frames.firstOrNull()?.let { "${it.className.substringAfterLast('.')}.${it.methodName}" } ?: "?"
+        return when (thread.state) {
+            Thread.State.BLOCKED -> "blocked on a lock in $top"
+            Thread.State.WAITING, Thread.State.TIMED_WAITING -> "waiting in $top"
+            else -> "running $top"
+        }
+    }
+
     // Parallel Connections, for the current session: the reader's waits for chunk bytes, stall
     // restarts (and those skipped because every connection was slow), the bytes restarts kept, and
     // chunks that found no native memory. Shown only while parallel connections are in use.
@@ -405,6 +532,10 @@ private class DebugStatsSampler(context: Context) {
     private data class ProcTimes(val cpuTicks: Long, val majorFaults: Long)
 
     private companion object {
+        const val LOADER_THREAD_PREFIX = "ExoPlayer:Loader:"
+        const val LOADER_LOOKS = 10
+        const val LOADER_LOOK_GAP_MS = 40L
+        const val IDLE = "idle"
         const val MB = 1024L * 1024L
         const val MAX_HEADROOM_MISSES = 3
 

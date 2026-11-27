@@ -41,6 +41,12 @@ open class TopUpLoadControl(
     private val topUpAllocator = allocator
     private val maxBufferUs = maxBufferMs.toLong() * 1000L
 
+    /** Max Buffer, for the stats overlay (LoadDecisionProbe). */
+    val maxBufferDurationUs: Long get() = maxBufferUs
+
+    /** The byte target loading stops at, for the stats overlay (LoadDecisionProbe). */
+    fun currentTargetBytes(): Int = topUpTargetBytes()
+
     /**
      * Byte target the top-up must stay under. Unknown ([C.LENGTH_UNSET]) disables the top-up,
      * leaving the stock behaviour, since loading past the memory target is never safe.
