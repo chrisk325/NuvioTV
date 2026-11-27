@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nuvio.tv.data.local.LibraryPreferences
 import com.nuvio.tv.data.mediaserver.ServerConnection
 import com.nuvio.tv.data.mediaserver.ServerException
 import com.nuvio.tv.data.mediaserver.ServerFailure
@@ -17,8 +18,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class ServerSignInState(
@@ -29,9 +32,17 @@ data class ServerSignInState(
 @HiltViewModel
 class MediaServersViewModel @Inject constructor(
     private val repository: ServerRepository,
-    private val resumeImport: ServerResumeImport
+    private val resumeImport: ServerResumeImport,
+    private val libraryPreferences: LibraryPreferences
 ) : ViewModel() {
     val uiState: StateFlow<ServersUiState> = repository.uiState
+
+    val serverShelvesAsGrid: StateFlow<Boolean> = libraryPreferences.serverShelvesAsGrid
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setServerShelvesAsGrid(enabled: Boolean) {
+        viewModelScope.launch { libraryPreferences.setServerShelvesAsGrid(enabled) }
+    }
 
     val providers: List<ServerProvider>
         get() = repository.providers

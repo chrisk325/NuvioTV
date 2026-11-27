@@ -41,6 +41,7 @@ class LibraryPreferences @Inject constructor(
     private val pendingUpsertKeysKey = stringSetPreferencesKey("library_pending_upserts")
     private val pendingDeleteKeysKey = stringSetPreferencesKey("library_pending_deletes")
     private val mutationRevisionKey = longPreferencesKey("library_mutation_revision")
+    private val serverShelvesAsGridKey = booleanPreferencesKey("library_server_shelves_grid")
 
     private fun store(profileId: Int = profileManager.activeProfileId.value) =
         factory.get(profileId, FEATURE)
@@ -57,6 +58,15 @@ class LibraryPreferences @Inject constructor(
                 preferences.toLibrarySyncState().items
             }
         }
+
+    /** Library > Servers shows each shelf as a grid of posters, scrolling down, instead of a row scrolling sideways. */
+    val serverShelvesAsGrid: Flow<Boolean> = profileManager.activeProfileId.flatMapLatest { profileId ->
+        factory.get(profileId, FEATURE).data.map { preferences -> preferences[serverShelvesAsGridKey] ?: false }
+    }
+
+    suspend fun setServerShelvesAsGrid(enabled: Boolean) {
+        store().edit { preferences -> preferences[serverShelvesAsGridKey] = enabled }
+    }
 
     suspend fun setSortOption(key: String) {
         store().edit { preferences ->

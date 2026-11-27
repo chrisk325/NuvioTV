@@ -152,6 +152,8 @@ fun LibraryScreen(
     val servers by serversViewModel.servers.collectAsState()
     val serverShelves by serversViewModel.shelves.collectAsState()
     val serverFavorites by serversViewModel.favoritesState.collectAsState()
+    val serverShelvesRefreshing by serversViewModel.refreshing.collectAsState()
+    val serverShelvesAsGrid by serversViewModel.shelvesAsGrid.collectAsState()
     val hasServers = servers.enabledConnections.isNotEmpty()
     val viewModes = LibraryViewMode.entries.filter { it != LibraryViewMode.Servers || hasServers }
     val viewMode = selectedViewMode.takeIf { it in viewModes } ?: LibraryViewMode.Saved
@@ -377,28 +379,49 @@ fun LibraryScreen(
                     selectedViewMode = mode
                     expandedPicker = null
                 },
-                // Refresh belongs to the cloud view only, pinned right in line with the tabs.
-                trailing = if (viewMode == LibraryViewMode.Cloud) {
-                    {
-                        Button(
-                            onClick = viewModel::refreshCloudLibrary,
-                            enabled = !uiState.cloudLibrary.isRefreshing,
-                            colors = ButtonDefaults.colors(
-                                containerColor = NuvioTheme.colors.BackgroundCard,
-                                contentColor = NuvioTheme.colors.TextPrimary
-                            )
-                        ) {
-                            Text(
-                                if (uiState.cloudLibrary.isRefreshing) {
-                                    stringResource(R.string.library_syncing_btn)
-                                } else {
-                                    stringResource(R.string.cloud_library_refresh)
-                                }
-                            )
+                // Refresh sits right in line with the tabs, for the views that load from a remote service.
+                trailing = when (viewMode) {
+                    LibraryViewMode.Cloud -> {
+                        {
+                            Button(
+                                onClick = viewModel::refreshCloudLibrary,
+                                enabled = !uiState.cloudLibrary.isRefreshing,
+                                colors = ButtonDefaults.colors(
+                                    containerColor = NuvioTheme.colors.BackgroundCard,
+                                    contentColor = NuvioTheme.colors.TextPrimary
+                                )
+                            ) {
+                                Text(
+                                    if (uiState.cloudLibrary.isRefreshing) {
+                                        stringResource(R.string.library_syncing_btn)
+                                    } else {
+                                        stringResource(R.string.cloud_library_refresh)
+                                    }
+                                )
+                            }
                         }
                     }
-                } else {
-                    null
+                    LibraryViewMode.Servers -> {
+                        {
+                            Button(
+                                onClick = serversViewModel::refresh,
+                                enabled = !serverShelvesRefreshing && serverShelves != null,
+                                colors = ButtonDefaults.colors(
+                                    containerColor = NuvioTheme.colors.BackgroundCard,
+                                    contentColor = NuvioTheme.colors.TextPrimary
+                                )
+                            ) {
+                                Text(
+                                    if (serverShelvesRefreshing) {
+                                        stringResource(R.string.library_syncing_btn)
+                                    } else {
+                                        stringResource(R.string.library_servers_refresh)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    else -> null
                 }
             )
         }
@@ -520,6 +543,7 @@ fun LibraryScreen(
         } else if (viewMode == LibraryViewMode.Servers) {
             libraryServerContent(
                 shelves = serverShelves,
+                asGrid = serverShelvesAsGrid,
                 posterCardStyle = posterCardStyle,
                 rowInset = NuvioTheme.spacing.xxxl,
                 focusTarget = serverFocusTarget,
