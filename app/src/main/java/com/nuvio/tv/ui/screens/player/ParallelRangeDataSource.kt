@@ -66,6 +66,17 @@ internal class ParallelRangeDataSource(
         private const val HEDGE_WINDOWS_CDN = 1
         private const val HEDGE_WINDOWS_USENET = 2
 
+        // A reader waiting on a chunk whose download has started gives up once no byte has arrived
+        // for this long; one still queued for a worker keeps the hard cap only.
+        private const val CHUNK_NO_PROGRESS_TIMEOUT_MS = 20_000L
+        private const val CHUNK_WAIT_HARD_CAP_MS = 60_000L
+        private const val CHUNK_WAIT_POLL_MS = 100L
+
+        // Chunks live in native memory only. A worker that finds none waits this long for the
+        // reader to hand chunks back before it fails that chunk.
+        private const val NATIVE_CHUNK_WAIT_MS = 5_000L
+        private const val NATIVE_CHUNK_WAIT_SLICE_MS = 50L
+
         /** Default (0) plus two steps of "less favorable": nice 2. */
         private const val WORKER_THREAD_PRIORITY =
             android.os.Process.THREAD_PRIORITY_DEFAULT + 2 * android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE
@@ -169,6 +180,22 @@ internal class ParallelRangeDataSource(
         @Volatile var hudHedgeRestarts: Int = 0
         @Volatile var hudHedgeExhausted: Boolean = false
 
+        // Shown by the stats overlay (PlayerDebugStatsOverlay) for the current session.
+        @Volatile var hudActive: Boolean = false
+        /** Stall samples not counted because every connection was slow, not just this one. */
+        @Volatile var hudHedgeSkipped: Int = 0
+        /** Bytes a stall restart kept instead of downloading again. */
+        @Volatile var hudHedgeResumedBytes: Long = 0L
+        /** Times a worker found no native memory for a chunk and waited. */
+        @Volatile var hudNativeChunkWaits: Int = 0
+        /** Chunks failed because native memory stayed short for the whole wait. */
+        @Volatile var hudNativeChunkFailures: Int = 0
+        /** How long the reader last waited, and at most waited, for a chunk's bytes. */
+        @Volatile var hudLastChunkWaitMs: Long = 0L
+        @Volatile var hudMaxChunkWaitMs: Long = 0L
+        /** Reader waits that ended without the chunk: no progress, or the hard cap. */
+        @Volatile var hudChunkWaitTimeouts: Int = 0
+
         private val obsAnnounced = AtomicBoolean(false)
 
         fun hudClampCooldownRemainingMs(nowUptimeMs: Long): Long {
@@ -202,6 +229,8 @@ internal class ParallelRangeDataSource(
             val activeSources: MutableSet<DataSource> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
             val inFlight = ConcurrentHashMap<Long, InFlightChunk>()
+            /** Bytes every worker of this session has downloaded, to tell one slow connection from all. */
+            val bytesDownloaded = java.util.concurrent.atomic.AtomicLong(0L)
             @Volatile var lastUsedAtMs: Long = SystemClock.uptimeMillis()
 
             fun touch(chunkIndex: Long) {
@@ -293,7 +322,9 @@ internal class ParallelRangeDataSource(
         }
 
         private fun recycleBuffer(buffer: PooledBuffer, chunkSz: Long, poolCap: Int) {
-            if (poolCap > 0) {
+            // Only native chunks are pooled: a pooled buffer becomes another chunk, and a Java heap
+            // one (a bootstrap window wraps an array) must never be handed out as one.
+            if (poolCap > 0 && buffer.allocation != null) {
                 val pool = globalBufferPool.computeIfAbsent(chunkSz) { ConcurrentLinkedDeque() }
                 if (pool.size < poolCap) {
                     pool.offerLast(buffer)
@@ -413,6 +444,14 @@ internal class ParallelRangeDataSource(
                 hudNextStepAtMs = 0L
                 hudHedgeRestarts = 0
                 hudHedgeExhausted = false
+                hudHedgeSkipped = 0
+                hudHedgeResumedBytes = 0L
+                hudNativeChunkWaits = 0
+                hudNativeChunkFailures = 0
+                hudLastChunkWaitMs = 0L
+                hudMaxChunkWaitMs = 0L
+                hudChunkWaitTimeouts = 0
+                hudActive = true
                 drainOtherSizePools(chunkSz)
                 val created = ChunkSession(requestUri, requestHeaders, chunkSz, chunkCap, prefetchWindow)
                 currentChunkSession = created
@@ -511,6 +550,7 @@ internal class ParallelRangeDataSource(
         }
 
         private fun clearGlobalPool() {
+            hudActive = false
             globalBufferPool.values.forEach { pool ->
                 while (true) {
                     freeBuffer(pool.pollFirst() ?: break)
@@ -576,6 +616,8 @@ internal class ParallelRangeDataSource(
     private class InFlightChunk(buffer: PooledBuffer) {
         @Volatile var buffer: PooledBuffer? = buffer
         @Volatile var watermark: Int = 0
+        /** When its download began, for the stall watchdog's comparison with the others. */
+        val startedAtMs: Long = SystemClock.elapsedRealtime()
     }
 
     internal data class BootstrapCacheEntry(
@@ -945,15 +987,21 @@ internal class ParallelRangeDataSource(
             val future = activeSession.futures[chunkIndex] ?: return C.RESULT_END_OF_INPUT
             activeSession.noteRead(chunkIndex)
 
-            if (!future.isDone) {
-                val served = awaitServeFromInFlight(activeSession, chunkIndex, future, buffer, offset, toRead)
-                if (served > 0) return served
-            }
             try {
 
                 val blockT0 = SystemClock.elapsedRealtime()
                 val preDone = future.isDone
-                currentChunk = future.get(60, TimeUnit.SECONDS)
+                // The chunk's bytes are served as they arrive; the whole chunk is only waited for
+                // while none past the read position are there.
+                var chunkResult: DownloadedChunk? = null
+                while (chunkResult == null) {
+                    if (!future.isDone) {
+                        val served = awaitServeFromInFlight(activeSession, chunkIndex, future, buffer, offset, toRead)
+                        if (served > 0) return served
+                    }
+                    chunkResult = awaitChunk(activeSession, chunkIndex, future)
+                }
+                currentChunk = chunkResult
                 Log.i(
                     TAG,
                     "RS_CHUNK_WAIT site=bytearray pos=$position chunk=$chunkIndex " +
@@ -1100,6 +1148,90 @@ internal class ParallelRangeDataSource(
         }
     }
 
+    /**
+     * Waits for [future]'s chunk, or returns null as soon as its download has bytes past the read
+     * position to serve. Throws a TimeoutException once a started download has gone
+     * [CHUNK_NO_PROGRESS_TIMEOUT_MS] without a byte, or after [CHUNK_WAIT_HARD_CAP_MS] in all (a chunk
+     * still queued for a worker has only the cap). It used to wait for the whole chunk, up to 60 s,
+     * while bytes it could have served kept arriving.
+     */
+    private fun awaitChunk(
+        activeSession: ChunkSession,
+        chunkIndex: Long,
+        future: CompletableFuture<DownloadedChunk>
+    ): DownloadedChunk? {
+        val offsetInChunk = (position % chunkSize).toInt()
+        val waitT0 = SystemClock.elapsedRealtime()
+        var lastWatermark = Int.MIN_VALUE
+        // Time is counted in polls: a poll that returns without the chunk has waited its full
+        // [CHUNK_WAIT_POLL_MS], so the counts bound the time waited from below whatever the clock does.
+        var polls = 0L
+        var pollsWithoutProgress = 0L
+        try {
+            while (true) {
+                try {
+                    return future.get(CHUNK_WAIT_POLL_MS, TimeUnit.MILLISECONDS)
+                } catch (_: java.util.concurrent.TimeoutException) {
+                }
+                polls++
+                if (closed.get()) throw IOException("DataSource closed")
+                val inFlight = activeSession.inFlight[chunkIndex]
+                if (inFlight != null) {
+                    val watermark = inFlight.watermark
+                    if (inFlight.buffer != null && watermark > offsetInChunk) return null
+                    if (watermark != lastWatermark) {
+                        lastWatermark = watermark
+                        pollsWithoutProgress = 0L
+                    } else if (++pollsWithoutProgress * CHUNK_WAIT_POLL_MS >= CHUNK_NO_PROGRESS_TIMEOUT_MS) {
+                        hudChunkWaitTimeouts++
+                        throw java.util.concurrent.TimeoutException(
+                            "Chunk $chunkIndex made no progress for ${pollsWithoutProgress * CHUNK_WAIT_POLL_MS}ms"
+                        )
+                    }
+                } else {
+                    // Queued, or between a stall and its restart: not a stuck download yet.
+                    pollsWithoutProgress = 0L
+                }
+                if (polls * CHUNK_WAIT_POLL_MS >= CHUNK_WAIT_HARD_CAP_MS) {
+                    hudChunkWaitTimeouts++
+                    throw java.util.concurrent.TimeoutException(
+                        "Chunk $chunkIndex not ready after ${polls * CHUNK_WAIT_POLL_MS}ms"
+                    )
+                }
+            }
+        } finally {
+            val waitedMs = SystemClock.elapsedRealtime() - waitT0
+            hudLastChunkWaitMs = waitedMs
+            if (waitedMs > hudMaxChunkWaitMs) hudMaxChunkWaitMs = waitedMs
+        }
+    }
+
+    /** Copies the bytes [chunkIndex]'s download has past the read position into [target]. */
+    private fun serveInFlightInto(
+        activeSession: ChunkSession,
+        chunkIndex: Long,
+        target: ByteBuffer,
+        maxLength: Int
+    ): Int {
+        val offsetInChunk = (position % chunkSize).toInt()
+        val inFlight = activeSession.inFlight[chunkIndex] ?: return 0
+        val available = inFlight.watermark - offsetInChunk
+        if (available <= 0) return 0
+        val toCopy = minOf(maxLength, available, target.remaining())
+        if (toCopy <= 0) return 0
+        val buf = inFlight.buffer ?: return 0
+        buf.leased { bytes ->
+            val view = bytes.duplicate()
+            view.limit(offsetInChunk + toCopy)
+            view.position(offsetInChunk)
+            target.put(view)
+        } ?: return 0
+        position += toCopy
+        bytesRemaining -= toCopy
+        bytesServedThisOpen += toCopy
+        return toCopy
+    }
+
     private fun awaitServeFromInFlight(
         activeSession: ChunkSession,
         chunkIndex: Long,
@@ -1221,6 +1353,7 @@ internal class ParallelRangeDataSource(
                         future.completeExceptionally(IOException("Session abandoned"))
                     }
                 } catch (e: Exception) {
+                    e.releaseStallResume()
                     future.completeExceptionally(e)
                 } catch (e: OutOfMemoryError) {
 
@@ -1243,7 +1376,10 @@ internal class ParallelRangeDataSource(
                 return downloadChunkOnce(activeSession, chunkIndex, future)
             } catch (e: Exception) {
 
-                if (activeSession.abandoned.get() || future.isCancelled) throw IOException("Session abandoned or cancelled")
+                if (activeSession.abandoned.get() || future.isCancelled) {
+                    e.releaseStallResume()
+                    throw IOException("Session abandoned or cancelled")
+                }
                 lastException = e
 
                 if (e is StalledChunkException) {
@@ -1269,7 +1405,30 @@ internal class ParallelRangeDataSource(
         throw IOException("Failed to download chunk $chunkIndex after 2 attempts", lastException)
     }
 
-    private fun downloadChunkOnce(activeSession: ChunkSession, chunkIndex: Long, future: CompletableFuture<*>, allowStallRestart: Boolean = true): DownloadedChunk {
+    private fun downloadChunkOnce(
+        activeSession: ChunkSession,
+        chunkIndex: Long,
+        future: CompletableFuture<*>,
+        allowStallRestart: Boolean = true,
+        resume: StallResume? = null
+    ): DownloadedChunk {
+        try {
+            return downloadChunkRange(activeSession, chunkIndex, future, allowStallRestart, resume)
+        } catch (e: Exception) {
+            // A resume this attempt never got to claim (it failed before reading) is given back;
+            // one it claimed is already settled, so this does nothing for it.
+            resume?.release()
+            throw e
+        }
+    }
+
+    private fun downloadChunkRange(
+        activeSession: ChunkSession,
+        chunkIndex: Long,
+        future: CompletableFuture<*>,
+        allowStallRestart: Boolean,
+        resume: StallResume?
+    ): DownloadedChunk {
         val sessionLength = activeSession.totalLength
         val start = chunkIndex * chunkSize
         val end = if (sessionLength > 0L) {
@@ -1277,6 +1436,8 @@ internal class ParallelRangeDataSource(
         } else {
             start + chunkSize
         }
+        // A stall restart asks only for the bytes after the ones it already has.
+        val resumeFrom = (resume?.bytes ?: 0).toLong().coerceIn(0L, end - start)
 
         val ds = upstreamFactory.createDataSource()
         transferListeners.forEach { ds.addTransferListener(it) }
@@ -1285,16 +1446,17 @@ internal class ParallelRangeDataSource(
             val uri = activeSession.resolvedUri ?: activeSession.requestUri
             val spec = DataSpec.Builder()
                 .setUri(uri)
-                .setPosition(start)
-                .setLength(end - start)
+                .setPosition(start + resumeFrom)
+                .setLength(end - start - resumeFrom)
                 .build()
 
             if (future.isCancelled || activeSession.abandoned.get()) throw IOException("Cancelled")
-            Log.d(TAG, "Starting chunk download: idx=$chunkIndex, range=$start-$end")
+            Log.d(TAG, "Starting chunk download: idx=$chunkIndex, range=${start + resumeFrom}-$end" +
+                if (resumeFrom > 0L) " (resumed after $resumeFrom bytes)" else "")
             ds.open(spec)
 
             val expectedBytes = if (sessionLength > 0L) end - start else -1L
-            val chunk = readIntoChunk(activeSession, chunkIndex, ds, future, expectedBytes, allowStallRestart)
+            val chunk = readIntoChunk(activeSession, chunkIndex, ds, future, expectedBytes, allowStallRestart, resume)
             Log.d(TAG, "Successfully downloaded chunk $chunkIndex, size=${chunk.size} bytes")
             return chunk
         } finally {
@@ -1312,14 +1474,21 @@ internal class ParallelRangeDataSource(
         var lastStall = firstStall
         var attempt = 0
         while (attempt < HEDGE_MAX_RESTARTS) {
-            if (future.isCancelled || activeSession.abandoned.get()) throw IOException("Cancelled")
+            if (future.isCancelled || activeSession.abandoned.get()) {
+                lastStall.releaseStallResume()
+                throw IOException("Cancelled")
+            }
             hudHedgeRestarts++
             Log.w(TAG, "HEDGE_RESTART chunk=$chunkIndex attempt=${attempt + 1}/$HEDGE_MAX_RESTARTS " +
-                "prevRateBps=${lastStall.rateBps} atWatermark=${lastStall.watermark}")
+                "prevRateBps=${lastStall.rateBps} atWatermark=${lastStall.watermark} " +
+                "resume=${lastStall.resume != null}")
             try {
-                return downloadChunkOnce(activeSession, chunkIndex, future)
+                return downloadChunkOnce(activeSession, chunkIndex, future, resume = lastStall.resume)
             } catch (e: Exception) {
-                if (activeSession.abandoned.get() || future.isCancelled) throw IOException("Session abandoned or cancelled")
+                if (activeSession.abandoned.get() || future.isCancelled) {
+                    e.releaseStallResume()
+                    throw IOException("Session abandoned or cancelled")
+                }
                 if (e !is StalledChunkException) throw e
                 lastStall = e
                 attempt++
@@ -1329,14 +1498,41 @@ internal class ParallelRangeDataSource(
         hudHedgeExhausted = true
         Log.w(TAG, "HEDGE_RESTART chunk=$chunkIndex exhausted after $HEDGE_MAX_RESTARTS; " +
             "final attempt with watchdog disabled")
-        return downloadChunkOnce(activeSession, chunkIndex, future, allowStallRestart = false)
+        return downloadChunkOnce(activeSession, chunkIndex, future, allowStallRestart = false, resume = lastStall.resume)
     }
 
     private class StalledChunkException(
         val chunkIndex: Long,
         val watermark: Int,
-        val rateBps: Long
+        val rateBps: Long,
+        /** The stalled chunk's buffer and bytes, for the restart to carry on from. */
+        val resume: StallResume? = null
     ) : IOException("chunk $chunkIndex body stalled at ${rateBps}B/s (watermark=$watermark)")
+
+    /**
+     * A stalled chunk's buffer, still registered in flight, holding its first [bytes]. Exactly one of
+     * two things happens to it: a restart [claim]s it and reads on after [bytes], or it is
+     * [release]d. Every path a stall leaves by either claims or releases it.
+     */
+    private inner class StallResume(
+        private val session: ChunkSession,
+        private val chunkIndex: Long,
+        val inFlight: InFlightChunk,
+        val buffer: PooledBuffer,
+        val bytes: Int
+    ) {
+        private val settled = AtomicBoolean(false)
+
+        fun claim(): Boolean = settled.compareAndSet(false, true)
+
+        fun release() {
+            if (settled.compareAndSet(false, true)) releaseInFlightBuffer(session, chunkIndex, inFlight, buffer)
+        }
+    }
+
+    private fun Throwable.releaseStallResume() {
+        (this as? StalledChunkException)?.resume?.release()
+    }
 
     private fun Exception.isTransientInterruption(): Boolean {
         if (this is InterruptedIOException || this is InterruptedException) return true
@@ -1433,16 +1629,25 @@ internal class ParallelRangeDataSource(
         ds: DataSource,
         future: CompletableFuture<*>,
         expectedBytes: Long,
-        allowStallRestart: Boolean = true
+        allowStallRestart: Boolean = true,
+        resume: StallResume? = null
     ): DownloadedChunk {
-        val buffer = acquireBuffer()
+        // A stall restart carries on in the buffer it stalled in, after the bytes it already has
+        // (the caller opened [ds] from there); readers keep serving those bytes meanwhile.
+        // [ds] is open after the resumed bytes, so a resume this read cannot claim must not fall back
+        // to an empty buffer: it would put those bytes at the start of the chunk.
+        val resumed = resume?.also {
+            if (!it.claim()) throw IOException("Stalled chunk $chunkIndex was released before its restart")
+        }
+        val buffer = resumed?.buffer ?: acquireChunkBuffer(activeSession, future)
 
-        val inFlight = InFlightChunk(buffer)
+        val inFlight = resumed?.inFlight ?: InFlightChunk(buffer)
         activeSession.inFlight[chunkIndex] = inFlight
         // Only the byte-array path copies through this; resolving it lazily keeps a 64 KB scratch
         // array off every worker thread that reads straight into native memory.
         var tempArray: ByteArray? = null
-        var totalRead = 0
+        var totalRead = resumed?.bytes ?: 0
+        if (resumed != null) hudHedgeResumedBytes += resumed.bytes.toLong()
         var consecutiveZeroReads = 0
 
         if (obsAnnounced.compareAndSet(false, true)) {
@@ -1453,7 +1658,8 @@ internal class ParallelRangeDataSource(
 
         val hedgeChunkT0 = SystemClock.elapsedRealtime()
         var hedgeLastCheckT0 = hedgeChunkT0
-        var hedgeLastCheckBytes = 0
+        var hedgeLastCheckBytes = totalRead
+        var hedgeLastSessionBytes = activeSession.bytesDownloaded.get()
 
         val hedgeIsUsenet = activeSession.resolvedUri?.path?.contains("/usenet/") == true
         val hedgeStallRateBps = if (hedgeIsUsenet) HEDGE_STALL_RATE_USENET else HEDGE_STALL_RATE_CDN
@@ -1499,6 +1705,7 @@ internal class ParallelRangeDataSource(
                     consecutiveZeroReads = 0
                 }
                 totalRead += read
+                if (read > 0) activeSession.bytesDownloaded.addAndGet(read.toLong())
 
                 inFlight.watermark = totalRead
 
@@ -1509,18 +1716,45 @@ internal class ParallelRangeDataSource(
                     val hedgeWindowBytes = totalRead - hedgeLastCheckBytes
                     val hedgeRateBps = if (hedgeWindowMs > 0L)
                         hedgeWindowBytes.toLong() * 1000L / hedgeWindowMs else Long.MAX_VALUE
-                    val hedgeStalled = hedgeRateBps < hedgeStallRateBps
+                    // Restarting one connection only helps when it alone is slow. When the other
+                    // connections are as slow in the same window, the device (CPU, garbage
+                    // collection) or the whole link is, and a restart would only throw work away.
+                    val hedgeSessionBytes = activeSession.bytesDownloaded.get()
+                    // The others compared with are the downloads still going that were going for at
+                    // least half the window. One that finished inside it was fast enough to finish,
+                    // and one that joined late is not counted, though their bytes are: both lean
+                    // toward restarting, as before this check.
+                    val hedgeOthersSince = hedgeLastCheckT0 + hedgeWindowMs / 2
+                    val hedgeOthers = activeSession.inFlight.values.count { other ->
+                        other !== inFlight && other.startedAtMs <= hedgeOthersSince
+                    }
+                    val hedgeOthersBytes =
+                        (hedgeSessionBytes - hedgeLastSessionBytes - hedgeWindowBytes).coerceAtLeast(0L)
+                    val hedgeOthersSlow = hedgeOthers > 0 &&
+                        hedgeOthersBytes * 1000L / hedgeWindowMs < hedgeStallRateBps * hedgeOthers
+                    hedgeLastSessionBytes = hedgeSessionBytes
+                    var hedgeStalled = hedgeRateBps < hedgeStallRateBps
+                    if (hedgeStalled && hedgeOthersSlow) {
+                        hedgeStalled = false
+                        hudHedgeSkipped++
+                    }
                     if (hedgeStalled) hedgeConsecutiveStalled++ else hedgeConsecutiveStalled = 0
                     Log.w(TAG, "HEDGE_SAMPLE chunk=$chunkIndex watermark=$totalRead " +
                         "windowBytes=$hedgeWindowBytes windowMs=$hedgeWindowMs " +
                         "rateBps=$hedgeRateBps stalled=$hedgeStalled " +
                         "consec=$hedgeConsecutiveStalled/$hedgeWindowsRequired " +
                         "usenet=$hedgeIsUsenet clamp=$hudClampLatched " +
+                        "others=$hedgeOthers othersSlow=$hedgeOthersSlow " +
                         "restartable=$allowStallRestart")
                     if (hedgeConsecutiveStalled >= hedgeWindowsRequired &&
-                        allowStallRestart && !hudClampLatched) {
-
-                        throw StalledChunkException(chunkIndex, totalRead, hedgeRateBps)
+                        allowStallRestart && !hudClampLatched &&
+                        (expectedBytes <= 0L || totalRead < expectedBytes)
+                    ) {
+                        // The bytes read so far stay in [buffer]; the restart carries on after them.
+                        throw StalledChunkException(
+                            chunkIndex, totalRead, hedgeRateBps,
+                            StallResume(activeSession, chunkIndex, inFlight, buffer, totalRead)
+                        )
                     }
                     hedgeLastCheckT0 = hedgeNowMs
                     hedgeLastCheckBytes = totalRead
@@ -1531,6 +1765,8 @@ internal class ParallelRangeDataSource(
                 throw IOException("Short chunk: read $totalRead of $expectedBytes bytes")
             }
         } catch (e: Exception) {
+            // A stall hands its buffer to the restart; anything else gives it back.
+            if (e is StalledChunkException && e.resume?.buffer === buffer && !activeSession.abandoned.get()) throw e
             releaseInFlightBuffer(activeSession, chunkIndex, inFlight, buffer)
             if (activeSession.abandoned.get()) throw IOException("Session abandoned")
             throw e
@@ -1582,22 +1818,58 @@ internal class ParallelRangeDataSource(
         return DownloadedChunk(PooledBuffer(null, wrapped), totalRead)
     }
 
-    private fun acquireBuffer(): PooledBuffer {
+    /**
+     * A chunk buffer in native memory, or null when there is none to be had. Chunks never go on the
+     * Java heap, in any engine mode: Media3's buffer is sized from that heap, so a chunk there (16 MB
+     * with Auto Parallel) crowds it into blocking GC and stalls playback, and Android's allocateDirect
+     * is heap memory too. When an allocation fails, idle pooled chunks are freed and it is tried once
+     * more.
+     */
+    private fun acquireBuffer(): PooledBuffer? {
         val pool = globalBufferPool.computeIfAbsent(chunkSize) { ConcurrentLinkedDeque() }
         val idle = pool.pollLast()
         if (idle != null) {
             idle.byteBuffer.clear()
             return PooledBuffer(idle.allocation, idle.byteBuffer)
         }
-        // Native memory in every engine mode. Chunks on the Java heap fill small heaps and stall
-        // playback on blocking GC; Android's allocateDirect is heap memory too.
-        val allocation = allocateChunk(chunkSize.toInt())
-        val allocBuffer = allocation?.buffer
-        return if (allocation != null && allocBuffer != null) {
-            PooledBuffer(allocation, allocBuffer)
-        } else {
-            PooledBuffer(null, ByteBuffer.allocate(chunkSize.toInt()))
+        allocateNativeChunk()?.let { return it }
+        trimIdleBuffers()
+        return allocateNativeChunk()
+    }
+
+    private fun allocateNativeChunk(): PooledBuffer? {
+        val allocation = allocateChunk(chunkSize.toInt()) ?: return null
+        val allocBuffer = allocation.buffer
+        if (allocBuffer == null || allocBuffer.capacity() < chunkSize) {
+            freeChunk(allocation)
+            return null
         }
+        return PooledBuffer(allocation, allocBuffer)
+    }
+
+    /**
+     * [acquireBuffer] for a worker: while native memory is short it waits, up to
+     * [NATIVE_CHUNK_WAIT_MS], for the reader to hand chunks back, then fails this chunk.
+     */
+    private fun acquireChunkBuffer(activeSession: ChunkSession, future: CompletableFuture<*>): PooledBuffer {
+        acquireBuffer()?.let { return it }
+        hudNativeChunkWaits++
+        // Counted in slept slices, not read off a clock: each sleeps its full slice, so the count
+        // bounds the time waited from below whatever the clock does.
+        repeat((NATIVE_CHUNK_WAIT_MS / NATIVE_CHUNK_WAIT_SLICE_MS).toInt()) {
+            if (future.isCancelled || activeSession.abandoned.get()) {
+                throw IOException("Cancelled while waiting for native chunk memory")
+            }
+            try {
+                Thread.sleep(NATIVE_CHUNK_WAIT_SLICE_MS)
+            } catch (_: InterruptedException) {
+                throw InterruptedIOException("Interrupted while waiting for native chunk memory")
+            }
+            acquireBuffer()?.let { return it }
+        }
+        hudNativeChunkFailures++
+        Log.w(TAG, "No native memory for a ${chunkSize / 1024} KB chunk after ${NATIVE_CHUNK_WAIT_MS}ms")
+        throw IOException("No native memory for a ${chunkSize / 1024} KB chunk")
     }
 
     private fun releaseBuffer(buffer: PooledBuffer) {
@@ -1718,7 +1990,16 @@ internal class ParallelRangeDataSource(
 
                 val blockT0 = SystemClock.elapsedRealtime()
                 val preDone = future.isDone
-                currentChunk = future.get(60, TimeUnit.SECONDS)
+                // As the byte-array read: the chunk's bytes are served as they arrive.
+                var chunkResult: DownloadedChunk? = null
+                while (chunkResult == null) {
+                    if (!future.isDone) {
+                        val served = serveInFlightInto(activeSession, chunkIndex, buffer, toRead)
+                        if (served > 0) return served
+                    }
+                    chunkResult = awaitChunk(activeSession, chunkIndex, future)
+                }
+                currentChunk = chunkResult
                 Log.i(
                     TAG,
                     "RS_CHUNK_WAIT site=bytebuffer pos=$position chunk=$chunkIndex " +

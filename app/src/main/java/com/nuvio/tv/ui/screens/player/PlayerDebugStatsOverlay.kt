@@ -198,6 +198,7 @@ private class DebugStatsSampler(context: Context) {
         add(bufferStat(snapshot))
         add(bitrateStat(snapshot))
         add(networkStat())
+        add(parallelStat())
         add(droppedStat(snapshot))
         addAll(thermalStats())
     }.filterNot { it.value == UNAVAILABLE }
@@ -329,6 +330,38 @@ private class DebugStatsSampler(context: Context) {
                 mbps,
                 networkTotal / networkSamples
             )
+        )
+    }
+
+    // Parallel Connections, for the current session: the reader's waits for chunk bytes, stall
+    // restarts (and those skipped because every connection was slow), the bytes restarts kept, and
+    // chunks that found no native memory. Shown only while parallel connections are in use.
+    private fun parallelStat(): DebugStat {
+        if (!ParallelRangeDataSource.hudActive) return DebugStat("parallel", UNAVAILABLE)
+        val failures = ParallelRangeDataSource.hudNativeChunkFailures
+        val timeouts = ParallelRangeDataSource.hudChunkWaitTimeouts
+        val maxWaitMs = ParallelRangeDataSource.hudMaxChunkWaitMs
+        val severity = when {
+            failures > 0 || timeouts > 0 -> DebugStatSeverity.DANGER
+            maxWaitMs >= 5_000L || ParallelRangeDataSource.hudNativeChunkWaits > 0 -> DebugStatSeverity.WARNING
+            else -> DebugStatSeverity.NORMAL
+        }
+        return DebugStat(
+            label = "parallel",
+            value = String.format(
+                Locale.US,
+                "wait %.1fs max %.1fs   restarts %d skipped %d kept %d MB   timeouts %d   " +
+                    "memory waits %d fails %d",
+                ParallelRangeDataSource.hudLastChunkWaitMs / 1000.0,
+                maxWaitMs / 1000.0,
+                ParallelRangeDataSource.hudHedgeRestarts,
+                ParallelRangeDataSource.hudHedgeSkipped,
+                ParallelRangeDataSource.hudHedgeResumedBytes / MB,
+                timeouts,
+                ParallelRangeDataSource.hudNativeChunkWaits,
+                failures
+            ),
+            severity = severity
         )
     }
 

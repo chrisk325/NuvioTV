@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.upstream.Allocation
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
@@ -25,6 +26,8 @@ class ParallelRangeByteBufferReadTest {
 
     private val file = ByteArray(600 * 1024) { (it * 31 + 7).toByte() }
     private val server = MockWebServer()
+    private lateinit var allocateBefore: (Int) -> Allocation?
+    private lateinit var freeBefore: (Allocation) -> Unit
 
     private fun uriOf(url: String): Uri = mockk(relaxed = true) {
         every { this@mockk.toString() } returns url
@@ -37,10 +40,18 @@ class ParallelRangeByteBufferReadTest {
     fun setUp() {
         mockkStatic(Uri::class)
         every { Uri.parse(any()) } answers { uriOf(firstArg()) }
+        // Chunks are native memory only, and the native allocator does not load on the JVM: a
+        // direct buffer stands in for it, as in ParallelRangeChunkLeaseTest.
+        allocateBefore = ParallelRangeDataSource.allocateChunk
+        freeBefore = ParallelRangeDataSource.freeChunk
+        ParallelRangeDataSource.allocateChunk = { size -> Allocation(ByteBuffer.allocateDirect(size), 0) }
+        ParallelRangeDataSource.freeChunk = { }
     }
 
     @After
     fun tearDown() {
+        ParallelRangeDataSource.allocateChunk = allocateBefore
+        ParallelRangeDataSource.freeChunk = freeBefore
         server.shutdown()
         unmockkStatic(Uri::class)
     }
