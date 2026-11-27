@@ -745,6 +745,12 @@ class PlayerRuntimeController(
     internal val autoParallelConnectionCaps: MutableMap<String, Int> = mutableMapOf()
     // Connections automatic mode opened for the current playback, or 0 when it is off.
     internal var autoParallelConnectionsForCurrentPlayback: Int = 0
+    // Average bitrate of streams whose size alone left automatic parallel connections off but whose
+    // bitrate, learned once the player knew the duration, turned them on (AutoParallelPolicy).
+    internal val autoParallelFileBitrates: MutableMap<String, Int> = mutableMapOf()
+    // The stream whose automatic parallel connections are off for the current playback only because
+    // its bitrate is not known yet, or null: the first READY checks it (maybeSwitchToAutoParallelByBitrate).
+    internal var autoParallelBitrateCheckUrl: String? = null
     internal var isMapDv7ToHevcActiveForCurrentPlayback: Boolean = false
     internal var isManualDv81Mode2ActiveForCurrentPlayback: Boolean = false
     internal var isExperimentalDv7ToDv81ActiveForCurrentPlayback: Boolean = false

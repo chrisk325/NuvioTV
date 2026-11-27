@@ -589,18 +589,29 @@ internal fun PlayerRuntimeController.initializePlayer(
             // With Custom Network off, large remote files still get parallel connections where
             // a single connection is the likely bottleneck (see AutoParallelPolicy).
             val autoParallelCap = autoParallelConnectionCaps[url] ?: AutoParallelPolicy.CONNECTIONS
-            val autoParallel = autoParallelCap > 1 && AutoParallelPolicy.shouldUse(
+            val sanitizedHeadersForAutoParallel = PlayerMediaSourceFactory.sanitizeHeaders(headers)
+            val singleConnectionWindowRaised = com.nuvio.tv.core.network.ReceiveWindow.bytes > 0
+            fun autoParallelFor(fileSizeBytes: Long?, fileBitrateBps: Int?): Boolean = autoParallelCap > 1 && AutoParallelPolicy.shouldUse(
                 customNetworkEnabled = playerSettings.parallelNetworkEnabled,
                 lowRamTier = MemoryBudget.isLowRamTier,
-                singleConnectionWindowRaised = com.nuvio.tv.core.network.ReceiveWindow.bytes > 0,
+                singleConnectionWindowRaised = singleConnectionWindowRaised,
                 liveTv = isLiveTvStream,
                 torrent = isTorrentStream,
                 adaptive = isHlsStream || isDashStream,
                 url = url,
-                sanitizedHeaders = PlayerMediaSourceFactory.sanitizeHeaders(headers),
-                fileSizeBytes = currentVideoSize
+                sanitizedHeaders = sanitizedHeadersForAutoParallel,
+                fileSizeBytes = fileSizeBytes,
+                fileBitrateBps = fileBitrateBps
             )
+            val knownFileBitrateBps = autoParallelFileBitrates[url]
+            val autoParallel = autoParallelFor(currentVideoSize, knownFileBitrateBps)
             autoParallelConnectionsForCurrentPlayback = if (autoParallel) autoParallelCap else 0
+            // Off only for want of the bitrate, which the first READY learns from the duration and
+            // the size (which may arrive after this point): a dense file below the size floor gets
+            // the connections once its bitrate is known.
+            autoParallelBitrateCheckUrl = url.takeIf {
+                !autoParallel && knownFileBitrateBps == null && autoParallelFor(Long.MAX_VALUE, Int.MAX_VALUE)
+            }
             val parallelConnectionCount =
                 if (autoParallel) autoParallelCap else playerSettings.parallelConnectionCount
             val parallelChunkSizeKb =
@@ -1346,6 +1357,7 @@ internal fun PlayerRuntimeController.initializePlayer(
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (isReleasingPlayer) return
+                        if (playbackState == Player.STATE_READY && maybeSwitchToAutoParallelByBitrate(duration)) return
                         logScrobbleDiagnostic(
                             "exo_playback_state",
                             "playbackState=$playbackState playWhenReady=$playWhenReady isPlaying=$isPlaying " +
@@ -2331,6 +2343,33 @@ internal fun PlayerRuntimeController.buildStartupSubtitleConfigurations(startupS
     return startupSubtitlePreparation.attachedSubtitles.distinctBy { "${it.id}|${it.url}" }.map(::toSubtitleConfiguration)
 }
 
+/**
+ * On the first READY of a playback whose automatic parallel connections are off only because the
+ * file is under AutoParallelPolicy.MIN_FILE_BYTES: once the duration gives the average bitrate, a
+ * file at or above AutoParallelPolicy.MIN_FILE_BITRATE_BPS is replayed from the same position with
+ * the connections on. One connection could not keep the forward buffer growing on such a file.
+ *
+ * Returns true when it scheduled the replay; the caller then leaves this player alone. Checked once
+ * per playback, so a later READY (after a seek or a rebuffer) never restarts the stream.
+ */
+internal fun PlayerRuntimeController.maybeSwitchToAutoParallelByBitrate(durationMs: Long): Boolean {
+    val url = autoParallelBitrateCheckUrl ?: return false
+    autoParallelBitrateCheckUrl = null
+    // The replay reopens the current stream, so the decision has to be about that one.
+    if (url != currentStreamUrl || durationMs <= 0L) return false
+    val bitrateBps = PlayerBitrateEstimator.fileBitrateBps(currentVideoSize, durationMs) ?: return false
+    if (bitrateBps < AutoParallelPolicy.MIN_FILE_BITRATE_BPS) return false
+    autoParallelFileBitrates[url] = bitrateBps
+    val positionMs = (_exoPlayer?.currentPosition ?: 0L).coerceAtLeast(0L)
+    Log.i(
+        PlayerRuntimeController.TAG,
+        "AUTO_PARALLEL_BITRATE: ${bitrateBps / 1_000_000} Mbps over ${durationMs / 1000}s; " +
+            "replaying at ${positionMs}ms with automatic connections host=${url.safeHost()}"
+    )
+    scheduleDeferredPlayerReinitialize(fromPositionMs = positionMs)
+    return true
+}
+
 internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     cancelFirstFrameWatchdog()
     cancelStallWatchdog()
@@ -2358,6 +2397,7 @@ internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     isSafeAudioModeActiveForCurrentPlayback = false
     isAudioDisabledForCurrentPlayback = false
     autoParallelConnectionsForCurrentPlayback = 0
+    autoParallelBitrateCheckUrl = null
     dv7ToDv81BridgeVersionForCurrentPlayback = null
     dv7ToDv81LastProbeReasonForCurrentPlayback = null
     playerInitializationStartedAtMs = 0L
