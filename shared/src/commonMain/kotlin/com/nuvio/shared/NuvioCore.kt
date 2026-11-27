@@ -99,6 +99,8 @@ private const val MAX_AIR_DATE_LOOKUPS = 120
 private const val TRAILER_URL_TTL_MS = 2L * 3_600_000L
 /** A title found without a trailer isn't looked up again for the hero this long. */
 private const val TRAILER_MISS_TTL_MS = 30L * 60_000L
+/** Longest wait for one answer from the trailer service. */
+private const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
 /** Up next source holding unaired next episodes of shows that are caught up (the Upcoming row). */
 private const val UPCOMING_SOURCE = "upcoming"
 /** Shows watched within this many days are checked for an upcoming episode (Android's default cap). */
@@ -1782,9 +1784,15 @@ class NuvioCore(
         // Found before (Details or the Home hero): reused while the link is still fresh.
         trailerCache[meta.id]?.takeIf { it.url != null && currentTimeMillis() - it.at < TRAILER_URL_TTL_MS }
             ?.let { return@withContext it.url }
-        val url = resolveTrailer(meta, tmdbKeys)
-        trailerCache[meta.id] = CachedTrailer(url, currentTimeMillis())
-        url
+        // While Details looks one up, the hero asks for none (the trailer service answers this first).
+        detailTrailerLookups++
+        try {
+            val url = resolveTrailer(meta, tmdbKeys, maxKeys = 4)
+            trailerCache[meta.id] = CachedTrailer(url, currentTimeMillis())
+            url
+        } finally {
+            detailTrailerLookups--
+        }
     }
 
     /**
@@ -1801,17 +1809,33 @@ class NuvioCore(
             if (cached.url != null && age < TRAILER_URL_TTL_MS) return@withContext cached.url
             if (cached.url == null && age < TRAILER_MISS_TTL_MS) return@withContext null
         }
-        val meta = try {
-            meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
+        // One hero lookup at a time, and none while Details is looking one up: browsing Home
+        // must not flood the trailer service (it then stops answering, Details included).
+        if (detailTrailerLookups > 0 || !heroTrailerLock.tryLock()) return@withContext null
+        try {
+            val meta = try {
+                meta(preview.apiType, preview.id, preview.sourceAddonBaseUrl)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            val cachedForMeta = meta?.let { m ->
+                trailerCache[m.id]?.takeIf { it.url != null && currentTimeMillis() - it.at < TRAILER_URL_TTL_MS }?.url
+            }
+            // The first two trailer ids only (Details tries up to four).
+            val url = cachedForMeta ?: meta?.let { m ->
+                resolveTrailer(m, emptyList(), maxKeys = 2).also { trailerCache[m.id] = CachedTrailer(it, currentTimeMillis()) }
+            }
+            trailerCache[preview.id] = CachedTrailer(url, currentTimeMillis())
+            url
+        } finally {
+            heroTrailerLock.unlock()
         }
-        val url = meta?.let { trailerUrl(it, emptyList()) }
-        trailerCache[preview.id] = CachedTrailer(url, currentTimeMillis())
-        url
     }
+
+    private val heroTrailerLock = kotlinx.coroutines.sync.Mutex()
+    private var detailTrailerLookups = 0
 
     /** A trailer link that wouldn't play (expired or refused): it is looked up afresh next time. */
     fun forgetTrailerUrl(url: String) {
@@ -1822,16 +1846,19 @@ class NuvioCore(
     /** Content id → resolved trailer link (null: none found), for Details and the Home hero. */
     private val trailerCache = HashMap<String, CachedTrailer>()
 
-    private suspend fun resolveTrailer(meta: Meta, tmdbKeys: List<String>): String? {
+    private suspend fun resolveTrailer(meta: Meta, tmdbKeys: List<String>, maxKeys: Int): String? {
         val api = config.trailerApiUrl.trim().trimEnd('/')
         if (api.isEmpty()) return null
-        for (key in (meta.trailerYtIds + tmdbKeys).distinct().take(4)) {
+        for (key in (meta.trailerYtIds + tmdbKeys).distinct().take(maxKeys)) {
             val url = "$api/trailer?youtube_url=${com.nuvio.shared.util.encodeUrlComponent("https://www.youtube.com/watch?v=$key")}" +
                 "&title=${com.nuvio.shared.util.encodeUrlComponent(meta.name)}" +
                 (meta.releaseInfo?.take(4)?.let { "&year=$it" } ?: "")
+            // Each answer may take at most 20 s: a busy service no longer leaves Details on "Loading…".
             val resolved = runCatching {
-                val body = com.nuvio.shared.data.AddonJson.parseToJsonElement(http.get(url).bodyAsText())
-                (body as? kotlinx.serialization.json.JsonObject)?.get("url")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                kotlinx.coroutines.withTimeout(TRAILER_REQUEST_TIMEOUT_MS) {
+                    val body = com.nuvio.shared.data.AddonJson.parseToJsonElement(http.get(url).bodyAsText())
+                    (body as? kotlinx.serialization.json.JsonObject)?.get("url")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                }
             }.getOrNull()
             if (!resolved.isNullOrBlank() && resolved != "null") return resolved
         }

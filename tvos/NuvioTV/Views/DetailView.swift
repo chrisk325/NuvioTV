@@ -60,6 +60,8 @@ struct DetailView: View {
     @State private var ratings: [ExternalRating] = []
     @State private var trailer: PlaybackRequest?
     @State private var isLoadingTrailer = false
+    /// No playable trailer came back (none found, or the trailer service didn't answer).
+    @State private var trailerFailed = false
     @FocusState private var focus: DetailFocus?
     /// The episode card last focused; Up from the rows below returns to it.
     @State private var lastEpisodeId: String?
@@ -108,6 +110,11 @@ struct DetailView: View {
         // comes back on Menu.
         .toolbar(.hidden, for: .tabBar)
         .task(id: preview.id) { await load() }
+        .alert("Trailer unavailable", isPresented: $trailerFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("No playable trailer was found for this title, or the trailer service didn't answer. Try again in a moment.")
+        }
         .fullScreenCover(item: $trailer) { request in
             PlayerContainer(request: request).environmentObject(app)
         }
@@ -118,7 +125,10 @@ struct DetailView: View {
         Task { @MainActor in
             defer { isLoadingTrailer = false }
             let keys: [String] = [] // TMDB trailers are already merged into meta.trailerYtIds
-            guard let url = (try? await app.core.trailerUrl(meta: meta, tmdbKeys: keys)) ?? nil else { return }
+            guard let url = (try? await app.core.trailerUrl(meta: meta, tmdbKeys: keys)) ?? nil else {
+                trailerFailed = true
+                return
+            }
             var request = PlaybackRequest(url: url, headers: [:], meta: meta, video: nil, videoId: meta.id,
                                           title: "\(meta.name) · Trailer", startPositionMs: 0)
             request.isTrailer = true

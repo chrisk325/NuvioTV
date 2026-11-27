@@ -397,8 +397,9 @@ struct ModernHomeView: View {
         ZStack(alignment: .topLeading) {
             // Full-screen artwork of the focused title.
             FullScreenBackdrop(url: hero?.backdropUrl, animated: false) {
-                // Settings > Home > Hero trailers: the focused title's trailer over its artwork.
-                HeroTrailer(item: hero, delay: 1.5)
+                // Settings > Home > Hero trailers: the focused title's trailer over its artwork, once
+                // focus has rested on it for 3 s (fewer lookups while browsing).
+                HeroTrailer(item: hero, delay: 3)
                 LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.2), .clear],
                                startPoint: .leading, endPoint: .trailing)
                 LinearGradient(colors: [.clear, .black.opacity(0.65), .black],
