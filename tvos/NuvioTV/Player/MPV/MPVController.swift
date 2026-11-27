@@ -195,10 +195,19 @@ final class MPVController {
         // Networking / cache (debrid & CDN streams).
         set(option: "cache", "yes")
         set(option: "cache-secs", String(options.cacheSeconds))
-        set(option: "demuxer-max-bytes", "400MiB")
-        set(option: "demuxer-max-back-bytes", "100MiB")
+        // The read-ahead lives in a temporary file instead of memory, so it can hold far more
+        // (1 GiB ahead: several minutes even of a 4K remux) without the app running out of memory.
+        // mpv deletes the file itself when playback ends.
+        let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("mpv-cache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        set(option: "cache-on-disk", "yes")
+        set(option: "cache-dir", cacheDir.path)
+        set(option: "demuxer-max-bytes", "1024MiB")
+        set(option: "demuxer-max-back-bytes", "150MiB")
         set(option: "demuxer-readahead-secs", "20")
-        set(option: "network-timeout", "30")
+        // A connection the server dropped while the read-ahead was full is noticed after 10 s
+        // (was 30 s of frozen picture) and reopened.
+        set(option: "network-timeout", "10")
         // Faster start:
         // - resuming jumps to the keyframe before the saved spot instead of decoding every frame
         //   up to it (seconds on 4K HEVC); user seeks already go by keyframes.
@@ -207,9 +216,12 @@ final class MPVController {
         set(option: "demuxer-lavf-analyzeduration", "1")
         // - playback starts once a little is buffered, so it doesn't stall right after starting.
         set(option: "cache-pause-initial", "yes")
-        set(option: "cache-pause-wait", "1.5")
+        // - after running dry, 3 s is refilled before playing on, so it doesn't stall again at once.
+        set(option: "cache-pause-wait", "3")
         set(option: "user-agent", "Mozilla/5.0 (AppleTV) NuvioTV")
-        set(option: "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
+        // Reconnect at once on network errors and server-side (5xx) failures, not only on EOF.
+        set(option: "stream-lavf-o",
+            "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_on_http_error=5xx,reconnect_delay_max=2")
 
         // Audio / subtitles (libass renders ASS/SSA with full typesetting).
         if !options.audioLanguages.isEmpty { set(option: "alang", options.audioLanguages) }
