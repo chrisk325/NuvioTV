@@ -30,8 +30,11 @@ class InteractionAwareLoadControl(
     override fun getAllocator(): Allocator = delegate.allocator
 
     override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean {
-        if (!delegate.shouldContinueLoading(parameters)) return false
-        return !shouldHold(parameters)
+        val delegateSays = delegate.shouldContinueLoading(parameters)
+        val held = delegateSays && shouldHold(parameters)
+        // The stats overlay shows this decision (LoadDecisionProbe); recording it changes nothing.
+        LoadDecisionProbe.record(parameters.bufferedDurationUs, delegateSays, held, delegate)
+        return delegateSays && !held
     }
 
     private fun shouldHold(parameters: LoadControl.Parameters): Boolean =

@@ -582,7 +582,10 @@ fun PlayerScreen(
         PlaybackInteractionGate.setUiActive(playerUiActive)
     }
     DisposableEffect(Unit) {
-        onDispose { PlaybackInteractionGate.reset() }
+        onDispose {
+            PlaybackInteractionGate.reset()
+            com.nuvio.tv.core.player.LoadDecisionProbe.reset()
+        }
     }
 
     // Frame rate matching lifecycle.
