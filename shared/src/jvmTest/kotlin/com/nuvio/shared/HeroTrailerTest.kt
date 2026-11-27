@@ -9,13 +9,17 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** The Home hero's trailer reuses the Details page's lookup (and the other way round). */
+/**
+ * The Home hero's trailer reuses the Details page's lookup (and the other way round). Runs on the
+ * real clock: trailer lookups have time limits, which a test clock would expire at once while
+ * the mock network answers on another thread.
+ */
 class HeroTrailerTest {
     private val json = headersOf("Content-Type", "application/json")
 
@@ -25,7 +29,7 @@ class HeroTrailerTest {
     )
 
     @Test
-    fun oneLookupPerTitleSharedByHeroAndDetails() = runTest {
+    fun oneLookupPerTitleSharedByHeroAndDetails() = runBlocking {
         var trailerCalls = 0
         var metaCalls = 0
         val client = HttpClient(MockEngine { request ->
@@ -45,7 +49,7 @@ class HeroTrailerTest {
                 else -> respond("not found", HttpStatusCode.NotFound)
             }
         })
-        val core = NuvioCore(InMemoryStore(), client, StandardTestDispatcher(testScheduler),
+        val core = NuvioCore(InMemoryStore(), client, Dispatchers.Default,
             NuvioConfig.EMPTY.copy(trailerApiUrl = "https://trailers.test"))
         core.refreshAddons()
 
@@ -64,9 +68,9 @@ class HeroTrailerTest {
     }
 
     @Test
-    fun noTrailerServiceNoTrailer() = runTest {
+    fun noTrailerServiceNoTrailer() = runBlocking {
         val core = NuvioCore(InMemoryStore(), HttpClient(MockEngine { respond("", HttpStatusCode.NotFound) }),
-            StandardTestDispatcher(testScheduler))
+            Dispatchers.Default)
         assertNull(core.heroTrailerUrl(preview("tt1")))
         core.close()
     }
